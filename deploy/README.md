@@ -40,7 +40,20 @@ docker compose --profile runner up -d   # 本机也跑一个 runner（可选）
 
 1. **镜像获取**（宿主机无法直接构建）：
    - 有网机器：`docker build -f deploy/Dockerfile.server -t co-server:latest . && docker save co-server:latest | gzip > co-server.tgz`，scp 到宿主机 `docker load`
-   - 或开发容器内 podman 构建（走代理）后 save/load，同 `scripts/pull-image.sh` 的通道
+   - 或开发容器内 podman 构建。嵌套容器两个必要条件（均已踩坑验证）：
+     **`--network=host`**（构建容器桥接网络不通）；**放开 pids 限制**（默认 2048 会让 pnpm 的
+     worker 线程 `ERR_WORKER_INIT_FAILED`）——写入 `/etc/containers/containers.conf`：
+     ```ini
+     [containers]
+     pids_limit = 0
+     ```
+     ```bash
+     podman build --network=host -f deploy/Dockerfile.server \
+       --build-arg http_proxy=$http_proxy --build-arg https_proxy=$https_proxy \
+       -t co-server:latest .
+     podman save --format docker-archive co-server:latest | gzip > /root/co-server.tgz
+     scp /root/co-server.tgz root@192.168.9.186:/tmp/ && ssh root@192.168.9.186 'gunzip -c /tmp/co-server.tgz | docker load'
+     ```
 2. **运行**：
 
 ```bash
