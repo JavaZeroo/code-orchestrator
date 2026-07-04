@@ -5,7 +5,9 @@
 
 ## 1. 目标与非目标
 
-**目标**：自建一套多 agent 开发编排系统，管理 mindformers（昇腾生态，托管于 gitcode.com）的全流程开发：
+> **产品定位（2026-07-04 定）**：**面向所有开发团队的通用多 agent 开发编排平台**——管理任意项目的「需求 → 开发 → 测试」全流程，代码托管后端可插拔（gitcode / github / gitlab…）。mindformers 是首个落地场景而非唯一目标；**forge 层必须做成可插拔接口**（gitcode 为第一个 adapter，见 §使用建议）。开源，文档面向通用受众。
+
+**目标**：自建一套多 agent 开发编排系统。首个验证场景是 mindformers（昇腾生态，托管于 gitcode.com）的全流程开发：
 
 - 网页上开启/操控/审批 agent 会话（类 happy 的远程操控体验，web-only）
 - 对话式搭建工作流：跟 meta-agent 说需求，生成可视化工作流图（节点 = 不同角色/模型/CLI 的 agent 任务），图上可点击查看、可编辑
