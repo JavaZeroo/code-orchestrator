@@ -2,6 +2,7 @@ import { LogOut, MessageSquare, Plus, Settings, Workflow } from 'lucide-react';
 import { useState } from 'react';
 import { authApi, LoginPage, SettingsModal, useMe } from './Auth';
 import { NewSession } from './NewSession';
+import { NotificationBell } from './Notifications';
 import { SessionView } from './SessionView';
 import { WorkflowsPage } from './WorkflowsPage';
 import { Button } from './components/ui/button';
@@ -65,6 +66,7 @@ export function App() {
   const [tab, setTab] = useState<'sessions' | 'workflows'>('sessions');
   const [selectedSession, setSelectedSession] = useState<string | 'new'>('new');
   const [showSettings, setShowSettings] = useState(false);
+  const [openRunId, setOpenRunId] = useState<string | null>(null);
   const { me, refresh } = useMe();
 
   if (me === undefined) {
@@ -83,6 +85,11 @@ export function App() {
     setTab('sessions');
   };
 
+  const openRun = (runId: string) => {
+    setOpenRunId(runId);
+    setTab('workflows');
+  };
+
   return (
     <div className="flex h-full flex-col">
       <nav className="flex items-center gap-1 border-b border-line bg-panel px-3 py-2">
@@ -94,6 +101,7 @@ export function App() {
           <Workflow size={14} /> 工作流
         </Button>
         <div className="ml-auto flex items-center gap-2">
+          <NotificationBell onOpenSession={openSession} onOpenRun={openRun} />
           <span className="text-xs text-dim">
             {me.user.email}
             {me.gitcode.bound ? (
@@ -114,7 +122,7 @@ export function App() {
         {tab === 'sessions' ? (
           <SessionsScreen selected={selectedSession} setSelected={setSelectedSession} />
         ) : (
-          <WorkflowsPage onOpenSession={openSession} />
+          <WorkflowsPage onOpenSession={openSession} openRunId={openRunId} onOpenRunConsumed={() => setOpenRunId(null)} />
         )}
       </div>
       {showSettings && <SettingsModal me={me} onClose={() => setShowSettings(false)} onChanged={refresh} />}

@@ -1,5 +1,5 @@
 import { ChevronDown, MessageCircle, Play } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { type RunRow, type WorkflowDefRow, api } from './api';
 import { Designer } from './Designer';
@@ -48,11 +48,27 @@ function StartForm({ def, onStarted }: { def: WorkflowDefRow; onStarted: (runId:
   );
 }
 
-export function WorkflowsPage({ onOpenSession }: { onOpenSession: (id: string) => void }) {
-  const [view, setView] = useState<'list' | 'designer' | { run: string }>('list');
+export function WorkflowsPage({
+  onOpenSession,
+  openRunId,
+  onOpenRunConsumed,
+}: {
+  onOpenSession: (id: string) => void;
+  /** 外部（如通知中心）要求直接打开的 run；消费后通过 onOpenRunConsumed 清空 */
+  openRunId?: string | null;
+  onOpenRunConsumed?: () => void;
+}) {
+  const [view, setView] = useState<'list' | 'designer' | { run: string }>(openRunId ? { run: openRunId } : 'list');
   const { data: defs = [] } = useWorkflows();
   const { data: runs = [] } = useRuns();
   const [expanded, setExpanded] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (openRunId) {
+      setView({ run: openRunId });
+      onOpenRunConsumed?.();
+    }
+  }, [openRunId, onOpenRunConsumed]);
 
   if (view === 'designer') {
     return <Designer onBack={() => setView('list')} onSaved={() => setView('list')} />;
