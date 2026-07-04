@@ -1,0 +1,16 @@
+# 开发/部署辅助：Postgres（本仓库开发机若无 docker，参见 README 的替代方案）
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: co
+      POSTGRES_PASSWORD: co
+      POSTGRES_DB: co
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

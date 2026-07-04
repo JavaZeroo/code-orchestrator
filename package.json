@@ -1,0 +1,13 @@
+{
+  "name": "code-orchestrator",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "dev:server": "pnpm --filter @co/server dev",
+    "dev:runner": "pnpm --filter @co/runner dev"
+  }
+}

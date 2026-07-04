@@ -1,0 +1,71 @@
+# 标准部署（需要 docker compose v2 或 docker-compose 1.27+）。
+# 当前宿主机（docker 18.09、无 compose、无外网）用 deploy/run-host.sh 替代。
+version: "3.7"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: co
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?生成一个并写入 .env}
+      POSTGRES_DB: co
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U co"]
+      interval: 5s
+      retries: 10
+
+  server:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+      args:
+        http_proxy: ${http_proxy:-}
+        https_proxy: ${https_proxy:-}
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - "7620:7620"
+    environment:
+      DATABASE_URL: postgres://co:${POSTGRES_PASSWORD}@postgres:5432/co
+      RUNNER_SHARED_TOKEN: ${RUNNER_SHARED_TOKEN:?}
+      AUTH_SECRET: ${AUTH_SECRET:?openssl rand -hex 32}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:7620}
+      RUN_MIGRATIONS: "1"
+
+  code-server:
+    image: codercom/code-server:latest
+    restart: unless-stopped
+    ports:
+      - "7621:8080"
+    environment:
+      PASSWORD: ${CODE_SERVER_PASSWORD:?}
+    volumes:
+      - workspaces:/home/coder/project
+
+  # 每台执行机一个 runner；跨机部署时单独在目标机运行（profile 默认不起）
+  runner:
+    profiles: ["runner"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.runner
+      args:
+        http_proxy: ${http_proxy:-}
+        https_proxy: ${https_proxy:-}
+    restart: unless-stopped
+    environment:
+      SERVER_URL: ws://server:7620/ws/runner
+      RUNNER_SHARED_TOKEN: ${RUNNER_SHARED_TOKEN}
+      MACHINE_LABELS: ${MACHINE_LABELS:-docker}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - claude-auth:/root/.claude
+      - workspaces:/workspaces
+
+volumes:
+  pgdata:
+  workspaces:
+  claude-auth:

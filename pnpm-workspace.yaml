@@ -1,0 +1,18 @@
+packages:
+  - packages/*
+
+# /data 是 NFS 挂载，pnpm 11 的 SQLite store 放 NFS 会坏（SIGBUS / disk I/O error）：
+# storeDir 必须指向本地盘；hoisted 布局（纯复制）对 NFS 最稳。
+# 注意 pnpm 11 只认这里的配置（.npmrc / package.json#pnpm / npm_config_* 均已失效）。
+storeDir: /root/.pnpm-store
+nodeLinker: hoisted
+verifyDepsBeforeRun: false
+allowBuilds:
+  esbuild: true
+# 只拉当前平台的可选依赖（darwin/win32 平台包经代理下载会反复重试卡死安装）
+supportedArchitectures:
+  os:
+    - linux
+  cpu:
+    - arm64
+

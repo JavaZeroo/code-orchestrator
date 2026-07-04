@@ -1,0 +1,41 @@
+# 控制面镜像：server + 内嵌 web 静态资源
+# 构建（代理环境传 build-arg）：
+#   docker build -f deploy/Dockerfile.server \
+#     --build-arg http_proxy=$http_proxy --build-arg https_proxy=$https_proxy \
+#     -t co-server:latest .
+# 注意：避免 BuildKit-only 语法，兼容 docker 18.09。
+
+FROM node:22-slim AS build
+ARG http_proxy
+ARG https_proxy
+ENV http_proxy=${http_proxy} https_proxy=${https_proxy} \
+    CI=1 COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
+
+WORKDIR /app
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY packages/protocol/package.json packages/protocol/
+COPY packages/server/package.json packages/server/
+COPY packages/runner/package.json packages/runner/
+COPY packages/web/package.json packages/web/
+# storeDir 在 workspace.yaml 里指向 /root/.pnpm-store（镜像内本地盘，无 NFS 问题）
+RUN pnpm install --frozen-lockfile
+
+COPY packages ./packages
+COPY tsconfig.base.json ./
+RUN pnpm --filter @co/web build
+
+FROM node:22-slim
+ENV NODE_ENV=production RUN_MIGRATIONS=1 PORT=7620 HOST=0.0.0.0
+WORKDIR /app
+COPY --from=build /app/package.json /app/pnpm-workspace.yaml ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/tsconfig.base.json ./
+COPY --from=build /app/packages/protocol ./packages/protocol
+COPY --from=build /app/packages/server ./packages/server
+COPY --from=build /app/packages/web/dist ./packages/web/dist
+COPY --from=build /app/packages/web/package.json ./packages/web/
+
+EXPOSE 7620
+WORKDIR /app/packages/server
+CMD ["../../node_modules/.bin/tsx", "src/index.ts"]

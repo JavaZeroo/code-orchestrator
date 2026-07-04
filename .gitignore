@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+deploy/.env
+*.tsbuildinfo
+*.log
+coverage/
+.DS_Store
+.pm2-logs/

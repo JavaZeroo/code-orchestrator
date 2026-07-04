@@ -1,0 +1,9 @@
+node_modules
+packages/*/node_modules
+packages/web/dist
+.git
+.env
+packages/server/.env
+.pm2-logs
+docs
+*.log
