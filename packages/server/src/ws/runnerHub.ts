@@ -134,13 +134,17 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
       if (hasDb()) {
         await getDb()
           .update(schema.sessions)
-          .set({ state: p.state, ...(p.nativeSessionId ? { nativeSessionId: p.nativeSessionId } : {}) })
+          .set({
+            state: p.state,
+            ...(p.nativeSessionId ? { nativeSessionId: p.nativeSessionId } : {}),
+            ...(p.usage ? { usage: p.usage } : {}),
+          })
           .where(eq(schema.sessions.id, p.sessionId));
       }
       await publish({
         type: 'session.state',
         sessionId: p.sessionId,
-        payload: { state: p.state, nativeSessionId: p.nativeSessionId },
+        payload: { state: p.state, nativeSessionId: p.nativeSessionId, usage: p.usage },
       });
       return { ok: true };
     }

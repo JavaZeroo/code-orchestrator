@@ -1,52 +1,96 @@
+import { Code2, GitCompare, Send, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { api, type ApprovalRequest, type MachineRow, type SessionRow } from './api';
-import { Timeline, type ApprovalItem } from './Timeline';
+import { toast } from 'sonner';
+import { api, type ApprovalRequest, type MachineRow, type SessionRow, type SessionUsage } from './api';
+import { UnifiedDiff } from './components/DiffView';
+import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
+import { Button } from './components/ui/button';
+import { Badge, Textarea } from './components/ui/primitives';
 import { useSessionEvents } from './useEvents';
+import { Timeline, type ApprovalItem } from './Timeline';
+import { fmtCost, fmtTokens } from './lib/utils';
 
-const STATE_LABEL: Record<string, string> = {
-  starting: '启动中',
-  idle: '空闲',
-  thinking: '思考中',
-  waiting_input: '等待输入',
-  waiting_approval: '等待审批',
-  dead: '已结束',
+const STATE_META: Record<string, { label: string; tone: 'ok' | 'accent' | 'warn' | 'neutral' }> = {
+  starting: { label: '启动中', tone: 'accent' },
+  idle: { label: '空闲', tone: 'ok' },
+  thinking: { label: '思考中', tone: 'accent' },
+  waiting_input: { label: '等待输入', tone: 'warn' },
+  waiting_approval: { label: '等待审批', tone: 'warn' },
+  dead: { label: '已结束', tone: 'neutral' },
 };
+
+function CostBadge({ usage }: { usage: SessionUsage }) {
+  return (
+    <Badge tone="neutral" title={`输入 ${usage.inputTokens} · 输出 ${usage.outputTokens} · 缓存读 ${usage.cacheReadTokens} · ${usage.turns} 回合`}>
+      {fmtCost(usage.costUsd)} · {fmtTokens(usage.inputTokens + usage.outputTokens)} tok
+    </Badge>
+  );
+}
+
+function DiffDialog({ sessionId, open, onOpenChange }: { sessionId: string; open: boolean; onOpenChange: (v: boolean) => void }) {
+  const [data, setData] = useState<{ stat?: string; diff?: string; error?: string } | null>(null);
+  useEffect(() => {
+    if (open) {
+      setData(null);
+      api.sessionDiff(sessionId).then(setData).catch((e) => setData({ error: String(e) }));
+    }
+  }, [open, sessionId]);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent wide>
+        <DialogTitle>工作目录变更（git diff）</DialogTitle>
+        {!data ? (
+          <div className="text-sm text-dim">加载中…</div>
+        ) : data.error || !data.diff ? (
+          <div className="text-sm text-dim">{data.error ?? '无变更'}</div>
+        ) : (
+          <>
+            {data.stat && <pre className="mb-2 font-mono text-xs text-dim">{data.stat}</pre>}
+            <UnifiedDiff diff={data.diff} />
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 export function SessionView({ session }: { session: SessionRow }) {
   const events = useSessionEvents(session.id);
   const [text, setText] = useState('');
-  const [error, setError] = useState<string | null>(null);
   const [machine, setMachine] = useState<MachineRow | null>(null);
+  const [showDiff, setShowDiff] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    api
-      .machines()
-      .then((ms) => setMachine(ms.find((m) => m.id === session.machineId) ?? null))
-      .catch(() => {});
+    api.machines().then((ms) => setMachine(ms.find((m) => m.id === session.machineId) ?? null)).catch(() => {});
   }, [session.machineId]);
 
-  const state = useMemo(() => {
-    for (let i = events.length - 1; i >= 0; i--) {
-      const row = events[i];
-      if (row?.type === 'session.state') {
-        return (row.payload as { state: string }).state;
+  const { state, usage } = useMemo(() => {
+    let st = session.state;
+    let us: SessionUsage | null = session.usage;
+    for (const row of events) {
+      if (row.type === 'session.state') {
+        const p = row.payload as { state: string; usage?: SessionUsage };
+        st = p.state;
+        if (p.usage) {
+          us = p.usage;
+        }
       }
     }
-    return session.state;
-  }, [events, session.state]);
+    return { state: st, usage: us };
+  }, [events, session.state, session.usage]);
 
   const approvals = useMemo(() => {
     const map = new Map<string, ApprovalItem>();
     for (const row of events) {
       if (row.type === 'approval.requested') {
-        const request = row.payload as ApprovalRequest;
-        map.set(request.id, { request, status: 'pending' });
+        const req = row.payload as ApprovalRequest;
+        map.set(req.id, { request: req, status: 'pending' });
       } else if (row.type === 'approval.decided') {
         const p = row.payload as { approvalId: string; status: 'approved' | 'denied' };
-        const existing = map.get(p.approvalId);
-        if (existing) {
-          map.set(p.approvalId, { ...existing, status: p.status });
+        const ex = map.get(p.approvalId);
+        if (ex) {
+          map.set(p.approvalId, { ...ex, status: p.status });
         }
       }
     }
@@ -58,6 +102,8 @@ export function SessionView({ session }: { session: SessionRow }) {
   }, [events.length]);
 
   const dead = state === 'dead';
+  const busy = state === 'thinking' || state === 'starting';
+  const meta = STATE_META[state] ?? { label: state, tone: 'neutral' as const };
 
   const doSend = () => {
     const t = text.trim();
@@ -65,53 +111,62 @@ export function SessionView({ session }: { session: SessionRow }) {
       return;
     }
     setText('');
-    api.send(session.id, t).catch((e) => setError(String(e)));
-  };
-
-  const doDecide = (approvalId: string, behavior: 'allow' | 'deny') => {
-    api.decide(approvalId, behavior).catch((e) => setError(String(e)));
+    api.send(session.id, t).catch((e) => toast.error(`发送失败：${e}`));
   };
 
   return (
-    <div className="session-view">
-      <header>
-        <div>
-          <b>{session.cwd}</b>
-          <span className="dim">
-            {' '}@ {session.machineId} · {session.model ?? 'claude'} · {session.id.slice(0, 8)}
-          </span>
+    <div className="flex h-full flex-col overflow-hidden">
+      <header className="flex items-center justify-between border-b border-line bg-panel px-4 py-2.5">
+        <div className="min-w-0">
+          <div className="truncate font-medium">{session.cwd}</div>
+          <div className="text-xs text-dim">
+            {session.machineId} · {session.model ?? 'claude'} · {session.id.slice(0, 8)}
+          </div>
         </div>
-        <div className="header-actions">
+        <div className="flex shrink-0 items-center gap-2">
+          {usage && usage.turns > 0 && <CostBadge usage={usage} />}
           {machine?.codeServerUrl && (
-            <a
-              className="chip"
-              href={`${machine.codeServerUrl}/?folder=${encodeURIComponent(session.cwd)}`}
-              target="_blank"
-              rel="noreferrer"
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => window.open(`${machine.codeServerUrl}/?folder=${encodeURIComponent(session.cwd)}`, '_blank')}
             >
-              ⌨ 编辑器
-            </a>
+              <Code2 size={13} /> 编辑器
+            </Button>
           )}
-          <span className={`chip state-${state}`}>{STATE_LABEL[state] ?? state}</span>
+          <Button variant="ghost" size="sm" onClick={() => setShowDiff(true)}>
+            <GitCompare size={13} /> 变更
+          </Button>
+          <Badge tone={meta.tone}>{meta.label}</Badge>
+          {busy && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => api.interrupt(session.id).then(() => toast('已打断')).catch((e) => toast.error(String(e)))}
+            >
+              <Square size={12} /> 打断
+            </Button>
+          )}
           {!dead && (
-            <button className="deny" onClick={() => void api.kill(session.id).catch((e) => setError(String(e)))}>
-              终止
-            </button>
+            <Button variant="danger" size="sm" onClick={() => void api.kill(session.id).catch((e) => toast.error(String(e)))}>
+              <X size={13} /> 终止
+            </Button>
           )}
         </div>
       </header>
-      {error && (
-        <div className="error" onClick={() => setError(null)}>
-          {error}（点击关闭）
-        </div>
-      )}
-      <Timeline events={events} approvals={approvals} onDecide={doDecide} />
-      <div ref={bottomRef} />
-      <footer>
-        <textarea
+
+      <div className="flex-1 overflow-y-auto">
+        <Timeline events={events} approvals={approvals} onDecide={(id, b) => api.decide(id, b).catch((e) => toast.error(String(e)))} />
+        <div ref={bottomRef} />
+      </div>
+
+      <footer className="flex gap-2 border-t border-line bg-panel px-4 py-3">
+        <Textarea
           value={text}
+          rows={2}
           placeholder={dead ? '会话已结束' : '输入消息，Enter 发送，Shift+Enter 换行'}
           disabled={dead}
+          className="resize-none"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -120,10 +175,12 @@ export function SessionView({ session }: { session: SessionRow }) {
             }
           }}
         />
-        <button onClick={doSend} disabled={dead || !text.trim()}>
-          发送
-        </button>
+        <Button variant="default" className="h-auto" disabled={dead || !text.trim()} onClick={doSend}>
+          <Send size={14} />
+        </Button>
       </footer>
+
+      <DiffDialog sessionId={session.id} open={showDiff} onOpenChange={setShowDiff} />
     </div>
   );
 }

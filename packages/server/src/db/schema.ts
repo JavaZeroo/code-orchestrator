@@ -101,6 +101,8 @@ export const sessions = pgTable('sessions', {
   runId: text('run_id'),
   nodeId: text('node_id'),
   createdBy: text('created_by'),
+  /** 累计用量：{inputTokens, outputTokens, cacheReadTokens, costUsd, turns} */
+  usage: jsonb('usage').$type<Record<string, number>>(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

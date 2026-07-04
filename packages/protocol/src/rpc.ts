@@ -73,6 +73,11 @@ export const runnerMethods = {
     params: z.object({ sessionId: z.string() }),
     result: z.object({ ok: z.boolean() }),
   },
+  /** 打断当前回合（会话保留，回到 idle） */
+  'session.interrupt': {
+    params: z.object({ sessionId: z.string() }),
+    result: z.object({ ok: z.boolean(), error: z.string().optional() }),
+  },
   'approval.decide': {
     params: z.object({
       approvalId: z.string(),
@@ -122,6 +127,16 @@ export const serverMethods = {
       state: sessionStateSchema,
       /** CLI 原生会话 id（Claude 的 JSONL session id），init 后随状态上报 */
       nativeSessionId: z.string().optional(),
+      /** 会话累计用量（每回合 result 后更新） */
+      usage: z
+        .object({
+          inputTokens: z.number(),
+          outputTokens: z.number(),
+          cacheReadTokens: z.number(),
+          costUsd: z.number(),
+          turns: z.number(),
+        })
+        .optional(),
     }),
     result: z.object({ ok: z.boolean() }),
   },

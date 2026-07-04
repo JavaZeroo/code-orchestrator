@@ -1,0 +1,101 @@
+@import 'tailwindcss';
+@import '@xyflow/react/dist/style.css';
+
+@theme {
+  --color-bg: oklch(0.16 0.01 260);
+  --color-panel: oklch(0.2 0.012 260);
+  --color-panel-2: oklch(0.24 0.014 260);
+  --color-line: oklch(0.3 0.015 260);
+  --color-ink: oklch(0.88 0.01 260);
+  --color-dim: oklch(0.62 0.015 260);
+  --color-accent: oklch(0.65 0.16 255);
+  --color-ok: oklch(0.72 0.17 150);
+  --color-warn: oklch(0.75 0.15 80);
+  --color-danger: oklch(0.63 0.2 25);
+  --font-sans: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Consolas, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-ink font-sans text-sm antialiased;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  @apply rounded bg-line;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* markdown 正文排版（时间线气泡内） */
+.md {
+  @apply leading-relaxed;
+}
+.md > * + * {
+  @apply mt-2;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  @apply mt-3 font-semibold text-ink;
+}
+.md h1 {
+  @apply text-lg;
+}
+.md h2 {
+  @apply text-base;
+}
+.md ul {
+  @apply list-disc pl-5;
+}
+.md ol {
+  @apply list-decimal pl-5;
+}
+.md li + li {
+  @apply mt-1;
+}
+.md code:not(pre code) {
+  @apply rounded bg-panel-2 px-1.5 py-0.5 font-mono text-[0.85em] text-amber-200/90;
+}
+.md pre {
+  @apply my-2 overflow-x-auto rounded-lg border border-line bg-[#0d1117] p-3 font-mono text-[13px] leading-relaxed;
+}
+.md pre.shiki {
+  background: #0d1117 !important;
+}
+.md blockquote {
+  @apply border-l-2 border-line pl-3 text-dim;
+}
+.md table {
+  @apply my-2 w-full border-collapse text-[13px];
+}
+.md th,
+.md td {
+  @apply border border-line px-2 py-1 text-left;
+}
+.md th {
+  @apply bg-panel-2 font-medium;
+}
+.md a {
+  @apply text-accent underline underline-offset-2;
+}
+.md hr {
+  @apply border-line;
+}
+
+/* React Flow 暗色适配 */
+.react-flow__attribution {
+  display: none;
+}

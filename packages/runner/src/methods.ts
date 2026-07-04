@@ -47,8 +47,8 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
     };
     return {
       event: (envelope) => call((c) => c.call('session.event', { sessionId, envelope })),
-      state: (state, nativeSessionId) =>
-        call((c) => c.call('session.state', { sessionId, state, nativeSessionId })),
+      state: (state, nativeSessionId, usage) =>
+        call((c) => c.call('session.state', { sessionId, state, nativeSessionId, usage })),
       approval: (request) => call((c) => c.call('approval.request', { request })),
       draft: async (graph) => {
         const conn = ctx.conn;
@@ -100,6 +100,15 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
           removeSession(p.sessionId);
         }
         return { ok: true };
+      }
+      case 'session.interrupt': {
+        const p = runnerMethods['session.interrupt'].params.parse(params);
+        const session = getSession(p.sessionId);
+        if (!session || session.state === 'dead') {
+          return { ok: false, error: `session not running: ${p.sessionId}` };
+        }
+        const ok = await session.interrupt();
+        return { ok };
       }
       case 'approval.decide': {
         const p = runnerMethods['approval.decide'].params.parse(params);

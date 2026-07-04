@@ -1,4 +1,10 @@
+import { ExternalLink } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { toast } from 'sonner';
+import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
+import { Button } from './components/ui/button';
+import { Badge, Input } from './components/ui/primitives';
+import { cn } from './lib/utils';
 
 export interface Me {
   user: { id: string; email: string; name: string };
@@ -51,30 +57,33 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
   };
 
   return (
-    <div className="login-page">
-      <div className="login-card">
-        <h2>code-orchestrator</h2>
-        <div className="login-tabs">
-          <button className={mode === 'signin' ? 'active' : ''} onClick={() => setMode('signin')}>
-            登录
-          </button>
-          <button className={mode === 'signup' ? 'active' : ''} onClick={() => setMode('signup')}>
-            注册
-          </button>
+    <div className="flex h-full items-center justify-center">
+      <div className="flex w-80 flex-col gap-3 rounded-xl border border-line bg-panel p-7">
+        <h2 className="text-center text-lg font-semibold">code-orchestrator</h2>
+        <div className="flex gap-1 rounded-lg bg-bg p-1">
+          {(['signin', 'signup'] as const).map((m) => (
+            <button
+              key={m}
+              className={cn('flex-1 rounded-md py-1.5 text-sm transition-colors', mode === m ? 'bg-panel-2 text-ink' : 'text-dim')}
+              onClick={() => setMode(m)}
+            >
+              {m === 'signin' ? '登录' : '注册'}
+            </button>
+          ))}
         </div>
-        {mode === 'signup' && <input placeholder="姓名" value={name} onChange={(e) => setName(e.target.value)} />}
-        <input placeholder="邮箱" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <input
+        {mode === 'signup' && <Input placeholder="姓名" value={name} onChange={(e) => setName(e.target.value)} />}
+        <Input placeholder="邮箱" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <Input
           placeholder="密码（至少 8 位）"
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && submit()}
         />
-        {error && <div className="error">{error}</div>}
-        <button disabled={busy || !email || password.length < 8} onClick={submit}>
+        {error && <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs text-danger">{error}</div>}
+        <Button variant="default" disabled={busy || !email || password.length < 8} onClick={submit}>
           {busy ? '…' : mode === 'signin' ? '登录' : '注册并登录'}
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -83,65 +92,64 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
 export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () => void; onChanged: () => void }) {
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
 
   const bind = () => {
     setBusy(true);
-    setMsg(null);
     authApi
       .bindGitcode(token.trim())
       .then((d) => {
-        setMsg(`✅ 已绑定 gitcode 账号：${d.login}`);
+        toast.success(`已绑定 gitcode 账号：${d.login}`);
         setToken('');
         onChanged();
       })
-      .catch((e) => setMsg(`❌ ${e instanceof Error ? e.message : e}`))
+      .catch((e) => toast.error(`${e instanceof Error ? e.message : e}`))
       .finally(() => setBusy(false));
   };
 
   return (
-    <div className="modal-mask" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>设置</h3>
-        <p className="dim">{me.user.email}</p>
-        <h4>gitcode 访问令牌</h4>
-        <p className="dim">
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent>
+        <DialogTitle>设置</DialogTitle>
+        <p className="mb-4 text-xs text-dim">{me.user.email}</p>
+        <div className="mb-2 flex items-center gap-2">
+          <h4 className="text-sm font-medium">gitcode 访问令牌</h4>
+          {me.gitcode.bound && <Badge tone="ok">{me.gitcode.login}</Badge>}
+        </div>
+        <p className="mb-3 text-xs leading-relaxed text-dim">
           在 gitcode.com → 个人设置 → 访问令牌 创建（
-          <a href="https://gitcode.com/setting/token-classic" target="_blank" rel="noreferrer">
-            直达链接
+          <a
+            className="inline-flex items-center gap-0.5 text-accent underline"
+            href="https://gitcode.com/setting/token-classic"
+            target="_blank"
+            rel="noreferrer"
+          >
+            直达 <ExternalLink size={10} />
           </a>
           ）。录入后系统以你的身份创建 PR、发评论；令牌加密存储。
         </p>
-        {me.gitcode.bound && (
-          <p>
-            当前绑定：<b>{me.gitcode.login}</b>{' '}
-            <button
-              className="deny"
-              onClick={() => {
-                void authApi.unbindGitcode().then(onChanged);
-              }}
-            >
-              解绑
-            </button>
-          </p>
-        )}
-        <div className="token-row">
-          <input
+        <div className="flex gap-2">
+          <Input
             type="password"
             placeholder={me.gitcode.bound ? '输入新令牌以更换' : '粘贴 gitcode 令牌'}
             value={token}
             onChange={(e) => setToken(e.target.value)}
           />
-          <button disabled={busy || token.trim().length < 10} onClick={bind}>
-            {busy ? '验证中…' : '验证并绑定'}
-          </button>
+          <Button variant="default" disabled={busy || token.trim().length < 10} onClick={bind}>
+            {busy ? '验证中…' : '绑定'}
+          </Button>
         </div>
-        {msg && <p>{msg}</p>}
-        <button className="dim-btn" onClick={onClose}>
-          关闭
-        </button>
-      </div>
-    </div>
+        {me.gitcode.bound && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="mt-2 self-start text-danger"
+            onClick={() => void authApi.unbindGitcode().then(onChanged)}
+          >
+            解绑当前令牌
+          </Button>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

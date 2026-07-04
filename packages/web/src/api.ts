@@ -7,6 +7,14 @@ export interface EventRow {
   payload: unknown;
 }
 
+export interface SessionUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  costUsd: number;
+  turns: number;
+}
+
 export interface SessionRow {
   id: string;
   machineId: string;
@@ -17,6 +25,7 @@ export interface SessionRow {
   nativeSessionId: string | null;
   runId: string | null;
   nodeId: string | null;
+  usage: SessionUsage | null;
   createdAt: string;
 }
 
@@ -99,6 +108,9 @@ export const api = {
     fetch('/api/approvals?status=pending').then((r) => j<{ approvals: ApprovalRow[] }>(r)).then((d) => d.approvals),
   send: (sessionId: string, text: string) => post(`/api/sessions/${sessionId}/send`, { text }).then((r) => j(r)),
   kill: (sessionId: string) => post(`/api/sessions/${sessionId}/kill`, {}).then((r) => j(r)),
+  interrupt: (sessionId: string) => post(`/api/sessions/${sessionId}/interrupt`, {}).then((r) => j(r)),
+  sessionDiff: (sessionId: string) =>
+    fetch(`/api/sessions/${sessionId}/diff`).then((r) => j<{ ok: boolean; stat?: string; diff?: string; error?: string }>(r)),
   decide: (approvalId: string, behavior: 'allow' | 'deny', message?: string) =>
     post(`/api/approvals/${approvalId}/decide`, {
       decision: behavior === 'allow' ? { behavior } : { behavior, message },

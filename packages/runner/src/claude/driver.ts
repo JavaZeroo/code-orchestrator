@@ -31,9 +31,17 @@ import {
 import { Pushable } from '../utils/pushable';
 import { mapSdkMessage } from './mapper';
 
+export interface SessionUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  costUsd: number;
+  turns: number;
+}
+
 export interface DriverEmit {
   event: (envelope: SessionEnvelope) => void;
-  state: (state: SessionState, nativeSessionId?: string) => void;
+  state: (state: SessionState, nativeSessionId?: string, usage?: SessionUsage) => void;
   approval: (request: ApprovalRequest) => void;
   /** designer 会话：草图上报，返回 server 校验结果（失败信息回给模型自动重试） */
   draft: (graph: unknown) => Promise<{ ok: boolean; error?: string }>;
@@ -79,6 +87,7 @@ export class ClaudeSession {
   private readonly abort = new AbortController();
   private readonly pendingApprovals = new Map<string, (d: ApprovalDecision) => void>();
   private q: Query | null = null;
+  private readonly usage: SessionUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, turns: 0 };
 
   constructor(
     private readonly params: RunnerParams<'session.spawn'>,
@@ -109,6 +118,22 @@ export class ClaudeSession {
     this.setState('thinking');
   }
 
+  async interrupt(): Promise<boolean> {
+    if (!this.q || this.state === 'dead') {
+      return false;
+    }
+    try {
+      await this.q.interrupt();
+      this.emit.event(createEnvelope('agent', { t: 'service', text: '回合已被用户打断' }));
+      return true;
+    } catch (err) {
+      this.emit.event(
+        createEnvelope('agent', { t: 'service', text: `打断失败: ${err instanceof Error ? err.message : String(err)}` }),
+      );
+      return false;
+    }
+  }
+
   kill(): void {
     this.input.end();
     this.abort.abort();
@@ -130,13 +155,13 @@ export class ClaudeSession {
     return true;
   }
 
-  private setState(state: SessionState, nativeSessionId?: string): void {
+  private setState(state: SessionState, nativeSessionId?: string, usage?: SessionUsage): void {
     if (this.state === 'dead') {
       return;
     }
-    if (this.state !== state || nativeSessionId) {
+    if (this.state !== state || nativeSessionId || usage) {
       this.state = state;
-      this.emit.state(state, nativeSessionId);
+      this.emit.state(state, nativeSessionId, usage);
     }
   }
 
@@ -279,7 +304,16 @@ export class ClaudeSession {
         this.emit.event(envelope);
       }
       if (message.type === 'result') {
-        this.setState('idle');
+        const m = message as {
+          usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
+          total_cost_usd?: number;
+        };
+        this.usage.turns += 1;
+        this.usage.inputTokens += m.usage?.input_tokens ?? 0;
+        this.usage.outputTokens += m.usage?.output_tokens ?? 0;
+        this.usage.cacheReadTokens += m.usage?.cache_read_input_tokens ?? 0;
+        this.usage.costUsd += m.total_cost_usd ?? 0;
+        this.setState('idle', undefined, { ...this.usage });
       }
     }
     this.setState('dead');

@@ -1,75 +1,81 @@
+import { Plus } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { api, type MachineRow } from './api';
+import { toast } from 'sonner';
+import { api } from './api';
+import { Button } from './components/ui/button';
+import { Input, Label, Textarea } from './components/ui/primitives';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
+import { useMachines } from './lib/queries';
 
 export function NewSession({ onCreated }: { onCreated: (sessionId: string) => void }) {
-  const [machines, setMachines] = useState<MachineRow[]>([]);
+  const { data: machines = [] } = useMachines();
   const [machineId, setMachineId] = useState('');
   const [cwd, setCwd] = useState('/root');
   const [model, setModel] = useState('claude');
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api
-      .machines()
-      .then((m) => {
-        setMachines(m);
-        if (m.length > 0 && !machineId) {
-          setMachineId(m[0]!.id);
-        }
-      })
-      .catch((e) => setError(String(e)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (machines.length > 0 && !machineId) {
+      setMachineId(machines[0]!.id);
+    }
+  }, [machines, machineId]);
 
   const submit = () => {
     if (!machineId || !cwd) {
       return;
     }
     setBusy(true);
-    setError(null);
     api
       .spawn({ machineId, cwd, model, prompt: prompt.trim() || undefined })
       .then((d) => onCreated(d.sessionId))
-      .catch((e) => setError(String(e)))
+      .catch((e) => toast.error(`创建失败：${e}`))
       .finally(() => setBusy(false));
   };
 
   return (
-    <div className="new-session">
-      <h2>新建会话</h2>
-      {error && <div className="error">{error}</div>}
-      <label>
+    <div className="mx-auto mt-12 flex w-full max-w-lg flex-col gap-4 px-4">
+      <h2 className="text-lg font-semibold">新建会话</h2>
+      <Label>
         机器
-        <select value={machineId} onChange={(e) => setMachineId(e.target.value)}>
-          {machines.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name} {m.labels.length > 0 ? `[${m.labels.join(',')}]` : ''}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
+        <Select value={machineId} onValueChange={setMachineId}>
+          <SelectTrigger>
+            <SelectValue placeholder="选择机器" />
+          </SelectTrigger>
+          <SelectContent>
+            {machines.map((m) => (
+              <SelectItem key={m.id} value={m.id}>
+                {m.name} {m.labels.length > 0 ? `[${m.labels.join(',')}]` : ''}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Label>
+      <Label>
         工作目录
-        <input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/path/to/repo" />
-      </label>
-      <label>
+        <Input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/path/to/repo" />
+      </Label>
+      <Label>
         模型
-        <select value={model} onChange={(e) => setModel(e.target.value)}>
-          <option value="claude">claude（默认）</option>
-          <option value="deepseek">deepseek（Anthropic 兼容端点）</option>
-          <option value="glm">glm（Anthropic 兼容端点）</option>
-        </select>
-      </label>
-      <label>
+        <Select value={model} onValueChange={setModel}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="claude">claude（默认）</SelectItem>
+            <SelectItem value="deepseek">deepseek（Anthropic 兼容端点）</SelectItem>
+            <SelectItem value="glm">glm（Anthropic 兼容端点）</SelectItem>
+          </SelectContent>
+        </Select>
+      </Label>
+      <Label>
         首条消息（可选）
-        <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4} placeholder="要做什么？" />
-      </label>
-      <button disabled={busy || !machineId} onClick={submit}>
-        {busy ? '创建中…' : '创建会话'}
-      </button>
-      {machines.length === 0 && <p className="dim">没有在线机器——先在目标机器上启动 runner。</p>}
+        <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={4} placeholder="要做什么？" className="resize-none" />
+      </Label>
+      <Button variant="default" disabled={busy || !machineId} onClick={submit}>
+        <Plus size={14} /> {busy ? '创建中…' : '创建会话'}
+      </Button>
+      {machines.length === 0 && <p className="text-xs text-dim">没有在线机器——先在目标机器上启动 runner。</p>}
     </div>
   );
 }

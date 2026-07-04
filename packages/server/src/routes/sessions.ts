@@ -100,6 +100,29 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     return { ok: true };
   });
 
+  app.post<{ Params: { id: string } }>('/api/sessions/:id/interrupt', async (req) => {
+    const session = await findSession(req.params.id);
+    const result = await callRunner(session.machineId, 'session.interrupt', { sessionId: session.id });
+    if (!result.ok) {
+      throw new HttpError(409, result.error ?? 'interrupt failed');
+    }
+    return { ok: true };
+  });
+
+  /** 会话工作目录的 git 变更（web diff 面板用） */
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/diff', async (req) => {
+    const session = await findSession(req.params.id);
+    const result = await callRunner(session.machineId, 'machine.exec', {
+      cmd: `git -C ${JSON.stringify(session.cwd)} diff HEAD --stat && echo '---DIFF---' && git -C ${JSON.stringify(session.cwd)} diff HEAD`,
+      timeoutMs: 20_000,
+    });
+    if (result.exitCode !== 0) {
+      return { ok: false, error: result.stderr.slice(0, 500) || '不是 git 仓库或无法读取变更' };
+    }
+    const [stat = '', diff = ''] = result.stdout.split("---DIFF---\n");
+    return { ok: true, stat: stat.trim(), diff: diff.slice(0, 200_000) };
+  });
+
   app.get<{ Params: { id: string }; Querystring: { since?: string } }>(
     '/api/sessions/:id/events',
     async (req) => {
