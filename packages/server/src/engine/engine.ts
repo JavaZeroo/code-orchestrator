@@ -21,6 +21,7 @@ import {
 } from '@co/protocol';
 import { getDb, schema } from '../db/index';
 import { bus, publish } from '../events';
+import { parseForgeUrl } from '../forge/registry';
 import { listMachines } from '../ws/runnerHub';
 import { spawnSession, SpawnError } from '../services/spawn';
 
@@ -549,14 +550,18 @@ async function lastAgentText(sessionId: string): Promise<string> {
   return '';
 }
 
-/** agent 输出中的 gitcode PR URL → 自动登记 forge_ref（M3 门禁回流入口） */
+/** agent 输出中的 gitcode/github PR URL → 自动登记 forge_ref（M3 门禁回流入口） */
 async function autoRegisterForgeRefs(summary: string, ref: { runId: string; nodeId: string }, sessionId: string): Promise<void> {
   const db = getDb();
   const seen = new Set<string>();
-  for (const m of summary.matchAll(/gitcode\.com\/([\w.-]+\/[\w.-]+)\/(?:merge_requests|pulls)\/(\d+)/g)) {
-    const repo = m[1]!;
-    const number = Number(m[2]!);
-    const dedupeKey = `${repo}#${number}`;
+  // 逐个 URL 用 parseForgeUrl 识别 forge + owner/repo/number（只登记 PR）
+  for (const m of summary.matchAll(/https?:\/\/\S+/g)) {
+    const parsed = parseForgeUrl(m[0]);
+    if (!parsed || parsed.kind !== 'pr') {
+      continue;
+    }
+    const { forge, repo, number } = parsed;
+    const dedupeKey = `${forge}:${repo}#${number}`;
     if (seen.has(dedupeKey)) {
       continue;
     }
@@ -571,6 +576,7 @@ async function autoRegisterForgeRefs(summary: string, ref: { runId: string; node
     }
     await db.insert(schema.forgeRefs).values({
       id: createId(),
+      forge,
       kind: 'pr',
       repo,
       number,
@@ -582,7 +588,7 @@ async function autoRegisterForgeRefs(summary: string, ref: { runId: string; node
       type: 'forge.ref_registered',
       runId: ref.runId,
       sessionId,
-      payload: { repo, number, nodeId: ref.nodeId },
+      payload: { forge, repo, number, nodeId: ref.nodeId },
     });
   }
 }

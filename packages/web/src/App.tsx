@@ -104,11 +104,14 @@ export function App() {
           <NotificationBell onOpenSession={openSession} onOpenRun={openRun} />
           <span className="text-xs text-dim">
             {me.user.email}
-            {me.gitcode.bound ? (
-              <span className="ml-1 text-ok">· gitcode:{me.gitcode.login}</span>
-            ) : (
-              <span className="ml-1 text-warn">· gitcode 未绑定</span>
-            )}
+            {(() => {
+              const bound = Object.entries(me.forges).filter(([, b]) => b.bound);
+              return bound.length > 0 ? (
+                <span className="ml-1 text-ok">· {bound.map(([k, b]) => `${k}:${b.login}`).join(' ')}</span>
+              ) : (
+                <span className="ml-1 text-warn">· forge 未绑定</span>
+              );
+            })()}
           </span>
           <Button variant="ghost" size="icon" onClick={() => setShowSettings(true)} title="设置">
             <Settings size={15} />

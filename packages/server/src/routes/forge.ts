@@ -3,11 +3,12 @@ import { createId } from '@paralleldrive/cuid2';
 import { desc, eq } from 'drizzle-orm';
 import * as z from 'zod';
 import { getDb, schema } from '../db/index';
-import { gitcode } from '../forge/gitcode';
 import { pollOnce } from '../forge/poller';
+import { getForge } from '../forge/registry';
 import { anyForgeToken, userForgeToken } from '../forge/tokens';
 
 const createRefSchema = z.object({
+  forge: z.enum(['gitcode', 'github']).default('gitcode'),
   repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, '格式: owner/repo'),
   number: z.number().int().positive(),
   kind: z.enum(['pr', 'issue']).default('pr'),
@@ -36,23 +37,12 @@ export async function registerForgeRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
-  /** 客户端连通性冒烟：直接透传一次 PR 查询（优先请求者自己的 token） */
-  app.get<{ Querystring: { repo: string; number: string } }>('/api/forge/preview', async (req) => {
-    const token = (req.user ? await userForgeToken(req.user.id) : undefined) ?? (await anyForgeToken());
-    const pr = await gitcode.getPull(req.query.repo, Number(req.query.number), token);
-    return {
-      number: pr.number,
-      title: pr.title,
-      state: pr.state,
-      labels: pr.labels.map((l) => l.name),
-      ci: pr.mergeable_state
-        ? {
-            ci_state_passed: pr.mergeable_state.ci_state_passed,
-            conflict_passed: pr.mergeable_state.conflict_passed,
-            resolve_discussion_passed: pr.mergeable_state.resolve_discussion_passed,
-          }
-        : null,
-    };
+  /** 客户端连通性冒烟：透传一次归一化 PR 查询（优先请求者自己的 token） */
+  app.get<{ Querystring: { forge?: string; repo: string; number: string } }>('/api/forge/preview', async (req) => {
+    const forgeKind = req.query.forge === 'github' ? 'github' : 'gitcode';
+    const token = (req.user ? await userForgeToken(req.user.id, forgeKind) : undefined) ?? (await anyForgeToken(forgeKind));
+    const pr = await getForge(forgeKind).getPull(req.query.repo, Number(req.query.number), token);
+    return { forge: forgeKind, number: pr.number, title: pr.title, state: pr.state, ciState: pr.ciState, conflictPassed: pr.conflictPassed };
   });
 
   /** 手动触发一轮轮询（调试用） */

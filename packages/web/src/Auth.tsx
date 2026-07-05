@@ -6,10 +6,19 @@ import { Button } from './components/ui/button';
 import { Badge, Input } from './components/ui/primitives';
 import { cn } from './lib/utils';
 
+export interface ForgeBinding {
+  bound: boolean;
+  login?: string;
+}
 export interface Me {
   user: { id: string; email: string; name: string };
-  gitcode: { bound: boolean; login?: string };
+  forges: Record<string, ForgeBinding>;
 }
+
+export const FORGES: Array<{ key: string; label: string; tokenUrl: string; hint: string }> = [
+  { key: 'gitcode', label: 'GitCode', tokenUrl: 'https://gitcode.com/setting/token-classic', hint: '个人设置 → 访问令牌' },
+  { key: 'github', label: 'GitHub', tokenUrl: 'https://github.com/settings/tokens', hint: 'Settings → Developer settings → PAT（勾 repo）' },
+];
 
 async function jauth<T>(r: Response): Promise<T> {
   if (!r.ok) {
@@ -28,13 +37,13 @@ export const authApi = {
   signUp: (name: string, email: string, password: string) =>
     post('/api/auth/sign-up/email', { name, email, password }).then(jauth),
   signOut: () => post('/api/auth/sign-out', {}).then(jauth),
-  bindGitcode: (token: string) =>
-    fetch('/api/me/gitcode-token', {
+  bindForge: (forge: string, token: string) =>
+    fetch(`/api/me/forge-token/${forge}`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ token }),
     }).then((r) => jauth<{ ok: boolean; login: string }>(r)),
-  unbindGitcode: () => fetch('/api/me/gitcode-token', { method: 'DELETE' }).then(jauth),
+  unbindForge: (forge: string) => fetch(`/api/me/forge-token/${forge}`, { method: 'DELETE' }).then(jauth),
 };
 
 export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
@@ -89,16 +98,16 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
   );
 }
 
-export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () => void; onChanged: () => void }) {
+function ForgeTokenRow({ forge, binding, onChanged }: { forge: (typeof FORGES)[number]; binding: ForgeBinding; onChanged: () => void }) {
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
 
   const bind = () => {
     setBusy(true);
     authApi
-      .bindGitcode(token.trim())
+      .bindForge(forge.key, token.trim())
       .then((d) => {
-        toast.success(`已绑定 gitcode 账号：${d.login}`);
+        toast.success(`已绑定 ${forge.label} 账号：${d.login}`);
         setToken('');
         onChanged();
       })
@@ -107,47 +116,56 @@ export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () 
   };
 
   return (
+    <div className="rounded-lg border border-line p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <h4 className="text-sm font-medium">{forge.label} 访问令牌</h4>
+        {binding.bound && <Badge tone="ok">{binding.login}</Badge>}
+        <a
+          className="ml-auto inline-flex items-center gap-0.5 text-xs text-accent underline"
+          href={forge.tokenUrl}
+          target="_blank"
+          rel="noreferrer"
+        >
+          创建 <ExternalLink size={10} />
+        </a>
+      </div>
+      <p className="mb-2 text-xs text-dim">{forge.hint}。绑定后系统以你的身份在此 forge 创建 PR、发评论；令牌加密存储。</p>
+      <div className="flex gap-2">
+        <Input
+          type="password"
+          placeholder={binding.bound ? '输入新令牌以更换' : `粘贴 ${forge.label} 令牌`}
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+        />
+        <Button variant="default" disabled={busy || token.trim().length < 10} onClick={bind}>
+          {busy ? '验证中…' : '绑定'}
+        </Button>
+      </div>
+      {binding.bound && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-2 self-start text-danger"
+          onClick={() => void authApi.unbindForge(forge.key).then(onChanged)}
+        >
+          解绑
+        </Button>
+      )}
+    </div>
+  );
+}
+
+export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () => void; onChanged: () => void }) {
+  return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent>
         <DialogTitle>设置</DialogTitle>
         <p className="mb-4 text-xs text-dim">{me.user.email}</p>
-        <div className="mb-2 flex items-center gap-2">
-          <h4 className="text-sm font-medium">gitcode 访问令牌</h4>
-          {me.gitcode.bound && <Badge tone="ok">{me.gitcode.login}</Badge>}
+        <div className="flex flex-col gap-3">
+          {FORGES.map((f) => (
+            <ForgeTokenRow key={f.key} forge={f} binding={me.forges[f.key] ?? { bound: false }} onChanged={onChanged} />
+          ))}
         </div>
-        <p className="mb-3 text-xs leading-relaxed text-dim">
-          在 gitcode.com → 个人设置 → 访问令牌 创建（
-          <a
-            className="inline-flex items-center gap-0.5 text-accent underline"
-            href="https://gitcode.com/setting/token-classic"
-            target="_blank"
-            rel="noreferrer"
-          >
-            直达 <ExternalLink size={10} />
-          </a>
-          ）。录入后系统以你的身份创建 PR、发评论；令牌加密存储。
-        </p>
-        <div className="flex gap-2">
-          <Input
-            type="password"
-            placeholder={me.gitcode.bound ? '输入新令牌以更换' : '粘贴 gitcode 令牌'}
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-          />
-          <Button variant="default" disabled={busy || token.trim().length < 10} onClick={bind}>
-            {busy ? '验证中…' : '绑定'}
-          </Button>
-        </div>
-        {me.gitcode.bound && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="mt-2 self-start text-danger"
-            onClick={() => void authApi.unbindGitcode().then(onChanged)}
-          >
-            解绑当前令牌
-          </Button>
-        )}
       </DialogContent>
     </Dialog>
   );

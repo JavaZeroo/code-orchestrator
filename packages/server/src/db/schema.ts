@@ -68,7 +68,8 @@ export const authVerification = pgTable('verification', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** 业务扩展：每用户的 gitcode token（AES-256-GCM 加密）与绑定身份 */
+/** 业务扩展：每用户的 gitcode token（AES-256-GCM 加密）与绑定身份。
+ *  注：per-forge token 已泛化到 forge_tokens 表；此表 gitcode 字段保留兼容，新代码用 forgeTokens。 */
 export const userSettings = pgTable('user_settings', {
   userId: text('user_id')
     .primaryKey()
@@ -77,6 +78,21 @@ export const userSettings = pgTable('user_settings', {
   gitcodeLogin: text('gitcode_login'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** 每用户 × 每 forge 的 token（AES-256-GCM）与绑定身份。支持 gitcode/github/… 可插拔 */
+export const forgeTokens = pgTable(
+  'forge_tokens',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => authUser.id, { onDelete: 'cascade' }),
+    forge: text('forge', { enum: ['gitcode', 'github'] }).notNull(),
+    tokenEnc: text('token_enc').notNull(),
+    login: text('login'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.forge] })],
+);
 
 export const machines = pgTable('machines', {
   id: text('id').primaryKey(),
@@ -191,9 +207,11 @@ export const meetingRecords = pgTable('meeting_records', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-/** gitcode PR/issue ↔ 工作流的映射、轮询快照与 nudge 记账 */
+/** forge PR/issue ↔ 工作流的映射、轮询快照与 nudge 记账 */
 export const forgeRefs = pgTable('forge_refs', {
   id: text('id').primaryKey(),
+  /** 代码托管后端；存量行默认 gitcode */
+  forge: text('forge', { enum: ['gitcode', 'github'] }).notNull().default('gitcode'),
   kind: text('kind', { enum: ['pr', 'issue'] }).notNull(),
   repo: text('repo').notNull(),
   number: integer('number').notNull(),

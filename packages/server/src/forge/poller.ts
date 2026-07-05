@@ -1,16 +1,17 @@
 /**
  * 门禁回流轮询器（设计 §8.3，语义照 agent-orchestrator 的 lifecycle/reactions）。
- * 快环 30s：对活跃 forge_refs 轮询 PR（一个 GET 拿 labels+mergeable_state）+ 评论增量，
+ * 快环 30s：对活跃 forge_refs 用其 adapter 拉归一化 PR + 评论增量，
  * 变化 → forge.* 事件 → nudge（按原因去重、每类封顶 3 次）→ session.send 注入负责会话。
- * CI 状态源自 PR 标签（gitcode 无 commit status API，见调研报告 §5）。
+ * forge 无关：CI/冲突状态由各 adapter 归一化（gitcode 看标签、github 看 checks）。
  */
 
 import { eq } from 'drizzle-orm';
 import { getDb, schema } from '../db/index';
 import { publish } from '../events';
 import { callRunner } from '../ws/runnerHub';
-import { gitcode, type PullComment, type PullInfo } from './gitcode';
+import { getForge, isForgeKind } from './registry';
 import { anyForgeToken } from './tokens';
+import type { NormalizedComment, NormalizedPull } from './types';
 
 const POLL_INTERVAL_MS = 30_000;
 const NUDGE_CAP = 3;
@@ -21,25 +22,7 @@ interface Snapshot {
   ciState?: string;
   conflictPassed?: boolean;
   lastCommentId?: number;
-  labels?: string[];
   prState?: string;
-}
-
-function ciStateFromLabels(labels: string[]): string {
-  if (labels.includes('ci-pipeline-passed')) {
-    return 'passed';
-  }
-  if (labels.includes('ci-pipeline-failed') || labels.includes('pr-ci-fail')) {
-    return 'failed';
-  }
-  if (labels.includes('ci-pipeline-running') || labels.includes('SC-RUNNING')) {
-    return 'running';
-  }
-  return 'unknown';
-}
-
-function isBot(login: string): boolean {
-  return /bot|ci|compass/i.test(login);
 }
 
 async function nudge(ref: ForgeRefRow, counts: Record<string, number>, kind: string, message: string): Promise<void> {
@@ -48,7 +31,6 @@ async function nudge(ref: ForgeRefRow, counts: Record<string, number>, kind: str
     await publish({ type: 'nudge.suppressed', runId: ref.runId ?? undefined, payload: { ref: ref.id, kind } });
     return;
   }
-
   if (!ref.sessionId) {
     await publish({ type: 'nudge.skipped', runId: ref.runId ?? undefined, payload: { ref: ref.id, kind, reason: 'no session bound' } });
     return;
@@ -65,7 +47,7 @@ async function nudge(ref: ForgeRefRow, counts: Record<string, number>, kind: str
     });
     return;
   }
-  const text = `[gitcode ${ref.repo} !${ref.number}] ${message}`;
+  const text = `[${ref.forge} ${ref.repo} #${ref.number}] ${message}`;
   try {
     await callRunner(session.machineId, 'session.send', { sessionId: session.id, text });
     counts[kind] = used + 1; // 只有真实送达才消耗封顶计数
@@ -76,32 +58,32 @@ async function nudge(ref: ForgeRefRow, counts: Record<string, number>, kind: str
       payload: { ref: ref.id, kind, attempt: counts[kind], message },
     });
   } catch (err) {
-    console.error(`[forge] nudge send failed (${ref.repo}!${ref.number}):`, err instanceof Error ? err.message : err);
+    console.error(`[forge] nudge send failed (${ref.repo}#${ref.number}):`, err instanceof Error ? err.message : err);
   }
 }
 
 async function pollRef(ref: ForgeRefRow): Promise<void> {
   const db = getDb();
-  const token = await anyForgeToken();
+  const forgeKind = isForgeKind(ref.forge) ? ref.forge : 'gitcode';
+  const forge = getForge(forgeKind);
+  const token = await anyForgeToken(forgeKind);
   const old = (ref.snapshot ?? {}) as Snapshot;
   const counts = { ...(ref.nudgeCounts ?? {}) };
 
-  let pr: PullInfo;
-  let comments: PullComment[];
+  let pr: NormalizedPull;
+  let comments: NormalizedComment[];
   try {
-    pr = await gitcode.getPull(ref.repo, ref.number, token);
-    comments = await gitcode.listPullComments(ref.repo, ref.number, token);
+    pr = await forge.getPull(ref.repo, ref.number, token);
+    comments = await forge.listPullComments(ref.repo, ref.number, token);
   } catch (err) {
-    console.error(`[forge] poll failed ${ref.repo}!${ref.number}:`, err instanceof Error ? err.message : err);
+    console.error(`[forge] poll failed ${ref.repo}#${ref.number}:`, err instanceof Error ? err.message : err);
     return;
   }
 
-  const labels = pr.labels.map((l) => l.name);
   const next: Snapshot = {
-    ciState: ciStateFromLabels(labels),
-    conflictPassed: pr.mergeable_state?.conflict_passed,
+    ciState: pr.ciState,
+    conflictPassed: pr.conflictPassed,
     lastCommentId: old.lastCommentId ?? 0,
-    labels,
     prState: pr.state,
   };
 
@@ -112,7 +94,7 @@ async function pollRef(ref: ForgeRefRow): Promise<void> {
         type: 'forge.pr_state',
         runId: ref.runId ?? undefined,
         sessionId: ref.sessionId ?? undefined,
-        payload: { repo: ref.repo, number: ref.number, state: pr.state },
+        payload: { forge: forgeKind, repo: ref.repo, number: ref.number, state: pr.state },
       });
     }
     await db
@@ -122,21 +104,21 @@ async function pollRef(ref: ForgeRefRow): Promise<void> {
     return;
   }
 
-  // CI 标签状态迁移
+  // CI 状态迁移
   if (next.ciState !== old.ciState) {
     await publish({
       type: 'forge.ci',
       runId: ref.runId ?? undefined,
       sessionId: ref.sessionId ?? undefined,
-      payload: { repo: ref.repo, number: ref.number, state: next.ciState, labels },
+      payload: { forge: forgeKind, repo: ref.repo, number: ref.number, state: next.ciState, detail: pr.detail },
     });
     if (next.ciState === 'failed') {
-      const reasons = pr.mergeable_state?.reason ? ` 未过项: ${JSON.stringify(pr.mergeable_state.reason)}` : '';
+      const reason = pr.detail?.reason ? ` 未过项: ${JSON.stringify(pr.detail.reason)}` : '';
       await nudge(
         ref,
         counts,
         'ci_failed',
-        `门禁失败（标签: ${labels.filter((l) => /ci|fail/i.test(l)).join(', ')}）。${reasons} 请查看 PR 中 bot 评论定位失败 stage，修复后 push；codecheck 通过后评论 /retest 触发完整流水线。`,
+        `门禁失败。${reason} 请查看 PR 中的 CI/检查详情与 bot 评论定位失败原因，修复后 push。`,
       );
     }
   }
@@ -147,7 +129,7 @@ async function pollRef(ref: ForgeRefRow): Promise<void> {
       type: 'forge.conflict',
       runId: ref.runId ?? undefined,
       sessionId: ref.sessionId ?? undefined,
-      payload: { repo: ref.repo, number: ref.number },
+      payload: { forge: forgeKind, repo: ref.repo, number: ref.number },
     });
     await nudge(ref, counts, 'conflict', '与目标分支存在冲突。请拉取最新目标分支 rebase 解决冲突后强推。');
   }
@@ -157,23 +139,20 @@ async function pollRef(ref: ForgeRefRow): Promise<void> {
   const fresh = lastId === 0 ? [] : comments.filter((c) => c.id > lastId).sort((a, b) => a.id - b.id);
   for (const c of fresh) {
     next.lastCommentId = Math.max(next.lastCommentId ?? 0, c.id);
-    const author = c.user?.login ?? c.user?.name ?? 'unknown';
     await publish({
       type: 'forge.review_comment',
       runId: ref.runId ?? undefined,
       sessionId: ref.sessionId ?? undefined,
-      payload: { repo: ref.repo, number: ref.number, commentId: c.id, author, commentType: c.comment_type, excerpt: c.body.slice(0, 300) },
+      payload: { forge: forgeKind, repo: ref.repo, number: ref.number, commentId: c.id, author: c.author, commentType: c.kind, excerpt: c.body.slice(0, 300) },
     });
     // 可执行评审意见：行级评论，或人类的普通评论
-    const actionable = c.comment_type === 'diff_comment' || !isBot(author);
-    if (actionable) {
-      await nudge(ref, counts, 'review', `${author} 的评审意见（${c.comment_type ?? 'comment'}）：\n${c.body.slice(0, 500)}\n请处理并回复；行级意见解决后标记 resolve。`);
+    if (c.kind === 'diff' || !c.isBot) {
+      await nudge(ref, counts, 'review', `${c.author} 的评审意见（${c.kind}）：\n${c.body.slice(0, 500)}\n请处理并回复；行级意见解决后标记 resolve。`);
     }
   }
   if (fresh.length === 0) {
     next.lastCommentId = lastId;
   }
-  // 首轮只建立基线，不为存量评论发 nudge
   if (lastId === 0 && comments.length > 0) {
     next.lastCommentId = Math.max(...comments.map((c) => c.id));
   }
@@ -198,10 +177,7 @@ export async function pollOnce(): Promise<number> {
   polling = true;
   try {
     const db = getDb();
-    const refs = await db
-      .select()
-      .from(schema.forgeRefs)
-      .where(eq(schema.forgeRefs.active, 'yes'));
+    const refs = await db.select().from(schema.forgeRefs).where(eq(schema.forgeRefs.active, 'yes'));
     for (const ref of refs.filter((r) => r.kind === 'pr')) {
       await pollRef(ref);
     }
