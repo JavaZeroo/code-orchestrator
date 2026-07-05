@@ -10,7 +10,7 @@ set -euo pipefail
 
 IMAGE="${1:?用法: pull-image.sh <image[:tag]> [arch]}"
 ARCH="${2:-arm64}"
-HOST="${IMAGE_LOAD_HOST:-root@192.168.9.186}"
+HOST="${IMAGE_LOAD_HOST:?设置 IMAGE_LOAD_HOST=user@host 指向目标宿主机}"
 
 # 归一化：确定 registry 与仓库路径
 REF="$IMAGE"

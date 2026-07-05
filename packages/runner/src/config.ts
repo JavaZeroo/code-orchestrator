@@ -8,7 +8,7 @@ const envSchema = z.object({
   MACHINE_NAME: z.string().optional(),
   /** 逗号分隔，如 "npu,910b" */
   MACHINE_LABELS: z.string().default(''),
-  /** 本机 code-server 地址（如 http://192.168.9.186:7621），注册进机器信息 */
+  /** 本机 code-server 地址（如 http://<host>:7621），注册进机器信息 */
   CODE_SERVER_URL: z.string().optional(),
 });
 

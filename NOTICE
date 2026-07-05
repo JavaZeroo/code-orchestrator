@@ -1,0 +1,19 @@
+code-orchestrator
+Copyright 2026 code-orchestrator contributors
+
+Licensed under the Apache License, Version 2.0.
+
+------------------------------------------------------------------------
+
+This product includes code vendored from the following project:
+
+slopus/happy (https://github.com/slopus/happy)
+  Copyright (c) 2026 Happy Coder Contributors
+  Licensed under the MIT License.
+
+  Vendored portions (session wire protocol, and the Claude/Codex driver
+  semantics that were re-implemented against the public Agent SDK) are
+  marked in-tree with source headers and a VENDOR.md / VENDOR_PLAN.md note.
+  See:
+    - packages/protocol/src/vendor/happy-wire/  (LICENSE.happy + VENDOR.md)
+    - packages/runner/VENDOR_PLAN.md
