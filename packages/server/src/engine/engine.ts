@@ -8,6 +8,7 @@
  * M2 仅支持 agent | gate 节点；其余类型在 startRun 拒绝。
  */
 
+import { existsSync } from 'node:fs';
 import { createId } from '@paralleldrive/cuid2';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import {
@@ -25,7 +26,12 @@ import { parseForgeUrl } from '../forge/registry';
 import { callRunner, listMachines } from '../ws/runnerHub';
 import { spawnSession, SpawnError } from '../services/spawn';
 
-type RunContext = { vars: Record<string, string>; outputs: Record<string, string> };
+type RunContext = {
+  vars: Record<string, string>;
+  outputs: Record<string, string>;
+  /** 每个评审节点已用返工轮次（持久化在 run.context，重启后仍守住上限） */
+  reviseRounds?: Record<string, number>;
+};
 type ApprovalRow = typeof schema.approvals.$inferSelect;
 
 export class EngineError extends Error {
@@ -45,8 +51,7 @@ const tickChains = new Map<string, Promise<void>>();
 /** agent 节点重试计数（key=runId:nodeId），瞬时错误自愈用 */
 const agentAttempts = new Map<string, number>();
 const MAX_AGENT_RETRIES = Number(process.env.AGENT_MAX_RETRIES ?? 2);
-/** 评审→返工闭环轮次计数（key=runId:reviewNodeId） */
-const reviseRounds = new Map<string, number>();
+// 返工轮次已改为持久化在 run.context.reviseRounds（重启后仍守上限），不再用内存 Map
 /** turn 名义 completed 但实际是传输层/限流错误（SDK 有时把 API 错误也标 success）——判为可重试失败 */
 const TRANSIENT_ERROR_RE = /^\s*(API Error|Unable to connect to API|ECONNRESET|ETIMEDOUT|overloaded_error|rate_limit|Internal server error|502 |503 |529 )/i;
 
@@ -756,66 +761,100 @@ async function triggerRevision(
   reviewSummary: string,
   maxRounds: number,
 ): Promise<boolean> {
-  const rk = `${runId}:${reviewNodeId}`;
-  const round = reviseRounds.get(rk) ?? 0;
-  if (round >= maxRounds) {
-    return false; // 返工轮次耗尽，带最后一轮意见交人工
-  }
   const db = getDb();
+  const runRows = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId)).limit(1);
+  const run = runRows[0];
+  if (!run) {
+    return false;
+  }
+  const context = run.context as RunContext;
+  const rounds = context.reviseRounds ?? {};
+  const round = rounds[reviewNodeId] ?? 0;
+  if (round >= maxRounds) {
+    return false; // 返工轮次耗尽（计数持久化在 context，重启后仍守上限），交人工
+  }
+  const defRows = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, run.defId)).limit(1);
+  if (!defRows[0]) {
+    return false;
+  }
+  const def = parseDef(defRows[0].graph);
+  const implNode = def.nodes.find((n) => n.id === targetNodeId);
+  if (implNode?.type !== 'agent') {
+    return false;
+  }
   const states = await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, runId));
   const target = states.find((s) => s.nodeId === targetNodeId);
-  if (!target?.sessionId) {
-    return false;
-  }
-  const sessRows = await db.select().from(schema.sessions).where(eq(schema.sessions.id, target.sessionId)).limit(1);
-  const session = sessRows[0];
-  if (!session || session.state === 'dead') {
-    return false; // 实现会话已死，无法返工（交人工；后续可扩展为重开会话）
-  }
   const feedback = `SE 评审判定「需改进」。请严格按下面的评审意见修改代码，然后 commit 并 push 到当前分支（同一个 PR，不要新建分支/PR）。改完简要说明你改了哪些点。\n\n===== 评审意见 =====\n${reviewSummary.slice(0, 4000)}`;
-  try {
-    await callRunner(session.machineId, 'session.send', { sessionId: target.sessionId, text: feedback });
-  } catch {
-    return false;
+
+  // 实现会话活着 → 回灌返工意见；死了/丢了 → 在原 worktree 重开一个会话继续返工（loop 抗会话丢失）
+  const existing = target?.sessionId
+    ? (await db.select().from(schema.sessions).where(eq(schema.sessions.id, target.sessionId)).limit(1))[0]
+    : undefined;
+  let sessionId: string;
+  let respawned = false;
+  if (existing && existing.state !== 'dead') {
+    try {
+      await callRunner(existing.machineId, 'session.send', { sessionId: existing.id, text: feedback });
+    } catch {
+      return false;
+    }
+    sessionId = existing.id;
+  } else {
+    const cwd = context.vars.cwd;
+    const machineId = pickMachine(implNode.machine);
+    if (!machineId || !cwd || !existsSync(cwd)) {
+      return false; // 无处重开（worktree 不在/无机器）→ 交人工
+    }
+    try {
+      const spawned = await spawnSession({
+        machineId,
+        cwd,
+        prompt: `${substitute(implNode.prompt, context)}\n\n===== SE 评审要求返工（在当前分支同一 PR 上改） =====\n${reviewSummary.slice(0, 4000)}`,
+        model: implNode.model,
+        role: implNode.role,
+        runId,
+        nodeId: targetNodeId,
+        meta: { permissionMode: implNode.permissionMode, effort: implNode.effort },
+      });
+      sessionId = spawned.sessionId;
+      respawned = true;
+    } catch {
+      return false;
+    }
   }
-  reviseRounds.set(rk, round + 1);
-  // target(实现) → running（重登记会话：turn-end 标 done → tick 重跑评审）；评审节点 → pending
-  sessionNodes.set(target.sessionId, { runId, nodeId: targetNodeId });
+
+  // 持久化轮次 + 状态回退：target→running（重登记会话）、评审→pending、下游 gate→pending 作废审批
+  rounds[reviewNodeId] = round + 1;
+  context.reviseRounds = rounds;
+  await db.update(schema.workflowRuns).set({ context }).where(eq(schema.workflowRuns.id, runId));
+  sessionNodes.set(sessionId, { runId, nodeId: targetNodeId });
   await db
     .update(schema.nodeStates)
-    .set({ status: 'running', updatedAt: new Date() })
+    .set({ status: 'running', sessionId, updatedAt: new Date() })
     .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, targetNodeId)));
   await db
     .update(schema.nodeStates)
     .set({ status: 'pending', updatedAt: new Date() })
     .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, reviewNodeId)));
-  // 下游 gate 回到 pending 并作废待批审批（重审通过后 tick 会重新建门）
-  const defRows0 = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId)).limit(1);
-  const defRows = defRows0[0]
-    ? await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, defRows0[0].defId)).limit(1)
-    : [];
-  if (defRows[0]) {
-    const def = parseDef(defRows[0].graph);
-    const downstreamGates = def.edges
-      .filter(([from]) => from === reviewNodeId)
-      .map(([, to]) => to)
-      .filter((id) => def.nodes.find((n) => n.id === id)?.type === 'gate');
-    for (const g of downstreamGates) {
-      await db
-        .update(schema.nodeStates)
-        .set({ status: 'pending', updatedAt: new Date() })
-        .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, g)));
-      await db
-        .update(schema.approvals)
-        .set({ status: 'expired' })
-        .where(and(eq(schema.approvals.runId, runId), eq(schema.approvals.nodeId, g), eq(schema.approvals.status, 'pending')));
-      await publishNodeState(runId, g, 'pending', { reason: 'revising' });
-    }
+  const downstreamGates = def.edges
+    .filter(([from]) => from === reviewNodeId)
+    .map(([, to]) => to)
+    .filter((id) => def.nodes.find((n) => n.id === id)?.type === 'gate');
+  for (const g of downstreamGates) {
+    await db
+      .update(schema.nodeStates)
+      .set({ status: 'pending', updatedAt: new Date() })
+      .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, g)));
+    await db
+      .update(schema.approvals)
+      .set({ status: 'expired' })
+      .where(and(eq(schema.approvals.runId, runId), eq(schema.approvals.nodeId, g), eq(schema.approvals.status, 'pending')));
+    await publishNodeState(runId, g, 'pending', { reason: 'revising' });
   }
-  await publish({ type: 'run.node.revise', runId, payload: { reviewNode: reviewNodeId, target: targetNodeId, round: round + 1, max: maxRounds } });
+  await publish({ type: 'run.node.revise', runId, payload: { reviewNode: reviewNodeId, target: targetNodeId, round: round + 1, max: maxRounds, respawned } });
   await publishNodeState(runId, targetNodeId, 'running', { revise: round + 1 });
   await publishNodeState(runId, reviewNodeId, 'pending', { revise: round + 1 });
-  console.log(`[engine] revise round ${round + 1}/${maxRounds}: ${targetNodeId} ← review ${reviewNodeId} (run ${runId})`);
+  console.log(`[engine] revise round ${round + 1}/${maxRounds}: ${targetNodeId} ← review ${reviewNodeId} (run ${runId})${respawned ? ' [respawned]' : ''}`);
   scheduleTick(runId);
   return true;
 }

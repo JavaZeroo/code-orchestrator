@@ -23,12 +23,11 @@ export async function registerLarkRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(schema.larkWebhooks.userId, req.user!.id))
       .limit(1);
 
-    if (rows.length === 0) {
+    const row = rows[0];
+    if (!row) {
       void reply.code(400);
       return { error: '尚未配置飞书 webhook' };
     }
-
-    const row = rows[0];
 
     let url: string;
     try {
