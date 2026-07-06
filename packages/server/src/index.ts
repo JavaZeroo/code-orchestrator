@@ -14,6 +14,7 @@ import { startIntakePoller } from './forge/intake';
 import { startLarkNotifier } from './lark/notifier';
 import { registerForgeRoutes } from './routes/forge';
 import { registerLarkRoutes } from './routes/lark';
+import { registerLlmRoutes } from './routes/llm';
 import { registerMeRoutes } from './routes/me';
 import { registerSessionRoutes } from './routes/sessions';
 import { registerTriggerRoutes } from './routes/triggers';
@@ -70,6 +71,7 @@ await registerWorkRoutes(app);
 if (authEnabled) {
   await registerMeRoutes(app);
   await registerLarkRoutes(app);
+  await registerLlmRoutes(app);
 }
 
 if (hasDb()) {

@@ -80,6 +80,20 @@ export async function resolveModel(
       env: { ANTHROPIC_BASE_URL: 'https://open.bigmodel.cn/api/anthropic', ANTHROPIC_AUTH_TOKEN: key },
     };
   }
+  // 查询自定义 LLM 端点注册表（label 匹配）
+  const endpoint = await getDb()
+    .select()
+    .from(schema.llmEndpoints)
+    .where(eq(schema.llmEndpoints.label, alias))
+    .limit(1)
+    .then((rows) => rows[0]);
+  if (endpoint) {
+    const key = decryptSecret(endpoint.apiKeyEnc);
+    return {
+      model: endpoint.model,
+      env: { ANTHROPIC_BASE_URL: endpoint.baseUrl, ANTHROPIC_AUTH_TOKEN: key },
+    };
+  }
   return { model: alias };
 }
 

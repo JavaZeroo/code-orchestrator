@@ -143,6 +143,17 @@ export const workItems = pgTable(
   (t) => [index('work_items_parent_idx').on(t.parentId), index('work_items_type_idx').on(t.type)],
 );
 
+/** 用户可自定义的 LLM 端点注册表（会话/工作流选模型时按 label 命中） */
+export const llmEndpoints = pgTable('llm_endpoints', {
+  id: text('id').primaryKey(),
+  label: text('label').notNull().unique(),
+  model: text('model').notNull(),
+  baseUrl: text('base_url').notNull(),
+  apiKeyEnc: text('api_key_enc').notNull(),
+  createdBy: text('created_by').references(() => authUser.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const machines = pgTable('machines', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
