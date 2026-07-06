@@ -95,7 +95,19 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       return { error: 'run not found' };
     }
     const defs = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, run.defId)).limit(1);
-    const nodes = await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, run.id));
+    const nodes = await db
+      .select({
+        runId: schema.nodeStates.runId,
+        nodeId: schema.nodeStates.nodeId,
+        status: schema.nodeStates.status,
+        sessionId: schema.nodeStates.sessionId,
+        output: schema.nodeStates.output,
+        updatedAt: schema.nodeStates.updatedAt,
+        model: schema.sessions.model,
+      })
+      .from(schema.nodeStates)
+      .leftJoin(schema.sessions, eq(schema.nodeStates.sessionId, schema.sessions.id))
+      .where(eq(schema.nodeStates.runId, run.id));
     return { run, def: defs[0], nodes };
   });
 }
