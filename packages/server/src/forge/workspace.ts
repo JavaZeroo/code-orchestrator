@@ -89,6 +89,9 @@ export async function provisionWorkspace(
     return null;
   }
   const baseDir = await ensureBase(root, forge, repo);
+  // 显式把基线分支 ref 拉到本地 tracking（ensureBase 的全量 fetch 可能失败被吞，
+  // 或基线是非 main 的集成分支——否则下面 worktree add 会 "invalid reference"）
+  await git(baseDir, ['fetch', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`, '--quiet']);
   const branch = `co/${key}`;
   const wt = join(root, 'wt', `${slug(forge, repo)}__${key}`);
   await mkdir(join(root, 'wt'), { recursive: true });
