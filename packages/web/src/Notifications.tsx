@@ -5,7 +5,7 @@
  * 已读游标（lastReadAt 时间戳）存 localStorage；点击通知跳转到对应会话或运行详情。
  */
 
-import { Bell, BellRing, CheckCircle2, type LucideIcon, ShieldAlert, XCircle, Zap } from 'lucide-react';
+import { Bell, BellRing, CheckCircle2, Database, type LucideIcon, RefreshCw, ShieldAlert, XCircle, Zap } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { EventRow } from './api';
 import { Button } from './components/ui/button';
@@ -14,7 +14,7 @@ import { cn, relTime } from './lib/utils';
 const LAST_READ_KEY = 'co:notifications:lastReadAt';
 const MAX_ITEMS = 100;
 
-type NotifType = 'approval.requested' | 'nudge.sent' | 'run.finished' | 'requirement.triggered';
+type NotifType = 'approval.requested' | 'nudge.sent' | 'run.finished' | 'requirement.triggered' | 'run.node.retry' | 'requirement.failed' | 'requirement.seeded';
 
 interface NotificationItem {
   key: string;
@@ -91,6 +91,37 @@ function toNotification(row: GlobalEventRow): NotificationItem | null {
       failed: p.status === 'failed',
     };
   }
+  if (row.type === 'run.node.retry') {
+    const p = row.payload as { nodeId?: string; attempt?: number; max?: number; reason?: string };
+    return {
+      ...base,
+      type: 'run.node.retry',
+      title: '节点重试中',
+      detail:
+        p.nodeId && p.attempt && p.max
+          ? `${p.nodeId} 第 ${p.attempt}/${p.max} 次重试${p.reason ? `：${p.reason}` : ''}`
+          : p.detail ?? p.reason,
+    };
+  }
+  if (row.type === 'requirement.failed') {
+    const p = row.payload as { repo?: string; issue?: string; error?: string };
+    return {
+      ...base,
+      type: 'requirement.failed',
+      title: '需求触发失败',
+      detail: p.error ? `${p.repo ?? ''}#${p.issue ?? ''} ${p.error}`.trim() : undefined,
+      failed: true,
+    };
+  }
+  if (row.type === 'requirement.seeded') {
+    const p = row.payload as { repo?: string; count?: number };
+    return {
+      ...base,
+      type: 'requirement.seeded',
+      title: '触发器基线已建立',
+      detail: p.repo ? `${p.repo}（${p.count ?? 0} 条）` : undefined,
+    };
+  }
   return null;
 }
 
@@ -99,6 +130,9 @@ const TYPE_META: Record<NotifType, { icon: LucideIcon; tone: string }> = {
   'nudge.sent': { icon: BellRing, tone: 'text-accent' },
   'run.finished': { icon: CheckCircle2, tone: 'text-ok' },
   'requirement.triggered': { icon: Zap, tone: 'text-accent' },
+  'run.node.retry': { icon: RefreshCw, tone: 'text-warn' },
+  'requirement.failed': { icon: XCircle, tone: 'text-danger' },
+  'requirement.seeded': { icon: Database, tone: 'text-ok' },
 };
 
 export function NotificationBell({
