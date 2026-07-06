@@ -23,6 +23,7 @@ const createSchema = z.object({
 });
 
 const patchSchema = z.object({
+  defId: z.string().min(1).optional(),
   labels: z.array(z.string()).optional(),
   titlePattern: z.string().nullable().optional(),
   vars: z.record(z.string(), z.string()).optional(),
@@ -98,7 +99,15 @@ export async function registerTriggerRoutes(app: FastifyInstance): Promise<void>
       void reply.code(400);
       return { error: '无更新字段' };
     }
-    await getDb().update(schema.requirementTriggers).set(body).where(eq(schema.requirementTriggers.id, req.params.id));
+    const db = getDb();
+    if (body.defId) {
+      const def = await db.select({ id: schema.workflowDefs.id }).from(schema.workflowDefs).where(eq(schema.workflowDefs.id, body.defId)).limit(1);
+      if (!def[0]) {
+        void reply.code(400);
+        return { error: `工作流不存在: ${body.defId}` };
+      }
+    }
+    await db.update(schema.requirementTriggers).set(body).where(eq(schema.requirementTriggers.id, req.params.id));
     return { ok: true };
   });
 

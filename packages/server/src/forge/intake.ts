@@ -15,6 +15,7 @@ import { EngineError, startRun } from '../engine/engine';
 import { getForge, isForgeKind } from './registry';
 import { anyForgeToken } from './tokens';
 import type { NormalizedIssue } from './types';
+import { provisionWorkspace } from './workspace';
 
 const POLL_INTERVAL_MS = 60_000;
 /** since 水位回溯缓冲：容忍 server↔forge 时钟偏差，宁可重叠（去重表兜底）也不漏 issue */
@@ -101,7 +102,14 @@ async function pollTrigger(trigger: TriggerRow): Promise<void> {
       continue; // 已见过，或基线仅记录不触发
     }
     try {
-      const runId = await startRun(trigger.defId, issueVars(issue, trigger));
+      const vars = issueVars(issue, trigger);
+      // 自动供给隔离工作区（WORKSPACE_ROOT 开启时）：每 run 独立 worktree，注入 cwd/branch
+      const ws = await provisionWorkspace(forgeKind, trigger.repo, issue.number, vars.base ?? 'main');
+      if (ws) {
+        vars.cwd = ws.cwd;
+        vars.branch = ws.branch;
+      }
+      const runId = await startRun(trigger.defId, vars);
       await db.update(schema.requirementIntakes).set({ runId }).where(eq(schema.requirementIntakes.id, intakeId));
       await publish({
         type: 'requirement.triggered',
