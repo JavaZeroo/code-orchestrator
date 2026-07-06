@@ -5,7 +5,7 @@
  * 已读游标（lastReadAt 时间戳）存 localStorage；点击通知跳转到对应会话或运行详情。
  */
 
-import { Bell, BellRing, CheckCircle2, type LucideIcon, ShieldAlert, XCircle } from 'lucide-react';
+import { Bell, BellRing, CheckCircle2, type LucideIcon, ShieldAlert, XCircle, Zap } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { EventRow } from './api';
 import { Button } from './components/ui/button';
@@ -14,7 +14,7 @@ import { cn, relTime } from './lib/utils';
 const LAST_READ_KEY = 'co:notifications:lastReadAt';
 const MAX_ITEMS = 100;
 
-type NotifType = 'approval.requested' | 'nudge.sent' | 'run.finished';
+type NotifType = 'approval.requested' | 'nudge.sent' | 'run.finished' | 'requirement.triggered';
 
 interface NotificationItem {
   key: string;
@@ -72,6 +72,15 @@ function toNotification(row: GlobalEventRow): NotificationItem | null {
       detail: p.message ?? (p.kind ? `${p.kind}（第 ${p.attempt ?? 1} 次）` : undefined),
     };
   }
+  if (row.type === 'requirement.triggered') {
+    const p = row.payload as { repo?: string; issue?: string; title?: string };
+    return {
+      ...base,
+      type: 'requirement.triggered',
+      title: '需求已触发工作流',
+      detail: p.title ? `${p.repo ?? ''}#${p.issue ?? ''} ${p.title}`.trim() : p.repo,
+    };
+  }
   if (row.type === 'run.finished') {
     const p = row.payload as { status?: string };
     return {
@@ -89,6 +98,7 @@ const TYPE_META: Record<NotifType, { icon: LucideIcon; tone: string }> = {
   'approval.requested': { icon: ShieldAlert, tone: 'text-warn' },
   'nudge.sent': { icon: BellRing, tone: 'text-accent' },
   'run.finished': { icon: CheckCircle2, tone: 'text-ok' },
+  'requirement.triggered': { icon: Zap, tone: 'text-accent' },
 };
 
 export function NotificationBell({

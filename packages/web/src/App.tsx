@@ -1,9 +1,10 @@
-import { LogOut, MessageSquare, Plus, Settings, Workflow } from 'lucide-react';
+import { LogOut, MessageSquare, Plus, Settings, Workflow, Zap } from 'lucide-react';
 import { useState } from 'react';
 import { authApi, LoginPage, SettingsModal, useMe } from './Auth';
 import { NewSession } from './NewSession';
 import { NotificationBell } from './Notifications';
 import { SessionView } from './SessionView';
+import { TriggersPage } from './TriggersPage';
 import { WorkflowsPage } from './WorkflowsPage';
 import { Button } from './components/ui/button';
 import { Spinner } from './components/ui/primitives';
@@ -63,7 +64,7 @@ function SessionsScreen({ selected, setSelected }: { selected: string | 'new'; s
 }
 
 export function App() {
-  const [tab, setTab] = useState<'sessions' | 'workflows'>('sessions');
+  const [tab, setTab] = useState<'sessions' | 'workflows' | 'triggers'>('sessions');
   const [selectedSession, setSelectedSession] = useState<string | 'new'>('new');
   const [showSettings, setShowSettings] = useState(false);
   const [openRunId, setOpenRunId] = useState<string | null>(null);
@@ -100,6 +101,9 @@ export function App() {
         <Button variant={tab === 'workflows' ? 'secondary' : 'ghost'} size="sm" onClick={() => setTab('workflows')}>
           <Workflow size={14} /> 工作流
         </Button>
+        <Button variant={tab === 'triggers' ? 'secondary' : 'ghost'} size="sm" onClick={() => setTab('triggers')}>
+          <Zap size={14} /> 触发器
+        </Button>
         <div className="ml-auto flex items-center gap-2">
           <NotificationBell onOpenSession={openSession} onOpenRun={openRun} />
           <span className="text-xs text-dim">
@@ -122,11 +126,11 @@ export function App() {
         </div>
       </nav>
       <div className="flex flex-1 overflow-hidden">
-        {tab === 'sessions' ? (
-          <SessionsScreen selected={selectedSession} setSelected={setSelectedSession} />
-        ) : (
+        {tab === 'sessions' && <SessionsScreen selected={selectedSession} setSelected={setSelectedSession} />}
+        {tab === 'workflows' && (
           <WorkflowsPage onOpenSession={openSession} openRunId={openRunId} onOpenRunConsumed={() => setOpenRunId(null)} />
         )}
+        {tab === 'triggers' && <TriggersPage me={me} onOpenRun={openRun} />}
       </div>
       {showSettings && <SettingsModal me={me} onClose={() => setShowSettings(false)} onChanged={refresh} />}
     </div>

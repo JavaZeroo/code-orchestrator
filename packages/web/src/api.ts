@@ -74,6 +74,48 @@ export interface ApprovalRow {
   status: string;
 }
 
+export type ForgeKind = 'gitcode' | 'github';
+
+export interface TriggerRow {
+  id: string;
+  forge: ForgeKind;
+  repo: string;
+  defId: string;
+  defName: string | null;
+  labels: string[];
+  titlePattern: string | null;
+  vars: Record<string, string>;
+  backfill: 'yes' | 'no';
+  enabled: 'yes' | 'no';
+  lastPolledAt: string | null;
+  createdAt: string;
+}
+
+export interface CreateTriggerBody {
+  forge: ForgeKind;
+  repo: string;
+  defId: string;
+  labels?: string[];
+  titlePattern?: string;
+  vars?: Record<string, string>;
+  backfill?: 'yes' | 'no';
+}
+
+export interface RequirementRow {
+  id: string;
+  triggerId: string;
+  forge: ForgeKind;
+  repo: string;
+  issueNumber: string;
+  title: string | null;
+  author: string | null;
+  issueUrl: string | null;
+  runId: string | null;
+  status: 'seeded' | 'started' | 'failed';
+  runStatus: string | null;
+  createdAt: string;
+}
+
 async function j<T>(r: Response): Promise<T> {
   if (r.status === 401) {
     window.dispatchEvent(new Event('co:unauthorized'));
@@ -115,4 +157,11 @@ export const api = {
     post(`/api/approvals/${approvalId}/decide`, {
       decision: behavior === 'allow' ? { behavior } : { behavior, message },
     }).then((r) => j(r)),
+  triggers: () => fetch('/api/triggers').then((r) => j<{ triggers: TriggerRow[] }>(r)).then((d) => d.triggers),
+  createTrigger: (body: CreateTriggerBody) => post('/api/triggers', body).then((r) => j<{ id: string }>(r)),
+  patchTrigger: (id: string, patch: Partial<Pick<TriggerRow, 'enabled' | 'backfill' | 'labels' | 'titlePattern' | 'vars'>>) =>
+    fetch(`/api/triggers/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
+  deleteTrigger: (id: string) => fetch(`/api/triggers/${id}`, { method: 'DELETE' }).then((r) => j(r)),
+  requirements: () => fetch('/api/requirements').then((r) => j<{ requirements: RequirementRow[] }>(r)).then((d) => d.requirements),
+  pollTriggers: () => post('/api/triggers/poll', {}).then((r) => j<{ polled: number }>(r)),
 };

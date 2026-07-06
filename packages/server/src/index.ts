@@ -9,10 +9,12 @@ import { installAuthGuard, mountAuthRoutes } from './auth';
 import { env } from './env';
 import { hasDb } from './db/index';
 import { resumeActiveRuns, startEngine } from './engine/engine';
+import { startIntakePoller } from './forge/intake';
 import { startForgePoller } from './forge/poller';
 import { registerForgeRoutes } from './routes/forge';
 import { registerMeRoutes } from './routes/me';
 import { registerSessionRoutes } from './routes/sessions';
+import { registerTriggerRoutes } from './routes/triggers';
 import { registerWorkflowRoutes } from './routes/workflows';
 import { registerClientHub } from './ws/clientHub';
 import { listMachines, registerRunnerHub } from './ws/runnerHub';
@@ -48,6 +50,7 @@ registerClientHub(app, authEnabled);
 await registerSessionRoutes(app);
 await registerWorkflowRoutes(app);
 await registerForgeRoutes(app);
+await registerTriggerRoutes(app);
 if (authEnabled) {
   await registerMeRoutes(app);
 }
@@ -56,6 +59,7 @@ if (hasDb()) {
   startEngine();
   await resumeActiveRuns();
   startForgePoller();
+  startIntakePoller();
 }
 
 // 生产形态：托管 web 构建产物（pnpm --filter @co/web build 后生效）

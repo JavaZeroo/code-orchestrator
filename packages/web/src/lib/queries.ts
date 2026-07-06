@@ -18,4 +18,10 @@ export const useWorkflows = () =>
 
 export const useRuns = () => useQuery({ queryKey: ['runs'], queryFn: api.runs, refetchInterval: 8_000 });
 
+export const useTriggers = () =>
+  useQuery({ queryKey: ['triggers'], queryFn: api.triggers, refetchInterval: 15_000 });
+
+export const useRequirements = () =>
+  useQuery({ queryKey: ['requirements'], queryFn: api.requirements, refetchInterval: 10_000 });
+
 export const invalidate = (key: string) => void queryClient.invalidateQueries({ queryKey: [key] });

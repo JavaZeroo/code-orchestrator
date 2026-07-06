@@ -22,6 +22,13 @@
       "when": 1783268079255,
       "tag": "0002_forge-abstraction",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783301283463,
+      "tag": "0003_requirement-triggers",
+      "breakpoints": true
     }
   ]
 }

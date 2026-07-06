@@ -14,6 +14,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
 // ---------- 认证（better-auth 标准表，字段名对齐其 drizzle adapter 约定） ----------
@@ -227,3 +228,50 @@ export const forgeRefs = pgTable('forge_refs', {
   active: text('active', { enum: ['yes', 'no'] }).notNull().default('yes'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** 需求录入触发器（task #22）：某 forge repo 的 issue 满足过滤条件 → 自动起工作流。
+ *  最初愿景的入口：需求（issue）进来 → 分析 → 拆解 → 设计 → 实现 → PR → 门禁回流。 */
+export const requirementTriggers = pgTable('requirement_triggers', {
+  id: text('id').primaryKey(),
+  forge: text('forge', { enum: ['gitcode', 'github'] }).notNull(),
+  repo: text('repo').notNull(),
+  defId: text('def_id')
+    .notNull()
+    .references(() => workflowDefs.id),
+  /** 仅匹配含全部这些标签的 issue（空 = 不限） */
+  labels: jsonb('labels').$type<string[]>().notNull().default([]),
+  /** 标题正则/子串过滤（空 = 不限） */
+  titlePattern: text('title_pattern'),
+  /** 注入工作流的静态附加变量（如 cwd / base 分支）；与自动 issue 变量合并 */
+  vars: jsonb('vars').$type<Record<string, string>>().notNull().default({}),
+  /** 首次启用时是否对现存 open issue 也触发（默认 no：只建立基线，之后的新 issue 才触发） */
+  backfill: text('backfill', { enum: ['yes', 'no'] }).notNull().default('no'),
+  enabled: text('enabled', { enum: ['yes', 'no'] }).notNull().default('yes'),
+  createdBy: text('created_by'),
+  /** 上次轮询时刻（增量 since 水位 + 首轮基线判定） */
+  lastPolledAt: timestamp('last_polled_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** 需求录入记录：命中触发器的 issue → run 追溯（同时是需求列表 + 去重水位）。
+ *  唯一索引 (trigger_id, issue_number) 保证同一 issue 只触发一次（并发轮询下抢占插入）。 */
+export const requirementIntakes = pgTable(
+  'requirement_intakes',
+  {
+    id: text('id').primaryKey(),
+    triggerId: text('trigger_id')
+      .notNull()
+      .references(() => requirementTriggers.id, { onDelete: 'cascade' }),
+    forge: text('forge', { enum: ['gitcode', 'github'] }).notNull(),
+    repo: text('repo').notNull(),
+    issueNumber: text('issue_number').notNull(),
+    title: text('title'),
+    author: text('author'),
+    issueUrl: text('issue_url'),
+    runId: text('run_id'),
+    /** seeded=基线仅记录未触发 started=已起工作流 failed=起工作流失败 */
+    status: text('status', { enum: ['seeded', 'started', 'failed'] }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('req_intake_trigger_issue_uniq').on(t.triggerId, t.issueNumber)],
+);
