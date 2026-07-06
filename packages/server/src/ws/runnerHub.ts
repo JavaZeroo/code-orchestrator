@@ -81,6 +81,8 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
             name: p.info.name,
             labels: p.info.labels,
             info: p.info as unknown as Record<string, unknown>,
+            dataRoot: p.info.dataRoot ?? null,
+            resources: p.info.resources ?? [],
             status: 'online',
             lastActiveAt: new Date(),
           })
@@ -90,6 +92,8 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
               name: p.info.name,
               labels: p.info.labels,
               info: p.info as unknown as Record<string, unknown>,
+              dataRoot: p.info.dataRoot ?? null,
+              resources: p.info.resources ?? [],
               status: 'online',
               lastActiveAt: new Date(),
             },
@@ -103,6 +107,11 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
       // 会话对账：runner 内存是唯一事实来源——DB 里该机器的"活"会话若不在心跳清单中即已消亡
       // （覆盖 runner 重启丢会话的场景；server 重启不误伤，因为心跳如实上报存活会话）
       if (hasDb()) {
+        // 机器存活刷新（design-v2 M1）：修此前"machines 只在 register 写一次、lastActiveAt 永不更新"的陈旧问题
+        await getDb()
+          .update(schema.machines)
+          .set({ status: 'online', lastActiveAt: new Date() })
+          .where(eq(schema.machines.id, p.machineId));
         const alive = new Set(p.sessions.map((s) => s.sessionId));
         const dbActive = await getDb()
           .select({ id: schema.sessions.id })
@@ -239,8 +248,12 @@ export async function registerRunnerHub(app: FastifyInstance): Promise<void> {
       }
       conn.pending.clear();
       if (conn.machine) {
-        runners.delete(conn.machine.id);
-        void publish({ type: 'machine.offline', payload: { id: conn.machine.id } });
+        const machineId = conn.machine.id;
+        runners.delete(machineId);
+        if (hasDb()) {
+          void getDb().update(schema.machines).set({ status: 'offline' }).where(eq(schema.machines.id, machineId));
+        }
+        void publish({ type: 'machine.offline', payload: { id: machineId } });
       }
     });
   });

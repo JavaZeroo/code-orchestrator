@@ -10,6 +10,8 @@ const info: MachineInfo = {
   name: config.machineName,
   labels: config.labels,
   arch: process.arch,
+  dataRoot: config.dataRoot,
+  resources: config.resources,
   runnerVersion: '0.1.0',
   codeServerUrl: config.codeServerUrl,
   startedAt: Date.now(),

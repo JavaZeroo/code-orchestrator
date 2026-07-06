@@ -138,9 +138,65 @@ export const projects = pgTable('projects', {
   models: jsonb('models').$type<Record<string, string>>().notNull().default({}),
   /** 项目级默认 vars（如 base 分支），与 issue 变量合并注入 run */
   vars: jsonb('vars').$type<Record<string, string>>().notNull().default({}),
+  // ---- design-v2：项目升为一等工作区（以下均可空，兼容存量「forge+repo 策略容器」）----
+  /** 薄 base 镜像（design-v2 Q7）：容器执行基底，只装 OS+python+git；重活交给 EnvComponent。空=无容器退化路径 */
+  baseImage: text('base_image'),
+  /** 加速器需求（design-v2 Q11）：{kind} 或 null。非空=该项目会话独占一台对应 kind 机器 */
+  accel: jsonb('accel').$type<{ kind: string } | null>(),
+  /** 组件默认版本（design-v2 Q7）：{组件名: 版本}，run 可覆盖。组件定义住项目仓 .co/ */
+  components: jsonb('components').$type<Record<string, string>>().notNull().default({}),
+  /** 中心 bare memory 仓路径（design-v2 Q5）：co-server 托管，容器物化/回写 agent 后端记忆 */
+  memoryRepo: text('memory_repo'),
   createdBy: text('created_by'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** 项目在某台机器的物化记录（design-v2 Q1/Q9）：黏性调度 + 冷/热判定。
+ *  ready=已 clone+可复用；co 优先把新会话黏到 ready 且有空闲卡的机器，否则溢出到新机（付一次冷物化）。 */
+export const projectMaterializations = pgTable(
+  'project_materializations',
+  {
+    projectId: text('project_id').notNull(),
+    machineId: text('machine_id').notNull(),
+    /** <dataRoot>/co/base/<slug> 等的落地根 */
+    basePath: text('base_path').notNull(),
+    status: text('status', { enum: ['materializing', 'ready', 'failed'] }).notNull().default('materializing'),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.machineId] })],
+);
+
+/** 资源预留账本（design-v2 Q4/Q11）：v1 机器粒度——一台机同时至多一个 active 预留（一机一任务）。
+ *  co-server 重启后按 runner 上报的存活容器对账重建。 */
+export const resourceReservations = pgTable(
+  'resource_reservations',
+  {
+    id: text('id').primaryKey(),
+    machineId: text('machine_id').notNull(),
+    sessionId: text('session_id'),
+    kind: text('kind'),
+    status: text('status', { enum: ['reserved', 'active', 'released'] }).notNull().default('reserved'),
+    acquiredAt: timestamp('acquired_at', { withTimezone: true }).notNull().defaultNow(),
+    releasedAt: timestamp('released_at', { withTimezone: true }),
+  },
+  (t) => [index('reservations_machine_idx').on(t.machineId), index('reservations_status_idx').on(t.status)],
+);
+
+/** 任务排队（design-v2 Q9）：需要加速器的任务在无空闲机时进 pending，机器释放后 reconciler 自动派（FIFO+priority）。 */
+export const taskQueue = pgTable(
+  'task_queue',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id'),
+    kind: text('kind'),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default({}),
+    priority: integer('priority').notNull().default(0),
+    status: text('status', { enum: ['pending', 'scheduled', 'running', 'done', 'failed'] }).notNull().default('pending'),
+    enqueuedAt: timestamp('enqueued_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('task_queue_status_idx').on(t.status)],
+);
 
 /** Work-Item 控制平面：事件日志的物化投影（CQRS 读模型）。
  *  把散落的流程（requirement/run/node/pr/approval…）统一成带血缘(parentId)+生命周期的可查可管的树。
@@ -182,6 +238,10 @@ export const machines = pgTable('machines', {
   labels: jsonb('labels').$type<string[]>().notNull().default([]),
   info: jsonb('info').$type<Record<string, unknown>>(),
   status: text('status', { enum: ['online', 'offline'] }).notNull().default('offline'),
+  /** 该机数据盘根（design-v2 Q6）：co 在 <dataRoot>/co/ 下铺物化目录。每机自报，如 /data1、/data2 */
+  dataRoot: text('data_root'),
+  /** 加速器清单（design-v2 Q4）：[{kind,index,model?}]。由 accelerator 适配器 detect 上报（M2），替代死字段 npu */
+  resources: jsonb('resources').$type<Array<{ kind: string; index: number; model?: string }>>().notNull().default([]),
   lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
 });
 
@@ -198,6 +258,13 @@ export const sessions = pgTable('sessions', {
   nativeSessionId: text('native_session_id'),
   runId: text('run_id'),
   nodeId: text('node_id'),
+  // ---- design-v2：会话归属项目 + 容器化执行 ----
+  /** 归属项目（可空兼容存量手动会话）：物化/memory/资源都从项目取 */
+  projectId: text('project_id'),
+  /** docker 容器 id（design-v2 Q3）：会话跑在此容器内；空=无容器退化路径 */
+  containerId: text('container_id'),
+  /** 资源预留 id（design-v2 Q4）：绑定该会话独占的机器/卡；容器销毁即释放 */
+  reservationId: text('reservation_id'),
   createdBy: text('created_by'),
   /** 累计用量：{inputTokens, outputTokens, cacheReadTokens, costUsd, turns} */
   usage: jsonb('usage').$type<Record<string, number>>(),

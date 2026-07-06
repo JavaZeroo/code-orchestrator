@@ -3,6 +3,8 @@ import { runnerMethods, type RunnerMethodName, type RunnerParams } from '@co/pro
 import { ClaudeSession, type DriverEmit } from './claude/driver';
 import type { ServerConnection } from './connection';
 import { addSession, getSession, listSessionStates, removeSession } from './sessions';
+import { provisionWorkspace } from './workspace';
+import { containerExec, containerRm, containerRun } from './container';
 
 const EXEC_DEFAULT_TIMEOUT_MS = 60_000;
 const EXEC_MAX_BUFFER = 10 * 1024 * 1024;
@@ -69,6 +71,19 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
       case 'machine.exec': {
         const p = runnerMethods['machine.exec'].params.parse(params);
         return execCmd(p);
+      }
+      case 'workspace.provision': {
+        const p = runnerMethods['workspace.provision'].params.parse(params);
+        return provisionWorkspace(p);
+      }
+      case 'container.run': {
+        return containerRun(runnerMethods['container.run'].params.parse(params));
+      }
+      case 'container.exec': {
+        return containerExec(runnerMethods['container.exec'].params.parse(params));
+      }
+      case 'container.rm': {
+        return containerRm(runnerMethods['container.rm'].params.parse(params));
       }
       case 'session.spawn': {
         const p = runnerMethods['session.spawn'].params.parse(params);

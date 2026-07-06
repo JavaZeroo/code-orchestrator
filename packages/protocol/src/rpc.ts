@@ -99,6 +99,69 @@ export const runnerMethods = {
       stderr: z.string(),
     }),
   },
+  /** 容器生命周期（design-v2 Q3，M1 substrate）：co 拥有容器——起/执行/销毁。
+   *  devices/gpus 由 accelerator 适配器在 M2 填充（Ascend → --device 列表；卡在建容器时绑定）。 */
+  'container.run': {
+    params: z.object({
+      image: z.string(),
+      name: z.string().optional(),
+      workdir: z.string().optional(),
+      /** 卷挂载：worktree→/workspace、memory 卷、out 卷 */
+      mounts: z.array(z.object({ host: z.string(), container: z.string(), ro: z.boolean().optional() })).default([]),
+      /** 环境变量注入（forge/LLM token，Q10） */
+      env: z.record(z.string(), z.string()).optional(),
+      /** 设备绑定（Ascend：/dev/davinci* 等；M2 由适配器 bindFlags 产出） */
+      devices: z.array(z.string()).default([]),
+      /** NVIDIA --gpus 值（如 '"device=0,1"'）；与 devices 二选一按 kind */
+      gpus: z.string().optional(),
+      network: z.string().optional(),
+      /** 追加原样 docker run 参数（逃生舱） */
+      extraArgs: z.array(z.string()).default([]),
+      /** 容器主命令；缺省用镜像 CMD（常留守护，agent 经 container.exec 进入） */
+      command: z.array(z.string()).optional(),
+    }),
+    result: z.object({ ok: z.boolean(), containerId: z.string().optional(), error: z.string().optional() }),
+  },
+  'container.exec': {
+    params: z.object({
+      containerId: z.string(),
+      cmd: z.string(),
+      workdir: z.string().optional(),
+      timeoutMs: z.number().int().positive().optional(),
+    }),
+    result: z.object({ exitCode: z.number().int(), stdout: z.string(), stderr: z.string() }),
+  },
+  'container.rm': {
+    params: z.object({ containerId: z.string(), force: z.boolean().default(true) }),
+    result: z.object({ ok: z.boolean(), error: z.string().optional() }),
+  },
+  /** 工作区物化（design-v2 M1）：在【目标 runner】的数据盘上 clone base + 切 worktree，
+   *  取代原 server-local 供给。cloneUrl 由 server 计算（可内嵌 token，Q10 注入可接受）。 */
+  'workspace.provision': {
+    params: z.object({
+      forge: z.string(),
+      repo: z.string(),
+      /** 唯一稳定键（issue number / runId / sessionId），决定分支名与 worktree 目录 */
+      key: z.string(),
+      base: z.string().default('main'),
+      /** server 计算的 clone URL（含 host，可含 token） */
+      cloneUrl: z.string(),
+      gitProxy: z.string().optional(),
+      /** 是否在 worktree 内 pnpm install（本地 critic 用；容器模型下通常留给容器内做） */
+      installDeps: z.boolean().default(false),
+      gitName: z.string().optional(),
+      gitEmail: z.string().optional(),
+    }),
+    result: z.object({
+      ok: z.boolean(),
+      /** worktree 路径（= 容器内 /workspace 的宿主机源） */
+      cwd: z.string().optional(),
+      branch: z.string().optional(),
+      /** base 克隆路径（project_materializations.basePath） */
+      basePath: z.string().optional(),
+      error: z.string().optional(),
+    }),
+  },
 } as const;
 
 // ---------- runner → server ----------
