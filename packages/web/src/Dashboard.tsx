@@ -39,16 +39,26 @@ export function Dashboard({
   const { data: approvals = [], isLoading: approvalsLoading } = useApprovals();
   const { data: defs = [] } = useWorkflows();
 
-  const loading = sessionsLoading && runsLoading && approvalsLoading;
+  const loading = sessionsLoading || runsLoading || approvalsLoading;
 
   // 进行中：正 active 的会话
   const activeSessions = sessions.filter(
     (s) => s.state === 'thinking' || s.state === 'starting',
   );
 
-  // 等我处理：待审批的会话 + 凭据库中的 pending 审批
+  // 根据 runId 查找工作流名称
+  const runMap = new Map(runs.map((r) => [r.id, r]));
+  const defMap = new Map(defs.map((d) => [d.id, d]));
+  const runName = (runId: string | null) => {
+    if (!runId) return null;
+    const run = runMap.get(runId);
+    if (!run) return null;
+    return defMap.get(run.defId)?.name ?? run.defId.slice(0, 8);
+  };
+
+  // 等我处理：待审批的会话 + pending 审批（API 已过滤 status=pending）
   const waitingSessions = sessions.filter((s) => s.state === 'waiting_approval');
-  const pendingApprovals = approvals.filter((a) => a.status === 'pending');
+  const pendingApprovals = approvals;
 
   // 最近完成：done/failed/cancelled run + idle 会话，均按时间排序取前 N
   const recentRuns = runs
@@ -103,7 +113,7 @@ export function Dashboard({
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-dim">
               <span>{s.model ?? 'claude'}</span>
-              {s.runId && <span>· 工作流</span>}
+              {runName(s.runId) && <span>· {runName(s.runId)}</span>}
               {s.nodeId && <span>· {s.nodeId}</span>}
               <span>· {elapsed(s.createdAt)}</span>
             </div>

@@ -1,10 +1,10 @@
 import { LayoutDashboard, LogOut, MessageSquare, Plus, Settings, Workflow, Zap } from 'lucide-react';
 import { useState } from 'react';
 import { authApi, LoginPage, SettingsModal, useMe } from './Auth';
+import { Dashboard } from './Dashboard';
 import { NewSession } from './NewSession';
 import { NotificationBell } from './Notifications';
 import { SessionView } from './SessionView';
-import { Dashboard } from './Dashboard';
 import { TriggersPage } from './TriggersPage';
 import { WorkflowsPage } from './WorkflowsPage';
 import { Button } from './components/ui/button';
