@@ -45,7 +45,14 @@ const { version } = JSON.parse(
   readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../package.json'), 'utf8'),
 ) as { version: string };
 
-app.get('/health', async () => ({ ok: true, db: hasDb(), auth: authEnabled, time: Date.now(), version }));
+app.get('/health', async () => ({
+  ok: true,
+  db: hasDb(),
+  auth: authEnabled,
+  time: Date.now(),
+  uptime: Math.floor(process.uptime()),
+  version,
+}));
 
 app.get('/api/machines', async () => ({ machines: listMachines() }));
 
