@@ -24,4 +24,7 @@ export const useTriggers = () =>
 export const useRequirements = () =>
   useQuery({ queryKey: ['requirements'], queryFn: api.requirements, refetchInterval: 10_000 });
 
+export const useApprovals = () =>
+  useQuery({ queryKey: ['approvals'], queryFn: api.pendingApprovals, refetchInterval: 8_000 });
+
 export const invalidate = (key: string) => void queryClient.invalidateQueries({ queryKey: [key] });
