@@ -22,7 +22,7 @@ import {
 import { getDb, schema } from '../db/index';
 import { bus, publish } from '../events';
 import { parseForgeUrl } from '../forge/registry';
-import { listMachines } from '../ws/runnerHub';
+import { callRunner, listMachines } from '../ws/runnerHub';
 import { spawnSession, SpawnError } from '../services/spawn';
 
 type RunContext = { vars: Record<string, string>; outputs: Record<string, string> };
@@ -41,6 +41,12 @@ export class EngineError extends Error {
 const sessionNodes = new Map<string, { runId: string; nodeId: string }>();
 /** 每个 run 的 tick 串行链，避免并发状态竞争 */
 const tickChains = new Map<string, Promise<void>>();
+
+/** agent 节点重试计数（key=runId:nodeId），瞬时错误自愈用 */
+const agentAttempts = new Map<string, number>();
+const MAX_AGENT_RETRIES = Number(process.env.AGENT_MAX_RETRIES ?? 2);
+/** turn 名义 completed 但实际是传输层/限流错误（SDK 有时把 API 错误也标 success）——判为可重试失败 */
+const TRANSIENT_ERROR_RE = /^\s*(API Error|Unable to connect to API|ECONNRESET|ETIMEDOUT|overloaded_error|rate_limit|Internal server error|502 |503 |529 )/i;
 
 function parseDef(graph: unknown): WorkflowDef {
   return workflowDefSchema.parse(graph);
@@ -610,16 +616,35 @@ async function completeAgentNode(sessionId: string, turnStatus: string): Promise
   if (!ref) {
     return;
   }
-  sessionNodes.delete(sessionId);
   const db = getDb();
-
+  const key = `${ref.runId}:${ref.nodeId}`;
   const summary = await lastAgentText(sessionId);
-  await autoRegisterForgeRefs(summary, ref, sessionId);
+  // turn 失败，或名义完成但产出是传输层/限流错误 → 判为出错（否则会把"没干活"当成功放行）
+  const errored = turnStatus !== 'completed' || TRANSIENT_ERROR_RE.test(summary);
 
-  const ok = turnStatus === 'completed';
+  if (errored) {
+    const attempts = agentAttempts.get(key) ?? 0;
+    if (attempts < MAX_AGENT_RETRIES && (await retryAgentNode(sessionId, ref, turnStatus, summary, attempts))) {
+      return; // 已在同会话重发任务，保留 sessionNodes 映射等下一次 turn-end
+    }
+    agentAttempts.delete(key);
+    sessionNodes.delete(sessionId);
+    const error = `agent turn ${turnStatus}${summary ? `: ${summary.slice(0, 300)}` : ''}`;
+    await db
+      .update(schema.nodeStates)
+      .set({ status: 'failed', output: { error, summary, turnStatus, attempts }, updatedAt: new Date() })
+      .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)));
+    await publishNodeState(ref.runId, ref.nodeId, 'failed', { sessionId, error });
+    scheduleTick(ref.runId);
+    return;
+  }
+
+  agentAttempts.delete(key);
+  sessionNodes.delete(sessionId);
+  await autoRegisterForgeRefs(summary, ref, sessionId);
   await db
     .update(schema.nodeStates)
-    .set({ status: ok ? 'done' : 'failed', output: { summary, turnStatus }, updatedAt: new Date() })
+    .set({ status: 'done', output: { summary, turnStatus }, updatedAt: new Date() })
     .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)));
 
   // 输出写进 run context 供下游模板引用
@@ -630,8 +655,52 @@ async function completeAgentNode(sessionId: string, turnStatus: string): Promise
     await db.update(schema.workflowRuns).set({ context }).where(eq(schema.workflowRuns.id, ref.runId));
   }
 
-  await publishNodeState(ref.runId, ref.nodeId, ok ? 'done' : 'failed', { sessionId });
+  await publishNodeState(ref.runId, ref.nodeId, 'done', { sessionId });
   scheduleTick(ref.runId);
+}
+
+/** 瞬时错误自愈：复用仍存活的会话重发原任务。成功发出返回 true（保留 sessionNodes 映射）。 */
+async function retryAgentNode(
+  sessionId: string,
+  ref: { runId: string; nodeId: string },
+  turnStatus: string,
+  summary: string,
+  attempts: number,
+): Promise<boolean> {
+  const db = getDb();
+  const sessions = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
+  const session = sessions[0];
+  if (!session || session.state === 'dead') {
+    return false;
+  }
+  const runRows = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, ref.runId)).limit(1);
+  const defRows = runRows[0]
+    ? await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, runRows[0].defId)).limit(1)
+    : [];
+  if (!runRows[0] || !defRows[0]) {
+    return false;
+  }
+  const node = parseDef(defRows[0].graph).nodes.find((n) => n.id === ref.nodeId);
+  if (!node || node.type !== 'agent') {
+    return false;
+  }
+  try {
+    await callRunner(session.machineId, 'session.send', {
+      sessionId,
+      text: substitute((node as AgentNode).prompt, runRows[0].context as RunContext),
+    });
+  } catch {
+    return false;
+  }
+  agentAttempts.set(`${ref.runId}:${ref.nodeId}`, attempts + 1);
+  await publish({
+    type: 'run.node.retry',
+    runId: ref.runId,
+    sessionId,
+    payload: { nodeId: ref.nodeId, attempt: attempts + 1, max: MAX_AGENT_RETRIES, reason: turnStatus !== 'completed' ? `turn ${turnStatus}` : 'transient error', detail: summary.slice(0, 200) },
+  });
+  console.log(`[engine] retry agent node ${ref.nodeId} (attempt ${attempts + 1}/${MAX_AGENT_RETRIES}) run ${ref.runId}`);
+  return true;
 }
 
 // ---------- 事件订阅与恢复 ----------

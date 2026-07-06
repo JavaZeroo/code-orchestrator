@@ -54,10 +54,11 @@ export function mapSdkMessage(m: SDKMessage): SessionEnvelope[] {
     }
     case 'result': {
       const subtype = (m as { subtype?: string }).subtype;
+      const isError = (m as { is_error?: boolean }).is_error === true;
       out.push(
         createEnvelope('agent', {
           t: 'turn-end',
-          status: subtype === 'success' ? 'completed' : 'failed',
+          status: subtype === 'success' && !isError ? 'completed' : 'failed',
         }),
       );
       break;
