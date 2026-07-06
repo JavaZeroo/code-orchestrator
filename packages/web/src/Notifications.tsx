@@ -92,7 +92,7 @@ function toNotification(row: GlobalEventRow): NotificationItem | null {
     };
   }
   if (row.type === 'run.node.retry') {
-    const p = row.payload as { nodeId?: string; attempt?: number; max?: number; reason?: string };
+    const p = row.payload as { nodeId?: string; attempt?: number; max?: number; reason?: string; detail?: string };
     return {
       ...base,
       type: 'run.node.retry',
