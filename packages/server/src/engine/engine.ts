@@ -141,7 +141,7 @@ async function tick(runId: string): Promise<void> {
     if (node.type === 'agent') {
       await execAgent(runId, node, context);
     } else if (node.type === 'gate') {
-      await execGate(runId, node);
+      await execGate(runId, node, context);
     } else if (node.type === 'meeting') {
       await execMeeting(runId, node, context);
     }
@@ -231,15 +231,16 @@ async function execAgent(runId: string, node: AgentNode, context: RunContext): P
   }
 }
 
-async function execGate(runId: string, node: GateNode): Promise<void> {
+async function execGate(runId: string, node: GateNode, context: RunContext): Promise<void> {
   const db = getDb();
   const approvalId = createId();
+  const title = node.title ? substitute(node.title, context) : undefined;
   await db.insert(schema.approvals).values({
     id: approvalId,
     kind: 'gate',
     runId,
     nodeId: node.id,
-    title: node.title ?? `Gate: ${node.id}`,
+    title: title ?? `Gate: ${node.id}`,
     payload: { approvers: node.approvers },
     status: 'pending',
   });
@@ -250,7 +251,7 @@ async function execGate(runId: string, node: GateNode): Promise<void> {
   await publish({
     type: 'approval.requested',
     runId,
-    payload: { id: approvalId, kind: 'gate', runId, nodeId: node.id, title: node.title ?? node.id, payload: { approvers: node.approvers }, requestedAt: Date.now() },
+    payload: { id: approvalId, kind: 'gate', runId, nodeId: node.id, title: title ?? node.id, payload: { approvers: node.approvers }, requestedAt: Date.now() },
   });
   await publishNodeState(runId, node.id, 'waiting_human', { approvalId });
 }
@@ -270,6 +271,8 @@ interface MeetingState {
   runId: string;
   nodeId: string;
   node: MeetingNode;
+  /** 已做 {{vars}}/{{outputs}} 替换的标题（仲裁审批用，concludeMeeting 时已无 context） */
+  title: string;
   cwd: string;
   pendingSessions: Map<string, number>;
   opinions: Array<MeetingOpinion | null>;
@@ -331,6 +334,7 @@ async function execMeeting(runId: string, node: MeetingNode, context: RunContext
     runId,
     nodeId: node.id,
     node,
+    title: node.title ? substitute(node.title, context) : node.id,
     cwd: substitute(cwd, context),
     pendingSessions: new Map(),
     opinions: node.participants.map(() => null),
@@ -433,7 +437,7 @@ async function concludeMeeting(state: MeetingState): Promise<void> {
       kind: 'gate',
       runId: state.runId,
       nodeId: state.nodeId,
-      title: `会议仲裁：${state.node.title ?? state.nodeId}`,
+      title: `会议仲裁：${state.title}`,
       payload: { meeting: true, minutes, opinions: state.opinions },
       status: 'pending',
     });
@@ -444,7 +448,7 @@ async function concludeMeeting(state: MeetingState): Promise<void> {
     await publish({
       type: 'approval.requested',
       runId: state.runId,
-      payload: { id: approvalId, kind: 'gate', runId: state.runId, nodeId: state.nodeId, title: `会议仲裁：${state.node.title ?? state.nodeId}`, payload: { minutes }, requestedAt: Date.now() },
+      payload: { id: approvalId, kind: 'gate', runId: state.runId, nodeId: state.nodeId, title: `会议仲裁：${state.title}`, payload: { minutes }, requestedAt: Date.now() },
     });
     await publishNodeState(state.runId, state.nodeId, 'waiting_human', { phase: 'arbitrate' });
     await writeMeetingRecord(state, 'human-pending', minutes);
