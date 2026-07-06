@@ -33,6 +33,11 @@ export const agentNodeSchema = nodeBase.extend({
   permissionMode: z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan']).optional(),
   /** 推理强度（Claude 模型有效，如评审节点用 high 提高严谨度）。 */
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+  /** 评审→返工闭环：本节点（评审）判定「需改进」时，把意见回灌 target 节点的会话让其修改，
+   *  再重跑本节点，最多 maxRounds 轮；达标（LGTM）或轮次耗尽才继续下游。 */
+  reviseLoop: z
+    .object({ target: z.string().min(1), maxRounds: z.number().int().positive().default(2) })
+    .optional(),
   /** 预期产物路径，供下游节点与 UI 展示 */
   outputs: z.array(z.string()).optional(),
 });

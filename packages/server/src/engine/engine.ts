@@ -45,6 +45,8 @@ const tickChains = new Map<string, Promise<void>>();
 /** agent 节点重试计数（key=runId:nodeId），瞬时错误自愈用 */
 const agentAttempts = new Map<string, number>();
 const MAX_AGENT_RETRIES = Number(process.env.AGENT_MAX_RETRIES ?? 2);
+/** 评审→返工闭环轮次计数（key=runId:reviewNodeId） */
+const reviseRounds = new Map<string, number>();
 /** turn 名义 completed 但实际是传输层/限流错误（SDK 有时把 API 错误也标 success）——判为可重试失败 */
 const TRANSIENT_ERROR_RE = /^\s*(API Error|Unable to connect to API|ECONNRESET|ETIMEDOUT|overloaded_error|rate_limit|Internal server error|502 |503 |529 )/i;
 
@@ -645,6 +647,15 @@ async function completeAgentNode(sessionId: string, turnStatus: string): Promise
   agentAttempts.delete(key);
   sessionNodes.delete(sessionId);
   await autoRegisterForgeRefs(summary, ref, sessionId);
+
+  // 评审→返工闭环：本节点（评审）判「需改进」→ 把意见回灌 target 会话修改、重跑本节点
+  const node = await loadAgentNode(ref.runId, ref.nodeId);
+  if (node?.reviseLoop && verdictChangesRequested(summary)) {
+    if (await requestRevision(ref, node.reviseLoop, summary)) {
+      return; // 已回灌 target 返工；其 turn-end → tick 会重跑本评审节点
+    }
+  }
+
   await db
     .update(schema.nodeStates)
     .set({ status: 'done', output: { summary, turnStatus }, updatedAt: new Date() })
@@ -703,6 +714,85 @@ async function retryAgentNode(
     payload: { nodeId: ref.nodeId, attempt: attempts + 1, max: MAX_AGENT_RETRIES, reason: turnStatus !== 'completed' ? `turn ${turnStatus}` : 'transient error', detail: summary.slice(0, 200) },
   });
   console.log(`[engine] retry agent node ${ref.nodeId} (attempt ${attempts + 1}/${MAX_AGENT_RETRIES}) run ${ref.runId}`);
+  return true;
+}
+
+/** 从 run 的 def 里取某 agent 节点定义 */
+async function loadAgentNode(runId: string, nodeId: string): Promise<AgentNode | undefined> {
+  const db = getDb();
+  const runRows = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId)).limit(1);
+  if (!runRows[0]) {
+    return undefined;
+  }
+  const defRows = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, runRows[0].defId)).limit(1);
+  if (!defRows[0]) {
+    return undefined;
+  }
+  const node = parseDef(defRows[0].graph).nodes.find((n) => n.id === nodeId);
+  return node?.type === 'agent' ? node : undefined;
+}
+
+/** 评审结论解析：优先看显式 VERDICT 行，回落表情/关键词 */
+function verdictChangesRequested(summary: string): boolean {
+  if (/VERDICT:\s*CHANGES_REQUESTED/i.test(summary)) {
+    return true;
+  }
+  if (/VERDICT:\s*LGTM/i.test(summary)) {
+    return false;
+  }
+  return (
+    /(🔧|建议改进|需改进|需要修|CHANGES[_ ]?REQUESTED|request[- ]?changes)/i.test(summary) &&
+    !/(✅\s*LGTM|\/lgtm)/i.test(summary)
+  );
+}
+
+/** 评审→返工：把评审意见回灌 target(实现)会话让其修改，重跑评审节点。达轮次上限则返回 false（放行到下游门禁）。 */
+async function requestRevision(
+  ref: { runId: string; nodeId: string },
+  loop: NonNullable<AgentNode['reviseLoop']>,
+  reviewSummary: string,
+): Promise<boolean> {
+  const rk = `${ref.runId}:${ref.nodeId}`;
+  const round = reviseRounds.get(rk) ?? 0;
+  if (round >= loop.maxRounds) {
+    return false; // 返工轮次耗尽，带着最后一轮意见交人工
+  }
+  const db = getDb();
+  const states = await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, ref.runId));
+  const target = states.find((s) => s.nodeId === loop.target);
+  if (!target?.sessionId) {
+    return false;
+  }
+  const sessRows = await db.select().from(schema.sessions).where(eq(schema.sessions.id, target.sessionId)).limit(1);
+  const session = sessRows[0];
+  if (!session || session.state === 'dead') {
+    return false; // 实现会话已死，无法返工 → 交人工
+  }
+  const feedback = `SE 评审判定「需改进」。请严格按下面的评审意见修改代码，然后 commit 并 push 到当前分支（同一个 PR，不要新建分支/PR）。改完简要说明你改了哪些点。\n\n===== 评审意见 =====\n${reviewSummary.slice(0, 4000)}`;
+  try {
+    await callRunner(session.machineId, 'session.send', { sessionId: target.sessionId, text: feedback });
+  } catch {
+    return false;
+  }
+  reviseRounds.set(rk, round + 1);
+  // target(实现) → running（重新登记会话：其 turn-end 会标 done → tick 重跑评审）；本评审节点 → pending
+  sessionNodes.set(target.sessionId, { runId: ref.runId, nodeId: loop.target });
+  await db
+    .update(schema.nodeStates)
+    .set({ status: 'running', updatedAt: new Date() })
+    .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, loop.target)));
+  await db
+    .update(schema.nodeStates)
+    .set({ status: 'pending', updatedAt: new Date() })
+    .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)));
+  await publish({
+    type: 'run.node.revise',
+    runId: ref.runId,
+    payload: { reviewNode: ref.nodeId, target: loop.target, round: round + 1, max: loop.maxRounds },
+  });
+  await publishNodeState(ref.runId, loop.target, 'running', { revise: round + 1 });
+  await publishNodeState(ref.runId, ref.nodeId, 'pending', { revise: round + 1 });
+  console.log(`[engine] revise round ${round + 1}/${loop.maxRounds}: ${loop.target} ← review ${ref.nodeId} (run ${ref.runId})`);
   return true;
 }
 
