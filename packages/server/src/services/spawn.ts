@@ -4,11 +4,13 @@
  */
 
 import { createId } from '@paralleldrive/cuid2';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { MessageMeta, SessionAgent } from '@co/protocol';
 import { getDb, schema } from '../db/index';
+import { env } from '../env';
 import { publish } from '../events';
 import { callRunner } from '../ws/runnerHub';
+import { decryptSecret } from './crypto';
 
 export class SpawnError extends Error {
   constructor(
@@ -19,15 +21,31 @@ export class SpawnError extends Error {
   }
 }
 
-/** 别名 → 模型名 + env。密钥从 server 环境读（DEEPSEEK_API_KEY / GLM_API_KEY）。 */
-export function resolveModel(alias?: string): { model?: string; env?: Record<string, string> } {
+/** 请求者本人绑定的 LLM key（llm_keys 表，AES-256-GCM）；无用户上下文/未绑定时返回 undefined */
+async function userLlmKey(userId: string | undefined, provider: 'deepseek' | 'glm'): Promise<string | undefined> {
+  if (!userId || !env.AUTH_SECRET) {
+    return undefined;
+  }
+  const rows = await getDb()
+    .select({ enc: schema.llmKeys.keyEnc })
+    .from(schema.llmKeys)
+    .where(and(eq(schema.llmKeys.userId, userId), eq(schema.llmKeys.provider, provider)))
+    .limit(1);
+  return rows[0]?.enc ? decryptSecret(rows[0].enc) : undefined;
+}
+
+/** 别名 → 模型名 + env。密钥优先用当前用户绑定的（设置页），回落 server 环境变量。 */
+export async function resolveModel(
+  alias?: string,
+  userId?: string,
+): Promise<{ model?: string; env?: Record<string, string> }> {
   if (!alias || alias === 'claude') {
     return {};
   }
   if (alias === 'deepseek') {
-    const key = process.env.DEEPSEEK_API_KEY;
+    const key = (await userLlmKey(userId, 'deepseek')) ?? process.env.DEEPSEEK_API_KEY;
     if (!key) {
-      throw new SpawnError(400, 'DEEPSEEK_API_KEY 未配置，无法使用 deepseek 别名');
+      throw new SpawnError(400, 'deepseek API key 未配置（设置页绑定或 server 设 DEEPSEEK_API_KEY），无法使用 deepseek 别名');
     }
     return {
       model: process.env.DEEPSEEK_MODEL ?? 'deepseek-chat',
@@ -35,9 +53,9 @@ export function resolveModel(alias?: string): { model?: string; env?: Record<str
     };
   }
   if (alias === 'glm') {
-    const key = process.env.GLM_API_KEY;
+    const key = (await userLlmKey(userId, 'glm')) ?? process.env.GLM_API_KEY;
     if (!key) {
-      throw new SpawnError(400, 'GLM_API_KEY 未配置，无法使用 glm 别名');
+      throw new SpawnError(400, 'glm API key 未配置（设置页绑定或 server 设 GLM_API_KEY），无法使用 glm 别名');
     }
     return {
       model: process.env.GLM_MODEL ?? 'glm-4.6',
@@ -65,7 +83,7 @@ export interface SpawnRequest {
 export async function spawnSession(req: SpawnRequest): Promise<{ sessionId: string }> {
   const sessionId = createId();
   const agent = req.agent ?? 'claude';
-  const resolved = resolveModel(req.model);
+  const resolved = await resolveModel(req.model, req.createdBy);
   const meta: MessageMeta = { ...(req.meta ?? {}), model: resolved.model ?? req.meta?.model ?? null };
 
   const db = getDb();

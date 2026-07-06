@@ -29,6 +29,13 @@
       "when": 1783301283463,
       "tag": "0003_requirement-triggers",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1783303954603,
+      "tag": "0004_llm-keys",
+      "breakpoints": true
     }
   ]
 }
