@@ -1,0 +1,8 @@
+CREATE TABLE "lark_webhooks" (
+	"user_id" text PRIMARY KEY NOT NULL,
+	"url_enc" text NOT NULL,
+	"enabled" text DEFAULT 'yes' NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+ALTER TABLE "lark_webhooks" ADD CONSTRAINT "lark_webhooks_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;

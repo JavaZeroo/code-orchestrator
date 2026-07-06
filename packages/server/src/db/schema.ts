@@ -109,6 +109,17 @@ export const llmKeys = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.provider] })],
 );
 
+/** 每用户的飞书/Lark 自定义机器人 webhook（AES-256-GCM 加密）。
+ *  PK = user_id 一对一，形态参照 userSettings。 */
+export const larkWebhooks = pgTable('lark_webhooks', {
+  userId: text('user_id')
+    .primaryKey()
+    .references(() => authUser.id, { onDelete: 'cascade' }),
+  urlEnc: text('url_enc').notNull(),
+  enabled: text('enabled', { enum: ['yes', 'no'] }).notNull().default('yes'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const machines = pgTable('machines', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),

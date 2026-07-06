@@ -53,7 +53,15 @@ export async function registerMeRoutes(app: FastifyInstance): Promise<void> {
     for (const r of llmRows) {
       llm[r.provider] = { bound: true };
     }
-    return { user: req.user, forges, llm };
+    const larkRow = await db
+      .select({ enabled: schema.larkWebhooks.enabled })
+      .from(schema.larkWebhooks)
+      .where(eq(schema.larkWebhooks.userId, req.user!.id))
+      .limit(1);
+    const lark = larkRow[0]
+      ? { bound: true, enabled: larkRow[0].enabled === 'yes' }
+      : { bound: false, enabled: false };
+    return { user: req.user, forges, llm, lark };
   });
 
   /** 绑定/更新某 forge 的 token：先 getUser 验证有效性并取回身份 */
@@ -129,6 +137,74 @@ export async function registerMeRoutes(app: FastifyInstance): Promise<void> {
     await db
       .delete(schema.llmKeys)
       .where(and(eq(schema.llmKeys.userId, req.user!.id), eq(schema.llmKeys.provider, req.params.provider)));
+    return { ok: true };
+  });
+
+  // ---------- 飞书/Lark webhook 绑定 ----------
+
+  const larkWebhookUrlSchema = z.object({
+    url: z.string().url().refine(
+      (url) => {
+        try {
+          const u = new URL(url);
+          return (
+            u.protocol === 'https:' &&
+            (u.hostname === 'open.feishu.cn' || u.hostname === 'open.larksuite.com') &&
+            u.pathname.includes('/open-apis/bot/')
+          );
+        } catch {
+          return false;
+        }
+      },
+      { message: '必须是飞书/Lark 自定义机器人 webhook URL（https://open.feishu.cn/open-apis/bot/... 或 https://open.larksuite.com/open-apis/bot/...）' },
+    ),
+  });
+
+  const larkEnabledSchema = z.object({ enabled: z.boolean() });
+
+  /** 绑定/更新飞书 webhook：校验 URL 格式 → 加密入库 */
+  app.put('/api/me/lark-webhook', async (req, reply) => {
+    let body;
+    try {
+      body = larkWebhookUrlSchema.parse(req.body);
+    } catch {
+      void reply.code(400);
+      return { error: 'URL 格式无效：必须是飞书/Lark 自定义机器人 webhook' };
+    }
+    const db = getDb();
+    await db
+      .insert(schema.larkWebhooks)
+      .values({ userId: req.user!.id, urlEnc: encryptSecret(body.url), updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: schema.larkWebhooks.userId,
+        set: { urlEnc: encryptSecret(body.url), enabled: 'yes', updatedAt: new Date() },
+      });
+    return { ok: true };
+  });
+
+  /** 暂停/恢复推送（无需重填 URL） */
+  app.patch('/api/me/lark-webhook', async (req, reply) => {
+    let body;
+    try {
+      body = larkEnabledSchema.parse(req.body);
+    } catch {
+      void reply.code(400);
+      return { error: 'enabled 必须为 boolean' };
+    }
+    const db = getDb();
+    await db
+      .update(schema.larkWebhooks)
+      .set({ enabled: body.enabled ? 'yes' : 'no', updatedAt: new Date() })
+      .where(eq(schema.larkWebhooks.userId, req.user!.id));
+    return { ok: true };
+  });
+
+  /** 解绑飞书 webhook */
+  app.delete('/api/me/lark-webhook', async (req) => {
+    const db = getDb();
+    await db
+      .delete(schema.larkWebhooks)
+      .where(eq(schema.larkWebhooks.userId, req.user!.id));
     return { ok: true };
   });
 }
