@@ -7,7 +7,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { createId } from '@paralleldrive/cuid2';
-import { desc, eq } from 'drizzle-orm';
+import { count, desc, eq, max, sql } from 'drizzle-orm';
 import * as z from 'zod';
 import { getDb, schema } from '../db/index';
 import { pollIntakesOnce } from '../forge/intake';
@@ -57,6 +57,16 @@ export async function registerTriggerRoutes(app: FastifyInstance): Promise<void>
 
   app.get('/api/triggers', async () => {
     const db = getDb();
+    // 每个触发器的命中统计：intake 行数 + 最近命中时间
+    const intakeAgg = db
+      .select({
+        triggerId: schema.requirementIntakes.triggerId,
+        intakeCount: count().as('intake_count'),
+        lastIntakeAt: max(schema.requirementIntakes.createdAt).as('last_intake_at'),
+      })
+      .from(schema.requirementIntakes)
+      .groupBy(schema.requirementIntakes.triggerId)
+      .as('intake_agg');
     const rows = await db
       .select({
         id: schema.requirementTriggers.id,
@@ -71,9 +81,12 @@ export async function registerTriggerRoutes(app: FastifyInstance): Promise<void>
         enabled: schema.requirementTriggers.enabled,
         lastPolledAt: schema.requirementTriggers.lastPolledAt,
         createdAt: schema.requirementTriggers.createdAt,
+        intakeCount: sql<number>`coalesce(${intakeAgg.intakeCount}, 0)`.mapWith(Number),
+        lastIntakeAt: intakeAgg.lastIntakeAt,
       })
       .from(schema.requirementTriggers)
       .leftJoin(schema.workflowDefs, eq(schema.requirementTriggers.defId, schema.workflowDefs.id))
+      .leftJoin(intakeAgg, eq(schema.requirementTriggers.id, intakeAgg.triggerId))
       .orderBy(desc(schema.requirementTriggers.createdAt))
       .limit(100);
     return { triggers: rows };

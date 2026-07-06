@@ -191,6 +191,7 @@ function TriggerRowItem({ t }: { t: TriggerRow }) {
           {t.titlePattern && <span>标题: /{t.titlePattern}/</span>}
           {Object.keys(t.vars).length > 0 && <span>变量: {Object.keys(t.vars).join(', ')}</span>}
           {t.backfill === 'yes' && <span className="text-warn">含存量 issue</span>}
+          <span>{t.intakeCount > 0 ? `命中 ${t.intakeCount} 条 · 最近 ${relTime(t.lastIntakeAt!)}` : '命中 0 条'}</span>
           <span>{t.lastPolledAt ? `上次轮询 ${relTime(t.lastPolledAt)}` : '尚未轮询'}</span>
         </div>
       </div>

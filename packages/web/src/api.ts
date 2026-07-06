@@ -89,6 +89,10 @@ export interface TriggerRow {
   enabled: 'yes' | 'no';
   lastPolledAt: string | null;
   createdAt: string;
+  /** 命中的需求数（requirement_intakes 行数） */
+  intakeCount: number;
+  /** 最近一次命中时间（无命中为 null） */
+  lastIntakeAt: string | null;
 }
 
 export interface CreateTriggerBody {
