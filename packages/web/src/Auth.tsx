@@ -13,11 +13,17 @@ export interface ForgeBinding {
 export interface Me {
   user: { id: string; email: string; name: string };
   forges: Record<string, ForgeBinding>;
+  llm?: Record<string, { bound: boolean }>;
 }
 
 export const FORGES: Array<{ key: string; label: string; tokenUrl: string; hint: string }> = [
   { key: 'gitcode', label: 'GitCode', tokenUrl: 'https://gitcode.com/setting/token-classic', hint: '个人设置 → 访问令牌' },
   { key: 'github', label: 'GitHub', tokenUrl: 'https://github.com/settings/tokens', hint: 'Settings → Developer settings → PAT（勾 repo）' },
+];
+
+export const LLM_PROVIDERS: Array<{ key: string; label: string; keyUrl: string; hint: string }> = [
+  { key: 'deepseek', label: 'DeepSeek', keyUrl: 'https://platform.deepseek.com/api_keys', hint: '开放平台 → API keys' },
+  { key: 'glm', label: 'GLM', keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys', hint: '智谱开放平台 → API Keys' },
 ];
 
 async function jauth<T>(r: Response): Promise<T> {
@@ -44,6 +50,13 @@ export const authApi = {
       body: JSON.stringify({ token }),
     }).then((r) => jauth<{ ok: boolean; login: string }>(r)),
   unbindForge: (forge: string) => fetch(`/api/me/forge-token/${forge}`, { method: 'DELETE' }).then(jauth),
+  bindLlmKey: (provider: string, key: string) =>
+    fetch(`/api/me/llm-key/${provider}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key }),
+    }).then((r) => jauth<{ ok: boolean }>(r)),
+  unbindLlmKey: (provider: string) => fetch(`/api/me/llm-key/${provider}`, { method: 'DELETE' }).then(jauth),
 };
 
 export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
@@ -155,6 +168,71 @@ function ForgeTokenRow({ forge, binding, onChanged }: { forge: (typeof FORGES)[n
   );
 }
 
+function LlmKeyRow({
+  provider,
+  binding,
+  onChanged,
+}: {
+  provider: (typeof LLM_PROVIDERS)[number];
+  binding: { bound: boolean };
+  onChanged: () => void;
+}) {
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const bind = () => {
+    setBusy(true);
+    authApi
+      .bindLlmKey(provider.key, key.trim())
+      .then(() => {
+        toast.success(`已配置 ${provider.label} API key`);
+        setKey('');
+        onChanged();
+      })
+      .catch((e) => toast.error(`${e instanceof Error ? e.message : e}`))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="rounded-lg border border-line p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <h4 className="text-sm font-medium">{provider.label} API Key</h4>
+        {binding.bound && <Badge tone="ok">已配置</Badge>}
+        <a
+          className="ml-auto inline-flex items-center gap-0.5 text-xs text-accent underline"
+          href={provider.keyUrl}
+          target="_blank"
+          rel="noreferrer"
+        >
+          创建 <ExternalLink size={10} />
+        </a>
+      </div>
+      <p className="mb-2 text-xs text-dim">{provider.hint}。会话选 {provider.key} 模型时优先用你的 key；密钥加密存储。</p>
+      <div className="flex gap-2">
+        <Input
+          type="password"
+          placeholder={binding.bound ? '输入新 key 以更换' : `粘贴 ${provider.label} API key`}
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+        />
+        <Button variant="default" disabled={busy || key.trim().length < 10} onClick={bind}>
+          {busy ? '保存中…' : '保存'}
+        </Button>
+      </div>
+      {binding.bound && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-2 self-start text-danger"
+          onClick={() => void authApi.unbindLlmKey(provider.key).then(onChanged)}
+        >
+          删除
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () => void; onChanged: () => void }) {
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
@@ -164,6 +242,10 @@ export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () 
         <div className="flex flex-col gap-3">
           {FORGES.map((f) => (
             <ForgeTokenRow key={f.key} forge={f} binding={me.forges[f.key] ?? { bound: false }} onChanged={onChanged} />
+          ))}
+          <h4 className="mt-2 text-xs font-medium text-dim">LLM API Key</h4>
+          {LLM_PROVIDERS.map((p) => (
+            <LlmKeyRow key={p.key} provider={p} binding={me.llm?.[p.key] ?? { bound: false }} onChanged={onChanged} />
           ))}
         </div>
       </DialogContent>

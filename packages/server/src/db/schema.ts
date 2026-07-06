@@ -95,6 +95,20 @@ export const forgeTokens = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.forge] })],
 );
 
+/** 每用户 × 每 LLM provider 的 API key（AES-256-GCM）。spawn 解析模型别名时优先于 server env */
+export const llmKeys = pgTable(
+  'llm_keys',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => authUser.id, { onDelete: 'cascade' }),
+    provider: text('provider', { enum: ['deepseek', 'glm'] }).notNull(),
+    keyEnc: text('key_enc').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.provider] })],
+);
+
 export const machines = pgTable('machines', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),

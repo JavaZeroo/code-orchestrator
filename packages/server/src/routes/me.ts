@@ -12,6 +12,13 @@ import { encryptSecret } from '../services/crypto';
 const tokenBodySchema = z.object({ token: z.string().min(10) });
 const FORGES: ForgeKind[] = ['gitcode', 'github'];
 
+const llmKeyBodySchema = z.object({ key: z.string().min(10) });
+const LLM_PROVIDERS = ['deepseek', 'glm'] as const;
+type LlmProvider = (typeof LLM_PROVIDERS)[number];
+function isLlmProvider(v: string): v is LlmProvider {
+  return (LLM_PROVIDERS as readonly string[]).includes(v);
+}
+
 export async function registerMeRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/me', async (req) => {
     const db = getDb();
@@ -35,7 +42,18 @@ export async function registerMeRoutes(app: FastifyInstance): Promise<void> {
     if (!forges.gitcode!.bound && legacy[0]?.login) {
       forges.gitcode = { bound: true, login: legacy[0].login };
     }
-    return { user: req.user, forges };
+    const llmRows = await db
+      .select({ provider: schema.llmKeys.provider })
+      .from(schema.llmKeys)
+      .where(eq(schema.llmKeys.userId, req.user!.id));
+    const llm: Record<string, { bound: boolean }> = {};
+    for (const p of LLM_PROVIDERS) {
+      llm[p] = { bound: false };
+    }
+    for (const r of llmRows) {
+      llm[r.provider] = { bound: true };
+    }
+    return { user: req.user, forges, llm };
   });
 
   /** 绑定/更新某 forge 的 token：先 getUser 验证有效性并取回身份 */
@@ -80,6 +98,37 @@ export async function registerMeRoutes(app: FastifyInstance): Promise<void> {
         .set({ gitcodeTokenEnc: null, gitcodeLogin: null, updatedAt: new Date() })
         .where(eq(schema.userSettings.userId, req.user!.id));
     }
+    return { ok: true };
+  });
+
+  /** 绑定/更新某 LLM provider 的 API key：密文入库，spawn 时优先于 server env */
+  app.put<{ Params: { provider: string } }>('/api/me/llm-key/:provider', async (req, reply) => {
+    if (!isLlmProvider(req.params.provider)) {
+      void reply.code(400);
+      return { error: `未知 LLM provider: ${req.params.provider}` };
+    }
+    const provider = req.params.provider;
+    const body = llmKeyBodySchema.parse(req.body);
+    const db = getDb();
+    await db
+      .insert(schema.llmKeys)
+      .values({ userId: req.user!.id, provider, keyEnc: encryptSecret(body.key), updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: [schema.llmKeys.userId, schema.llmKeys.provider],
+        set: { keyEnc: encryptSecret(body.key), updatedAt: new Date() },
+      });
+    return { ok: true, provider };
+  });
+
+  app.delete<{ Params: { provider: string } }>('/api/me/llm-key/:provider', async (req, reply) => {
+    if (!isLlmProvider(req.params.provider)) {
+      void reply.code(400);
+      return { error: `未知 LLM provider: ${req.params.provider}` };
+    }
+    const db = getDb();
+    await db
+      .delete(schema.llmKeys)
+      .where(and(eq(schema.llmKeys.userId, req.user!.id), eq(schema.llmKeys.provider, req.params.provider)));
     return { ok: true };
   });
 }
