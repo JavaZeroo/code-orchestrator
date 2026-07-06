@@ -15,6 +15,7 @@ import {
   workflowDefSchema,
   type AgentNode,
   type ApprovalDecision,
+  type CheckNode,
   type GateNode,
   type MeetingNode,
   type SessionEnvelope,
@@ -87,9 +88,9 @@ export async function startRun(defId: string, vars: Record<string, string>): Pro
     throw new EngineError(404, `workflow not found: ${defId}`);
   }
   const def = parseDef(defRow.graph);
-  const unsupported = def.nodes.filter((n) => n.type !== 'agent' && n.type !== 'gate' && n.type !== 'meeting');
+  const unsupported = def.nodes.filter((n) => !['agent', 'gate', 'meeting', 'check'].includes(n.type));
   if (unsupported.length > 0) {
-    throw new EngineError(400, `当前支持 agent|gate|meeting 节点，含不支持类型: ${unsupported.map((n) => `${n.id}(${n.type})`).join(', ')}`);
+    throw new EngineError(400, `当前支持 agent|gate|meeting|check 节点，含不支持类型: ${unsupported.map((n) => `${n.id}(${n.type})`).join(', ')}`);
   }
 
   const runId = createId();
@@ -157,6 +158,8 @@ async function tick(runId: string): Promise<void> {
       await execGate(runId, node, context);
     } else if (node.type === 'meeting') {
       await execMeeting(runId, node, context);
+    } else if (node.type === 'check') {
+      await execCheck(runId, node, context);
     }
   }
 
@@ -270,6 +273,74 @@ async function execGate(runId: string, node: GateNode, context: RunContext): Pro
     payload: { id: approvalId, kind: 'gate', runId, nodeId: node.id, title: title ?? node.id, payload: { approvers: node.approvers }, requestedAt: Date.now() },
   });
   await publishNodeState(runId, node.id, 'waiting_human', { approvalId });
+}
+
+/** command-critic 节点：在 worktree 跑命令(exit0=pass)，产结构化裁决；
+ *  失败且配了 reviseLoop → 回灌 target 返工、重跑本 check(复用 triggerRevision)。这是 TDD 红绿内环 / typecheck 门的机制。 */
+async function execCheck(runId: string, node: CheckNode, context: RunContext): Promise<void> {
+  const db = getDb();
+  const setDone = async (pass: boolean, detail: string, exitCode: number) => {
+    await db
+      .update(schema.nodeStates)
+      .set({ status: 'done', output: { kind: 'check', pass, detail, exitCode }, updatedAt: new Date() })
+      .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
+    const runRows = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId)).limit(1);
+    if (runRows[0]) {
+      const ctx = runRows[0].context as RunContext;
+      ctx.outputs[node.id] = pass ? 'PASS' : `FAIL(exit ${exitCode}): ${detail.slice(0, 800)}`;
+      await db.update(schema.workflowRuns).set({ context: ctx }).where(eq(schema.workflowRuns.id, runId));
+    }
+    await publish({ type: 'run.check', runId, payload: { nodeId: node.id, pass, exitCode } });
+    await publishNodeState(runId, node.id, 'done', { pass, exitCode });
+    scheduleTick(runId);
+  };
+  const fail = async (error: string) => {
+    await db
+      .update(schema.nodeStates)
+      .set({ status: 'failed', output: { error }, updatedAt: new Date() })
+      .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
+    await publishNodeState(runId, node.id, 'failed', { error });
+    scheduleTick(runId);
+  };
+
+  const machineId = pickMachine(undefined);
+  const cwd = context.vars.cwd;
+  if (!machineId) {
+    return fail('没有在线机器可跑 check');
+  }
+  if (!cwd) {
+    return fail('check 需要 vars.cwd（worktree）');
+  }
+  const critic = node.critic; // 目前只 command 型
+  await db
+    .update(schema.nodeStates)
+    .set({ status: 'running', updatedAt: new Date() })
+    .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
+  await publishNodeState(runId, node.id, 'running');
+
+  let result: { exitCode: number; stdout: string; stderr: string };
+  try {
+    result = await callRunner(machineId, 'machine.exec', {
+      cmd: substitute(critic.run, context),
+      cwd: substitute(cwd, context),
+      timeoutMs: critic.timeoutMs,
+    });
+  } catch (err) {
+    return fail(`command-critic 执行失败: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const pass = result.exitCode === 0;
+  const detail = pass ? 'ok' : (result.stderr || result.stdout).slice(-3000);
+  console.log(`[engine] check ${node.id} → ${pass ? 'PASS' : `FAIL(exit ${result.exitCode})`} (run ${runId})`);
+
+  // 失败 + 有返工闭环 → 回灌 target 修，重跑本 check
+  if (!pass && node.reviseLoop) {
+    const feedback = `command-critic「${node.title ?? node.id}」未通过（命令 \`${critic.run}\`，exit ${result.exitCode}）：\n${detail}\n请修复使其通过，然后 commit + push（同分支同 PR）。`;
+    if (await triggerRevision(runId, node.id, node.reviseLoop.target, feedback, node.reviseLoop.maxRounds)) {
+      return; // 已返工：本 check→pending，target 改完 tick 重跑
+    }
+  }
+  await setDone(pass, detail, result.exitCode);
 }
 
 // ---------- meeting 节点 ----------

@@ -85,12 +85,30 @@ export const conditionNodeSchema = nodeBase.extend({
 });
 export type ConditionNode = z.infer<typeof conditionNodeSchema>;
 
+/** command-critic 节点：在 run 的 worktree 里跑一条命令，exit 0 = pass。
+ *  产出结构化裁决 {pass, detail}；配 reviseLoop 则失败时回灌 target 返工、重跑本 check，
+ *  ≤maxRounds 轮 —— 这就是 TDD 红绿内环 / typecheck 门 的机制。 */
+export const checkNodeSchema = nodeBase.extend({
+  type: z.literal('check'),
+  critic: z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('command'),
+      /** 在 {{vars.cwd}} 下执行的命令，支持 {{vars.x}}/{{outputs.节点}} 模板 */
+      run: z.string().min(1),
+      timeoutMs: z.number().int().positive().default(300_000),
+    }),
+  ]),
+  reviseLoop: z.object({ target: z.string().min(1), maxRounds: z.number().int().positive().default(2) }).optional(),
+});
+export type CheckNode = z.infer<typeof checkNodeSchema>;
+
 export const workflowNodeSchema = z.discriminatedUnion('type', [
   agentNodeSchema,
   gateNodeSchema,
   meetingNodeSchema,
   fanoutNodeSchema,
   conditionNodeSchema,
+  checkNodeSchema,
 ]);
 export type WorkflowNode = z.infer<typeof workflowNodeSchema>;
 
