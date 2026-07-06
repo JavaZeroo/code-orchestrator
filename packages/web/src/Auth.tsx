@@ -14,6 +14,7 @@ export interface Me {
   user: { id: string; email: string; name: string };
   forges: Record<string, ForgeBinding>;
   llm?: Record<string, { bound: boolean }>;
+  lark?: { bound: boolean; enabled: boolean };
 }
 
 export const FORGES: Array<{ key: string; label: string; tokenUrl: string; hint: string }> = [
@@ -57,6 +58,21 @@ export const authApi = {
       body: JSON.stringify({ key }),
     }).then((r) => jauth<{ ok: boolean }>(r)),
   unbindLlmKey: (provider: string) => fetch(`/api/me/llm-key/${provider}`, { method: 'DELETE' }).then(jauth),
+  bindLark: (url: string) =>
+    fetch('/api/me/lark-webhook', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url }),
+    }).then((r) => jauth<{ ok: boolean }>(r)),
+  setLarkEnabled: (enabled: boolean) =>
+    fetch('/api/me/lark-webhook', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    }).then((r) => jauth<{ ok: boolean }>(r)),
+  unbindLark: () => fetch('/api/me/lark-webhook', { method: 'DELETE' }).then(jauth),
+  testLark: () =>
+    fetch('/api/lark/test', { method: 'POST' }).then((r) => jauth<{ ok: boolean; code?: number; msg?: string }>(r)),
 };
 
 export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
@@ -233,6 +249,105 @@ function LlmKeyRow({
   );
 }
 
+function LarkWebhookRow({
+  binding,
+  onChanged,
+}: {
+  binding: { bound: boolean; enabled: boolean };
+  onChanged: () => void;
+}) {
+  const [url, setUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const bind = () => {
+    setBusy(true);
+    authApi
+      .bindLark(url.trim())
+      .then(() => {
+        toast.success('飞书 webhook 已配置');
+        setUrl('');
+        onChanged();
+      })
+      .catch((e) => toast.error(`${e instanceof Error ? e.message : e}`))
+      .finally(() => setBusy(false));
+  };
+
+  const test = () => {
+    setBusy(true);
+    authApi
+      .testLark()
+      .then((r) => {
+        if (r.ok) {
+          toast.success('测试消息已发送，请查看飞书');
+        } else {
+          toast.error(`发送失败${r.code ? `（${r.code}）` : ''}${r.msg ? `：${r.msg}` : ''}`);
+        }
+      })
+      .catch((e) => toast.error(`${e instanceof Error ? e.message : e}`))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="rounded-lg border border-line p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <h4 className="text-sm font-medium">飞书 Webhook URL</h4>
+        {binding.bound && (
+          <Badge tone={binding.enabled ? 'ok' : 'warn'}>{binding.enabled ? '已配置' : '已暂停'}</Badge>
+        )}
+        <a
+          className="ml-auto inline-flex items-center gap-0.5 text-xs text-accent underline"
+          href="https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot"
+          target="_blank"
+          rel="noreferrer"
+        >
+          查看说明 <ExternalLink size={10} />
+        </a>
+      </div>
+      <p className="mb-2 text-xs text-dim">
+        填自定义群机器人 webhook。当前仅出站通知；URL 加密存储。
+      </p>
+      <div className="flex gap-2">
+        <Input
+          type="password"
+          placeholder={binding.bound ? '输入新 URL 以更换' : '粘贴飞书 webhook URL'}
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+        />
+        <Button variant="default" disabled={busy || url.trim().length < 10} onClick={bind}>
+          {busy ? '保存中…' : '保存'}
+        </Button>
+      </div>
+      {binding.bound && (
+        <div className="mt-2 flex items-center gap-2">
+          <Button variant="secondary" size="sm" disabled={busy} onClick={test}>
+            发送测试
+          </Button>
+          <label className="flex items-center gap-1.5 text-xs text-dim">
+            <input
+              type="checkbox"
+              checked={binding.enabled}
+              onChange={(e) => {
+                const v = e.target.checked;
+                authApi.setLarkEnabled(v).then(onChanged).catch((e) => toast.error(`${e instanceof Error ? e.message : e}`));
+              }}
+              className="h-3.5 w-3.5 rounded border-line accent-accent"
+            />
+            启用
+          </label>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto text-danger"
+            onClick={() => void authApi.unbindLark().then(onChanged)}
+          >
+            删除
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () => void; onChanged: () => void }) {
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
@@ -247,6 +362,8 @@ export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () 
           {LLM_PROVIDERS.map((p) => (
             <LlmKeyRow key={p.key} provider={p} binding={me.llm?.[p.key] ?? { bound: false }} onChanged={onChanged} />
           ))}
+          <h4 className="mt-2 text-xs font-medium text-dim">飞书通知</h4>
+          <LarkWebhookRow binding={me.lark ?? { bound: false, enabled: false }} onChanged={onChanged} />
         </div>
       </DialogContent>
     </Dialog>
