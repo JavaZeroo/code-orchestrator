@@ -135,6 +135,16 @@ async function j<T>(r: Response): Promise<T> {
 const post = (url: string, body: unknown) =>
   fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
+export interface LlmEndpointRow {
+  id: string;
+  label: string;
+  model: string;
+  baseUrl: string;
+  hasKey: boolean;
+  createdBy: string | null;
+  createdAt: string;
+}
+
 export const api = {
   machines: () => fetch('/api/machines').then((r) => j<{ machines: MachineRow[] }>(r)).then((d) => d.machines),
   sessions: () => fetch('/api/sessions').then((r) => j<{ sessions: SessionRow[] }>(r)).then((d) => d.sessions),
@@ -168,4 +178,13 @@ export const api = {
   deleteTrigger: (id: string) => fetch(`/api/triggers/${id}`, { method: 'DELETE' }).then((r) => j(r)),
   requirements: () => fetch('/api/requirements').then((r) => j<{ requirements: RequirementRow[] }>(r)).then((d) => d.requirements),
   pollTriggers: () => post('/api/triggers/poll', {}).then((r) => j<{ polled: number }>(r)),
+  listEndpoints: () => fetch('/api/llm/endpoints').then((r) => j<{ endpoints: LlmEndpointRow[] }>(r)).then((d) => d.endpoints),
+  upsertEndpoint: (label: string, model: string, baseUrl: string, apiKey: string) =>
+    fetch(`/api/llm/endpoints/${encodeURIComponent(label)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model, base_url: baseUrl, api_key: apiKey }),
+    }).then((r) => j<{ ok: boolean; label: string }>(r)),
+  deleteEndpoint: (label: string) =>
+    fetch(`/api/llm/endpoints/${encodeURIComponent(label)}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
 };

@@ -1,6 +1,7 @@
 import { ExternalLink } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { api, type LlmEndpointRow } from './api';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
 import { Button } from './components/ui/button';
 import { Badge, Input } from './components/ui/primitives';
@@ -348,7 +349,123 @@ function LarkWebhookRow({
   );
 }
 
+function LlmEndpointRow({
+  endpoint,
+  onChanged,
+}: {
+  endpoint: LlmEndpointRow;
+  onChanged: () => void;
+}) {
+  const [deleting, setDeleting] = useState(false);
+
+  const remove = () => {
+    setDeleting(true);
+    api
+      .deleteEndpoint(endpoint.label)
+      .then(() => {
+        toast.success(`已删除端点 ${endpoint.label}`);
+        onChanged();
+      })
+      .catch((e) => toast.error(`${e instanceof Error ? e.message : e}`))
+      .finally(() => setDeleting(false));
+  };
+
+  return (
+    <div className="rounded-lg border border-line p-3">
+      <div className="mb-1 flex items-center gap-2">
+        <h4 className="text-sm font-medium">{endpoint.label}</h4>
+        <Badge tone="ok">已配置</Badge>
+      </div>
+      <p className="text-xs text-dim">
+        {endpoint.model} · {endpoint.baseUrl}
+      </p>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="mt-2 self-start text-danger"
+        disabled={deleting}
+        onClick={remove}
+      >
+        {deleting ? '删除中…' : '删除'}
+      </Button>
+    </div>
+  );
+}
+
+function NewEndpointForm({ onChanged }: { onChanged: () => void }) {
+  const [label, setLabel] = useState('');
+  const [model, setModel] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const canSave = label.trim() && model.trim() && baseUrl.trim() && apiKey.trim().length >= 10;
+
+  const save = () => {
+    setBusy(true);
+    api
+      .upsertEndpoint(label.trim(), model.trim(), baseUrl.trim(), apiKey.trim())
+      .then(() => {
+        toast.success(`端点 ${label} 已保存`);
+        setLabel('');
+        setModel('');
+        setBaseUrl('');
+        setApiKey('');
+        onChanged();
+      })
+      .catch((e) => toast.error(`${e instanceof Error ? e.message : e}`))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="rounded-lg border border-line p-3">
+      <h4 className="mb-2 text-sm font-medium">新增自定义端点</h4>
+      <div className="flex flex-col gap-2">
+        <Input
+          placeholder="label（如 my-deepseek）"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+        />
+        <Input
+          placeholder="模型名（如 deepseek-chat）"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+        />
+        <Input
+          placeholder="Base URL（Anthropic 兼容，如 https://api.example.com/anthropic）"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+        />
+        <Input
+          type="password"
+          placeholder="API Key（至少 10 位）"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && canSave && save()}
+        />
+        <Button variant="default" disabled={busy || !canSave} onClick={save}>
+          {busy ? '保存中…' : '添加端点'}
+        </Button>
+      </div>    </div>
+  );
+}
+
 export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () => void; onChanged: () => void }) {
+  const [endpoints, setEndpoints] = useState<LlmEndpointRow[]>([]);
+
+  const refreshEndpoints = useCallback(() => {
+    api.listEndpoints().then(setEndpoints).catch(() => setEndpoints([]));
+  }, []);
+
+  useEffect(() => {
+    refreshEndpoints();
+  }, [refreshEndpoints]);
+
+  const onAnyChanged = () => {
+    onChanged();
+    refreshEndpoints();
+  };
+
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent>
@@ -356,14 +473,19 @@ export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () 
         <p className="mb-4 text-xs text-dim">{me.user.email}</p>
         <div className="flex flex-col gap-3">
           {FORGES.map((f) => (
-            <ForgeTokenRow key={f.key} forge={f} binding={me.forges[f.key] ?? { bound: false }} onChanged={onChanged} />
+            <ForgeTokenRow key={f.key} forge={f} binding={me.forges[f.key] ?? { bound: false }} onChanged={onAnyChanged} />
           ))}
           <h4 className="mt-2 text-xs font-medium text-dim">LLM API Key</h4>
           {LLM_PROVIDERS.map((p) => (
-            <LlmKeyRow key={p.key} provider={p} binding={me.llm?.[p.key] ?? { bound: false }} onChanged={onChanged} />
+            <LlmKeyRow key={p.key} provider={p} binding={me.llm?.[p.key] ?? { bound: false }} onChanged={onAnyChanged} />
           ))}
           <h4 className="mt-2 text-xs font-medium text-dim">飞书通知</h4>
           <LarkWebhookRow binding={me.lark ?? { bound: false, enabled: false }} onChanged={onChanged} />
+          <h4 className="mt-2 text-xs font-medium text-dim">LLM 端点注册表</h4>
+          {endpoints.map((ep) => (
+            <LlmEndpointRow key={ep.id} endpoint={ep} onChanged={refreshEndpoints} />
+          ))}
+          <NewEndpointForm onChanged={refreshEndpoints} />
         </div>
       </DialogContent>
     </Dialog>

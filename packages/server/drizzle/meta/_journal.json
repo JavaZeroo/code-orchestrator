@@ -43,6 +43,13 @@
       "when": 1783400000000,
       "tag": "0005_lark-webhooks",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783670400001,
+      "tag": "0006_llm-endpoints",
+      "breakpoints": true
     }
   ]
 }
