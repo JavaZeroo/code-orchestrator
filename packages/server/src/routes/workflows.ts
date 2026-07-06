@@ -65,8 +65,17 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
 
   app.get('/api/runs', async () => {
     const runs = await getDb()
-      .select()
+      .select({
+        id: schema.workflowRuns.id,
+        defId: schema.workflowRuns.defId,
+        defName: schema.workflowDefs.name,
+        status: schema.workflowRuns.status,
+        context: schema.workflowRuns.context,
+        startedAt: schema.workflowRuns.startedAt,
+        endedAt: schema.workflowRuns.endedAt,
+      })
       .from(schema.workflowRuns)
+      .leftJoin(schema.workflowDefs, eq(schema.workflowRuns.defId, schema.workflowDefs.id))
       .orderBy(desc(schema.workflowRuns.startedAt))
       .limit(100);
     return { runs };
