@@ -36,6 +36,16 @@ export async function registerWorkRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { limit?: string; type?: string } }>('/api/work', async (req) => {
     const db = getDb();
     const limit = Math.min(Number(req.query.limit ?? 500), 2000);
+    const type = req.query.type?.trim();
+    if (type) {
+      const items = await db
+        .select()
+        .from(schema.workItems)
+        .where(eq(schema.workItems.type, type))
+        .orderBy(desc(schema.workItems.updatedAt))
+        .limit(limit);
+      return { items };
+    }
     const rows = await db.select().from(schema.workItems).orderBy(desc(schema.workItems.updatedAt)).limit(limit);
     return { tree: buildTree(rows), count: rows.length };
   });
