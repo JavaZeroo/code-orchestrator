@@ -62,6 +62,8 @@ export interface NodeStateRow {
   status: string;
   sessionId: string | null;
   output: { summary?: string; error?: string; verdict?: string; minutes?: string } | null;
+  /** 该节点执行时使用的模型（来自 sessions 表） */
+  model?: string | null;
 }
 
 export interface ApprovalRow {

@@ -79,6 +79,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
             <div className="flex items-center gap-2">
               <h3 className="font-semibold">{selNode.title ?? selNode.id}</h3>
               <span className="text-xs text-dim">({selNode.type})</span>
+              {selState?.model && <span className="rounded bg-bg-muted px-1 py-0.5 font-mono text-xs text-dim">{selState.model}</span>}
               {selState && <Badge tone={NODE_TONE[selState.status] ?? 'neutral'}>{selState.status}</Badge>}
             </div>
             {selNode.type === 'agent' && (
