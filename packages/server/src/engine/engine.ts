@@ -201,6 +201,14 @@ async function execAgent(runId: string, node: AgentNode, context: RunContext): P
     return;
   }
 
+  const meta: NonNullable<Parameters<typeof spawnSession>[0]['meta']> = {};
+  if (node.role) {
+    meta.appendSystemPrompt = `你在工作流中承担「${node.role}」角色。`;
+  }
+  if (node.permissionMode) {
+    meta.permissionMode = node.permissionMode;
+  }
+
   try {
     const { sessionId } = await spawnSession({
       machineId,
@@ -210,7 +218,7 @@ async function execAgent(runId: string, node: AgentNode, context: RunContext): P
       role: node.role,
       runId,
       nodeId: node.id,
-      meta: node.role ? { appendSystemPrompt: `你在工作流中承担「${node.role}」角色。` } : undefined,
+      meta: Object.keys(meta).length > 0 ? meta : undefined,
     });
     sessionNodes.set(sessionId, { runId, nodeId: node.id });
     await db
