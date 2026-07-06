@@ -17,7 +17,9 @@ import { registerLarkRoutes } from './routes/lark';
 import { registerMeRoutes } from './routes/me';
 import { registerSessionRoutes } from './routes/sessions';
 import { registerTriggerRoutes } from './routes/triggers';
+import { registerWorkRoutes } from './routes/work';
 import { registerWorkflowRoutes } from './routes/workflows';
+import { rebuildWorkItems, startWorkProjector } from './services/workProjector';
 import { registerClientHub } from './ws/clientHub';
 import { listMachines, registerRunnerHub } from './ws/runnerHub';
 
@@ -64,6 +66,7 @@ await registerSessionRoutes(app);
 await registerWorkflowRoutes(app);
 await registerForgeRoutes(app);
 await registerTriggerRoutes(app);
+await registerWorkRoutes(app);
 if (authEnabled) {
   await registerMeRoutes(app);
   await registerLarkRoutes(app);
@@ -75,6 +78,11 @@ if (hasDb()) {
   startForgePoller();
   startIntakePoller();
   startLarkNotifier();
+  // Work-Item 控制平面：先订阅实时事件，再后台从事件日志回放补齐历史（幂等）
+  startWorkProjector();
+  void rebuildWorkItems()
+    .then((n) => console.log(`[work] backfilled from ${n} events`))
+    .catch((err) => console.error('[work] backfill failed:', err));
 }
 
 // 生产形态：托管 web 构建产物（pnpm --filter @co/web build 后生效）

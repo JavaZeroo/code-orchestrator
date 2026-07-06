@@ -120,6 +120,29 @@ export const larkWebhooks = pgTable('lark_webhooks', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** Work-Item 控制平面：事件日志的物化投影（CQRS 读模型）。
+ *  把散落的流程（requirement/run/node/pr/approval…）统一成带血缘(parentId)+生命周期的可查可管的树。
+ *  由 workProjector 订阅事件总线维护，可从 events 表重放重建。key = 自然键，保证投影幂等。 */
+export const workItems = pgTable(
+  'work_items',
+  {
+    id: text('id').primaryKey(),
+    /** 自然键（如 run:<runId> / pr:<forge>:<repo>#<n> / req:<trigger>:<issue>），投影幂等用 */
+    key: text('key').notNull().unique(),
+    type: text('type').notNull(), // goal|phase|requirement|run|node|pr|approval
+    parentId: text('parent_id'),
+    title: text('title'),
+    status: text('status').notNull().default('active'), // pending|active|waiting_human|blocked|done|failed|cancelled
+    owner: text('owner'), // pm|dev|se|human…
+    refs: jsonb('refs').$type<Record<string, unknown>>().notNull().default({}),
+    meta: jsonb('meta').$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+  },
+  (t) => [index('work_items_parent_idx').on(t.parentId), index('work_items_type_idx').on(t.type)],
+);
+
 export const machines = pgTable('machines', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
