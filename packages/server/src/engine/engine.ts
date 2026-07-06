@@ -651,7 +651,7 @@ async function completeAgentNode(sessionId: string, turnStatus: string): Promise
   // 评审→返工闭环：本节点（评审）判「需改进」→ 把意见回灌 target 会话修改、重跑本节点
   const node = await loadAgentNode(ref.runId, ref.nodeId);
   if (node?.reviseLoop && verdictChangesRequested(summary)) {
-    if (await requestRevision(ref, node.reviseLoop, summary)) {
+    if (await triggerRevision(ref.runId, ref.nodeId, node.reviseLoop.target, summary, node.reviseLoop.maxRounds)) {
       return; // 已回灌 target 返工；其 turn-end → tick 会重跑本评审节点
     }
   }
@@ -746,27 +746,31 @@ function verdictChangesRequested(summary: string): boolean {
   );
 }
 
-/** 评审→返工：把评审意见回灌 target(实现)会话让其修改，重跑评审节点。达轮次上限则返回 false（放行到下游门禁）。 */
-async function requestRevision(
-  ref: { runId: string; nodeId: string },
-  loop: NonNullable<AgentNode['reviseLoop']>,
+/** 评审→返工核心：把评审意见回灌 target(实现)会话让其改，重置 review→pending、target→running、
+ *  下游 gate→pending（并作废其待批审批）。达轮次上限或实现会话已死则返回 false（放行/交人工）。
+ *  既服务 in-run 返工闭环，也服务 reconciler 自动补偿。 */
+async function triggerRevision(
+  runId: string,
+  reviewNodeId: string,
+  targetNodeId: string,
   reviewSummary: string,
+  maxRounds: number,
 ): Promise<boolean> {
-  const rk = `${ref.runId}:${ref.nodeId}`;
+  const rk = `${runId}:${reviewNodeId}`;
   const round = reviseRounds.get(rk) ?? 0;
-  if (round >= loop.maxRounds) {
-    return false; // 返工轮次耗尽，带着最后一轮意见交人工
+  if (round >= maxRounds) {
+    return false; // 返工轮次耗尽，带最后一轮意见交人工
   }
   const db = getDb();
-  const states = await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, ref.runId));
-  const target = states.find((s) => s.nodeId === loop.target);
+  const states = await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, runId));
+  const target = states.find((s) => s.nodeId === targetNodeId);
   if (!target?.sessionId) {
     return false;
   }
   const sessRows = await db.select().from(schema.sessions).where(eq(schema.sessions.id, target.sessionId)).limit(1);
   const session = sessRows[0];
   if (!session || session.state === 'dead') {
-    return false; // 实现会话已死，无法返工 → 交人工
+    return false; // 实现会话已死，无法返工（交人工；后续可扩展为重开会话）
   }
   const feedback = `SE 评审判定「需改进」。请严格按下面的评审意见修改代码，然后 commit 并 push 到当前分支（同一个 PR，不要新建分支/PR）。改完简要说明你改了哪些点。\n\n===== 评审意见 =====\n${reviewSummary.slice(0, 4000)}`;
   try {
@@ -775,25 +779,101 @@ async function requestRevision(
     return false;
   }
   reviseRounds.set(rk, round + 1);
-  // target(实现) → running（重新登记会话：其 turn-end 会标 done → tick 重跑评审）；本评审节点 → pending
-  sessionNodes.set(target.sessionId, { runId: ref.runId, nodeId: loop.target });
+  // target(实现) → running（重登记会话：turn-end 标 done → tick 重跑评审）；评审节点 → pending
+  sessionNodes.set(target.sessionId, { runId, nodeId: targetNodeId });
   await db
     .update(schema.nodeStates)
     .set({ status: 'running', updatedAt: new Date() })
-    .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, loop.target)));
+    .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, targetNodeId)));
   await db
     .update(schema.nodeStates)
     .set({ status: 'pending', updatedAt: new Date() })
-    .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)));
-  await publish({
-    type: 'run.node.revise',
-    runId: ref.runId,
-    payload: { reviewNode: ref.nodeId, target: loop.target, round: round + 1, max: loop.maxRounds },
-  });
-  await publishNodeState(ref.runId, loop.target, 'running', { revise: round + 1 });
-  await publishNodeState(ref.runId, ref.nodeId, 'pending', { revise: round + 1 });
-  console.log(`[engine] revise round ${round + 1}/${loop.maxRounds}: ${loop.target} ← review ${ref.nodeId} (run ${ref.runId})`);
+    .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, reviewNodeId)));
+  // 下游 gate 回到 pending 并作废待批审批（重审通过后 tick 会重新建门）
+  const defRows0 = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId)).limit(1);
+  const defRows = defRows0[0]
+    ? await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, defRows0[0].defId)).limit(1)
+    : [];
+  if (defRows[0]) {
+    const def = parseDef(defRows[0].graph);
+    const downstreamGates = def.edges
+      .filter(([from]) => from === reviewNodeId)
+      .map(([, to]) => to)
+      .filter((id) => def.nodes.find((n) => n.id === id)?.type === 'gate');
+    for (const g of downstreamGates) {
+      await db
+        .update(schema.nodeStates)
+        .set({ status: 'pending', updatedAt: new Date() })
+        .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, g)));
+      await db
+        .update(schema.approvals)
+        .set({ status: 'expired' })
+        .where(and(eq(schema.approvals.runId, runId), eq(schema.approvals.nodeId, g), eq(schema.approvals.status, 'pending')));
+      await publishNodeState(runId, g, 'pending', { reason: 'revising' });
+    }
+  }
+  await publish({ type: 'run.node.revise', runId, payload: { reviewNode: reviewNodeId, target: targetNodeId, round: round + 1, max: maxRounds } });
+  await publishNodeState(runId, targetNodeId, 'running', { revise: round + 1 });
+  await publishNodeState(runId, reviewNodeId, 'pending', { revise: round + 1 });
+  console.log(`[engine] revise round ${round + 1}/${maxRounds}: ${targetNodeId} ← review ${reviewNodeId} (run ${runId})`);
+  scheduleTick(runId);
   return true;
+}
+
+/** 某节点是否是「评审」节点（有 reviseLoop 配置，或角色 SE） */
+function isReviewNode(node: AgentNode): boolean {
+  return Boolean(node.reviseLoop) || node.role === 'SE';
+}
+
+/** reviseLoop 的 target（缺省取该评审节点在 DAG 上游的第一个 agent 节点，通常是 implement） */
+function reviseTargetOf(def: WorkflowDef, node: AgentNode): string | undefined {
+  if (node.reviseLoop) {
+    return node.reviseLoop.target;
+  }
+  return depsOf(def, node.id).find((d) => {
+    const n = def.nodes.find((x) => x.id === d);
+    return n?.type === 'agent';
+  });
+}
+
+/** 自动返工补偿：扫描停在人工门的 run，若评审节点判「需改进」却没返工（如返工闭环上线前建的、
+ *  或评审在到门后才落地），自动触发返工——让「按评审意见修好」全程无需人工重跑。 */
+async function reconcileRevisions(): Promise<void> {
+  const db = getDb();
+  const runs = await db
+    .select()
+    .from(schema.workflowRuns)
+    .where(eq(schema.workflowRuns.status, 'waiting_human'));
+  for (const run of runs) {
+    const defRows = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, run.defId)).limit(1);
+    if (!defRows[0]) {
+      continue;
+    }
+    const def = parseDef(defRows[0].graph);
+    const states = await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, run.id));
+    for (const node of def.nodes) {
+      if (node.type !== 'agent' || !isReviewNode(node)) {
+        continue;
+      }
+      const st = states.find((s) => s.nodeId === node.id);
+      if (st?.status !== 'done') {
+        continue;
+      }
+      const summary = ((st.output as { summary?: string } | null)?.summary) ?? '';
+      if (!verdictChangesRequested(summary)) {
+        continue;
+      }
+      const target = reviseTargetOf(def, node);
+      if (!target) {
+        continue;
+      }
+      const maxRounds = node.reviseLoop?.maxRounds ?? 2;
+      const fired = await triggerRevision(run.id, node.id, target, summary, maxRounds).catch(() => false);
+      if (fired) {
+        console.log(`[engine] reconcile: auto-revise run ${run.id} node ${node.id} → ${target}`);
+      }
+    }
+  }
 }
 
 // ---------- 事件订阅与恢复 ----------
@@ -851,6 +931,11 @@ export function startEngine(): void {
       }
     })().catch(() => {});
   }, 30_000).unref();
+
+  // 自动返工补偿：周期性把「停在人工门却带未处理 CHANGES_REQUESTED 评审」的 run 自动打回返工
+  setInterval(() => {
+    void reconcileRevisions().catch((err) => console.error('[engine] reconcile revisions failed:', err));
+  }, 60_000).unref();
 }
 
 /** boot 恢复：重建索引，补查引擎宕机期间已完成的会话 */
