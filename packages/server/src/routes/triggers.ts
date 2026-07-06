@@ -13,6 +13,7 @@ import { getDb, schema } from '../db/index';
 import { pollIntakesOnce } from '../forge/intake';
 
 const createSchema = z.object({
+  projectId: z.string().nullable().optional(),
   forge: z.enum(['gitcode', 'github']),
   repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, '格式: owner/repo'),
   defId: z.string().min(1),
@@ -23,6 +24,7 @@ const createSchema = z.object({
 });
 
 const patchSchema = z.object({
+  projectId: z.string().nullable().optional(),
   defId: z.string().min(1).optional(),
   labels: z.array(z.string()).optional(),
   titlePattern: z.string().nullable().optional(),
@@ -43,6 +45,7 @@ export async function registerTriggerRoutes(app: FastifyInstance): Promise<void>
     const id = createId();
     await db.insert(schema.requirementTriggers).values({
       id,
+      projectId: body.projectId ?? null,
       forge: body.forge,
       repo: body.repo,
       defId: body.defId,
@@ -71,6 +74,7 @@ export async function registerTriggerRoutes(app: FastifyInstance): Promise<void>
     const rows = await db
       .select({
         id: schema.requirementTriggers.id,
+        projectId: schema.requirementTriggers.projectId,
         forge: schema.requirementTriggers.forge,
         repo: schema.requirementTriggers.repo,
         defId: schema.requirementTriggers.defId,

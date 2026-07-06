@@ -120,6 +120,28 @@ export const larkWebhooks = pgTable('lark_webhooks', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** Project = per-场景策略的一等容器（grill-me 共识 Q7）：一个项目一份策略包，
+ *  让「管 code-orchestrator=全自动+TDD」与「管 mindformers=全手动」干净并存。
+ *  trigger 归属某 project 并继承其配置（repo/forge/默认工作流/模型/vars/自治/护栏）。 */
+export const projects = pgTable('projects', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  forge: text('forge', { enum: ['gitcode', 'github'] }).notNull(),
+  repo: text('repo').notNull(),
+  /** 自治档位：manual=每 PR 人审 / agent=agent 判断是否需人介入 / auto=绿即自动合 */
+  autonomy: text('autonomy', { enum: ['manual', 'agent', 'auto'] }).notNull().default('manual'),
+  /** 强制人工的护栏：改动命中这些路径 glob 一律不自动合（auto/agent 档的安全底线，可空=无护栏） */
+  guardrails: jsonb('guardrails').$type<string[]>().notNull().default([]),
+  /** 默认预设工作流（需求进来起哪条流水线） */
+  defaultDefId: text('default_def_id'),
+  /** 模型花名册：{pm, dev, se} → 预设按角色取，同一预设换项目换模型 */
+  models: jsonb('models').$type<Record<string, string>>().notNull().default({}),
+  /** 项目级默认 vars（如 base 分支），与 issue 变量合并注入 run */
+  vars: jsonb('vars').$type<Record<string, string>>().notNull().default({}),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 /** Work-Item 控制平面：事件日志的物化投影（CQRS 读模型）。
  *  把散落的流程（requirement/run/node/pr/approval…）统一成带血缘(parentId)+生命周期的可查可管的树。
  *  由 workProjector 订阅事件总线维护，可从 events 表重放重建。key = 自然键，保证投影幂等。 */
@@ -292,6 +314,8 @@ export const forgeRefs = pgTable('forge_refs', {
  *  最初愿景的入口：需求（issue）进来 → 分析 → 拆解 → 设计 → 实现 → PR → 门禁回流。 */
 export const requirementTriggers = pgTable('requirement_triggers', {
   id: text('id').primaryKey(),
+  /** 归属项目（可空兼容存量）：起 run 时继承项目的 vars/模型/自治等策略 */
+  projectId: text('project_id').references(() => projects.id),
   forge: text('forge', { enum: ['gitcode', 'github'] }).notNull(),
   repo: text('repo').notNull(),
   defId: text('def_id')

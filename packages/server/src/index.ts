@@ -16,6 +16,7 @@ import { registerForgeRoutes } from './routes/forge';
 import { registerLarkRoutes } from './routes/lark';
 import { registerLlmRoutes } from './routes/llm';
 import { registerMeRoutes } from './routes/me';
+import { registerProjectRoutes } from './routes/projects';
 import { registerSessionRoutes } from './routes/sessions';
 import { registerTriggerRoutes } from './routes/triggers';
 import { registerWorkRoutes } from './routes/work';
@@ -68,6 +69,7 @@ await registerWorkflowRoutes(app);
 await registerForgeRoutes(app);
 await registerTriggerRoutes(app);
 await registerWorkRoutes(app);
+await registerProjectRoutes(app);
 if (authEnabled) {
   await registerMeRoutes(app);
   await registerLarkRoutes(app);

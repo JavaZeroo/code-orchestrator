@@ -98,12 +98,19 @@ export async function applyEvent(evt: OrchEvent): Promise<void> {
   const runKey = evt.runId ? `run:${evt.runId}` : undefined;
   switch (evt.type) {
     case 'requirement.triggered': {
+      // 有归属项目 → project 作为血缘树根
+      let projectKey: string | undefined;
+      if (p.projectId) {
+        projectKey = `project:${s(p.projectId)}`;
+        await upsert(projectKey, { type: 'project', status: 'active', title: s(p.project) || s(p.repo), refs: { projectId: p.projectId, repo: p.repo } });
+      }
       const reqKey = `req:${s(p.triggerId)}:${s(p.issue)}`;
       await upsert(reqKey, {
         type: 'requirement',
         owner: 'pm',
         status: 'active',
         title: `#${s(p.issue)} ${s(p.title)}`,
+        parentKey: projectKey,
         refs: { forge: p.forge, repo: p.repo, issue: p.issue, url: p.url, runId: evt.runId },
       });
       if (runKey) {

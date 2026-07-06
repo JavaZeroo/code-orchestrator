@@ -45,9 +45,14 @@ function matches(issue: NormalizedIssue, trigger: TriggerRow): boolean {
 }
 
 /** issue 字段 → 工作流变量（agent 节点 prompt 用 {{vars.issue_body}} 等引用） */
-function issueVars(issue: NormalizedIssue, trigger: TriggerRow): Record<string, string> {
+function issueVars(
+  issue: NormalizedIssue,
+  trigger: TriggerRow,
+  project?: typeof schema.projects.$inferSelect,
+): Record<string, string> {
   return {
-    ...trigger.vars,
+    ...(project?.vars ?? {}), // 项目级默认（最低优先）
+    ...trigger.vars, // 触发器覆盖项目
     forge: trigger.forge,
     repo: trigger.repo,
     issue_number: issue.number,
@@ -63,6 +68,10 @@ async function pollTrigger(trigger: TriggerRow): Promise<void> {
   const forgeKind = isForgeKind(trigger.forge) ? trigger.forge : 'gitcode';
   const forge = getForge(forgeKind);
   const token = await anyForgeToken(forgeKind);
+  // 归属项目：继承其默认 vars（并让 work-item 血缘挂到 project 根下）
+  const project = trigger.projectId
+    ? (await db.select().from(schema.projects).where(eq(schema.projects.id, trigger.projectId)).limit(1))[0]
+    : undefined;
 
   const since = trigger.lastPolledAt
     ? new Date(trigger.lastPolledAt.getTime() - SINCE_BUFFER_MS).toISOString()
@@ -102,7 +111,7 @@ async function pollTrigger(trigger: TriggerRow): Promise<void> {
       continue; // 已见过，或基线仅记录不触发
     }
     try {
-      const vars = issueVars(issue, trigger);
+      const vars = issueVars(issue, trigger, project);
       // 自动供给隔离工作区（WORKSPACE_ROOT 开启时）：每 run 独立 worktree，注入 cwd/branch
       const ws = await provisionWorkspace(forgeKind, trigger.repo, issue.number, vars.base ?? 'main');
       if (ws) {
@@ -116,6 +125,8 @@ async function pollTrigger(trigger: TriggerRow): Promise<void> {
         runId,
         payload: {
           triggerId: trigger.id,
+          projectId: trigger.projectId ?? undefined,
+          project: project?.name,
           forge: forgeKind,
           repo: trigger.repo,
           issue: issue.number,
