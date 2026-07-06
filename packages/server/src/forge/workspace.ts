@@ -11,7 +11,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import type { ForgeKind } from './types';
 
@@ -98,5 +98,20 @@ export async function provisionWorkspace(
   // 已存在则先摘除，保证每次是基于最新 base 的干净工作区
   await git(baseDir, ['worktree', 'remove', '--force', wt]).catch(() => {});
   await git(baseDir, ['worktree', 'add', '--force', '-B', branch, wt, `origin/${base}`]);
+  // 装依赖：让 worktree 能本地跑 command-critic（typecheck/test）——「真 critic」与 TDD 的物理前提。
+  // 暖 store 下 --prefer-offline 约 3s。WORKSPACE_INSTALL_DEPS=0 可关（纯 CI-critic 场景省磁盘）。
+  if (process.env.WORKSPACE_INSTALL_DEPS !== '0') {
+    try {
+      // pnpm 与运行中的 node 同目录；把它加进 PATH 保证可解析
+      const binDir = dirname(process.execPath);
+      await run('pnpm', ['install', '--prefer-offline', '--config.confirmModulesPurge=false'], {
+        cwd: wt,
+        maxBuffer: 16 * 1024 * 1024,
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ''}` },
+      });
+    } catch (err) {
+      console.error(`[workspace] pnpm install failed in ${wt}:`, err instanceof Error ? err.message : err);
+    }
+  }
   return { cwd: wt, branch };
 }

@@ -8,6 +8,10 @@
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "dev:server": "pnpm --filter @co/server dev",
-    "dev:runner": "pnpm --filter @co/runner dev"
+    "dev:runner": "pnpm --filter @co/runner dev",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.9"
   }
 }
