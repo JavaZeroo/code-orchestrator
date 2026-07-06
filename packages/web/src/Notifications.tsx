@@ -92,15 +92,12 @@ function toNotification(row: GlobalEventRow): NotificationItem | null {
     };
   }
   if (row.type === 'run.node.retry') {
-    const p = row.payload as { nodeId?: string; attempt?: number; max?: number; reason?: string; detail?: string };
+    const p = row.payload as { nodeId: string; attempt: number; max: number; reason?: string; detail?: string };
     return {
       ...base,
       type: 'run.node.retry',
       title: '节点重试中',
-      detail:
-        p.nodeId && p.attempt && p.max
-          ? `${p.nodeId} 第 ${p.attempt}/${p.max} 次重试${p.reason ? `：${p.reason}` : ''}`
-          : p.detail ?? p.reason,
+      detail: `${p.nodeId} 第 ${p.attempt}/${p.max} 次重试${p.reason ? `：${p.reason}` : ''}`,
     };
   }
   if (row.type === 'requirement.failed') {
