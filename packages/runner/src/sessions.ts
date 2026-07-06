@@ -1,13 +1,23 @@
-import type { SessionState } from '@co/protocol';
-import type { ClaudeSession } from './claude/driver';
+import type { ApprovalDecision, MessageMeta, SessionState } from '@co/protocol';
 
-const sessions = new Map<string, ClaudeSession>();
+/** 会话驱动统一接口：ClaudeSession（宿主内进程）与 ContainerSession（容器内 agent）都实现之 */
+export interface RunnerSession {
+  readonly sessionId: string;
+  state: SessionState;
+  start(): void;
+  send(text: string, meta?: MessageMeta): void;
+  interrupt(): Promise<boolean>;
+  kill(): void;
+  decideApproval(approvalId: string, decision: ApprovalDecision): boolean;
+}
 
-export function addSession(session: ClaudeSession): void {
+const sessions = new Map<string, RunnerSession>();
+
+export function addSession(session: RunnerSession): void {
   sessions.set(session.sessionId, session);
 }
 
-export function getSession(sessionId: string): ClaudeSession | undefined {
+export function getSession(sessionId: string): RunnerSession | undefined {
   return sessions.get(sessionId);
 }
 

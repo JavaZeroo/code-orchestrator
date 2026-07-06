@@ -2,9 +2,10 @@ import { exec } from 'node:child_process';
 import { runnerMethods, type RunnerMethodName, type RunnerParams } from '@co/protocol';
 import { ClaudeSession, type DriverEmit } from './claude/driver';
 import type { ServerConnection } from './connection';
-import { addSession, getSession, listSessionStates, removeSession } from './sessions';
+import { addSession, getSession, listSessionStates, removeSession, type RunnerSession } from './sessions';
 import { provisionWorkspace } from './workspace';
 import { containerExec, containerRm, containerRun } from './container';
+import { ContainerSession } from './container-agent/container-session';
 
 const EXEC_DEFAULT_TIMEOUT_MS = 60_000;
 const EXEC_MAX_BUFFER = 10 * 1024 * 1024;
@@ -93,7 +94,20 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
         if (getSession(p.sessionId)) {
           return { ok: false, error: `session already exists: ${p.sessionId}` };
         }
-        const session = new ClaudeSession(p, makeEmit(p.sessionId));
+        const emit = makeEmit(p.sessionId);
+        // 容器化会话（#37）：agent 跑在容器内；否则宿主进程内起 SDK（原路）
+        const session: RunnerSession = p.container
+          ? new ContainerSession(
+              {
+                sessionId: p.sessionId,
+                containerId: p.container.containerId,
+                nodePath: p.container.nodePath,
+                agentMjs: p.container.agentMjs,
+                agentParams: { sessionId: p.sessionId, agent: 'claude', cwd: p.cwd, prompt: p.prompt, meta: p.meta, env: p.env },
+              },
+              emit,
+            )
+          : new ClaudeSession(p, emit);
         addSession(session);
         session.start();
         return { ok: true };

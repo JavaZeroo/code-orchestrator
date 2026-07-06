@@ -54,6 +54,15 @@ export const runnerMethods = {
       env: z.record(z.string(), z.string()).optional(),
       /** 工作流设计器会话：注入 emit_workflow 工具（in-process MCP） */
       designer: z.boolean().optional(),
+      /** 容器化会话（design-v2 #37）：非空则 agent 跑在该容器内（docker exec 挂载的 node+agent.mjs），
+       *  而非宿主进程内起 SDK。容器由 container.run 预先创建。 */
+      container: z
+        .object({
+          containerId: z.string(),
+          nodePath: z.string(),
+          agentMjs: z.string(),
+        })
+        .optional(),
     }),
     result: z.object({
       ok: z.boolean(),

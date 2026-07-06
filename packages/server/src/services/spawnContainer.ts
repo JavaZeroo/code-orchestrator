@@ -22,6 +22,9 @@ import { enqueueTask, type DispatchResult, type QueuedTask } from './taskQueue';
 
 /** 容器内项目根（design-v2 Q6）：worktree 恒挂此处，agent 的 cwd */
 const WORKSPACE = '/workspace';
+/** 宿主上暂存的 agent 运行时（node + agent.mjs + SDK），只读挂进容器（design-v2 #37） */
+const RUNTIME_HOST = process.env.CO_CONTAINER_RUNTIME ?? '/opt/co-runtime';
+const RUNTIME_MOUNT = '/opt/co';
 
 export interface ContainerSpawnRequest {
   projectId: string;
@@ -47,6 +50,21 @@ export interface ContainerAgentContext {
   model?: string;
 }
 export type StartAgentInContainer = (ctx: ContainerAgentContext) => Promise<void>;
+
+/** 默认 #37 driver：让目标 runner 在容器内 docker exec 起 agent（session.spawn 的 container 分支）。 */
+const defaultStartAgent: StartAgentInContainer = async (ctx) => {
+  const res = await callRunner(ctx.machineId, 'session.spawn', {
+    sessionId: ctx.sessionId,
+    agent: 'claude',
+    cwd: ctx.workdir,
+    prompt: ctx.prompt,
+    meta: ctx.model ? { model: ctx.model } : undefined,
+    container: { containerId: ctx.containerId, nodePath: `${RUNTIME_MOUNT}/node`, agentMjs: `${RUNTIME_MOUNT}/agent.mjs` },
+  });
+  if (!res.ok) {
+    throw new Error(`session.spawn(container) failed: ${res.error ?? 'unknown'}`);
+  }
+};
 
 async function loadProject(projectId: string) {
   if (!hasDb()) {
@@ -124,7 +142,10 @@ export async function spawnContainerSession(
       image: project.baseImage,
       name: `co-${sessionId.slice(0, 12)}`,
       workdir: WORKSPACE,
-      mounts: [{ host: ws.cwd, container: WORKSPACE }],
+      mounts: [
+        { host: ws.cwd, container: WORKSPACE },
+        { host: RUNTIME_HOST, container: RUNTIME_MOUNT, ro: true },
+      ],
       env: containerEnv,
       devices: bindFlags?.devices ?? [],
       gpus: bindFlags?.gpus,
@@ -154,11 +175,8 @@ export async function spawnContainerSession(
       });
     }
 
-    // 6) 起 agent 于容器内（#37 seam）
-    if (!startAgent) {
-      throw new Error('agent-in-container driver 未接线（#37）');
-    }
-    await startAgent({ sessionId, machineId, containerId, workdir: WORKSPACE, env: containerEnv, prompt: req.prompt, model: resolved.model ?? req.model });
+    // 6) 起 agent 于容器内（#37）：默认经 session.spawn 的 container 分支（docker exec 挂载的 node+agent.mjs）
+    await (startAgent ?? defaultStartAgent)({ sessionId, machineId, containerId, workdir: WORKSPACE, env: containerEnv, prompt: req.prompt, model: resolved.model ?? req.model });
 
     await publish({ type: 'session.created', sessionId, runId: req.runId, payload: { machineId, cwd: WORKSPACE, projectId: req.projectId, containerId } });
     return { sessionId };
