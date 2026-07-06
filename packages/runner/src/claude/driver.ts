@@ -269,6 +269,7 @@ export class ClaudeSession {
       model: meta.model ?? undefined,
       fallbackModel: meta.fallbackModel ?? undefined,
       permissionMode: mapPermissionMode(meta.permissionMode),
+      effort: meta.effort ?? undefined,
       allowedTools: meta.allowedTools ?? undefined,
       disallowedTools: meta.disallowedTools ?? undefined,
       systemPrompt: meta.customSystemPrompt

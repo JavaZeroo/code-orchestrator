@@ -214,6 +214,9 @@ async function execAgent(runId: string, node: AgentNode, context: RunContext): P
   if (node.permissionMode) {
     meta.permissionMode = node.permissionMode;
   }
+  if (node.effort) {
+    meta.effort = node.effort;
+  }
 
   try {
     const { sessionId } = await spawnSession({

@@ -31,6 +31,8 @@ export const agentNodeSchema = nodeBase.extend({
   /** 权限模式：默认每个工具调用挂人工审批；bypassPermissions/acceptEdits 用于自主执行节点
    *  （如自我开发：agent 需自主跑 git/gh 提 PR，不能每条命令都等审批）。 */
   permissionMode: z.enum(['default', 'acceptEdits', 'bypassPermissions', 'plan']).optional(),
+  /** 推理强度（Claude 模型有效，如评审节点用 high 提高严谨度）。 */
+  effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
   /** 预期产物路径，供下游节点与 UI 展示 */
   outputs: z.array(z.string()).optional(),
 });

@@ -14,6 +14,8 @@ export const MessageMetaSchema = z.object({
   appendSystemPrompt: z.string().nullable().optional(),
   allowedTools: z.array(z.string()).nullable().optional(),
   disallowedTools: z.array(z.string()).nullable().optional(),
+  /** 推理强度（Claude 模型；不支持的模型 SDK 会静默降级） */
+  effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).nullable().optional(),
   displayText: z.string().optional(),
 });
 export type MessageMeta = z.infer<typeof MessageMetaSchema>;

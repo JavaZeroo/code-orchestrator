@@ -34,7 +34,25 @@ async function userLlmKey(userId: string | undefined, provider: 'deepseek' | 'gl
   return rows[0]?.enc ? decryptSecret(rows[0].enc) : undefined;
 }
 
-/** 别名 → 模型名 + env。密钥优先用当前用户绑定的（设置页），回落 server 环境变量。 */
+/** 任一已绑定用户的 LLM key（工作流会话无用户上下文时兜底，单租户可用；类比 anyForgeToken） */
+async function anyLlmKey(provider: 'deepseek' | 'glm'): Promise<string | undefined> {
+  if (!env.AUTH_SECRET) {
+    return undefined;
+  }
+  const rows = await getDb()
+    .select({ enc: schema.llmKeys.keyEnc })
+    .from(schema.llmKeys)
+    .where(eq(schema.llmKeys.provider, provider))
+    .limit(1);
+  return rows[0]?.enc ? decryptSecret(rows[0].enc) : undefined;
+}
+
+/** key 解析：请求者本人 → 任一已绑定用户（工作流会话兜底）→ server 环境变量 */
+async function llmKeyFor(userId: string | undefined, provider: 'deepseek' | 'glm', envKey?: string): Promise<string | undefined> {
+  return (await userLlmKey(userId, provider)) ?? (await anyLlmKey(provider)) ?? envKey;
+}
+
+/** 别名 → 模型名 + env。密钥优先用当前用户绑定的（设置页），再回落任一绑定 / server 环境变量。 */
 export async function resolveModel(
   alias?: string,
   userId?: string,
@@ -43,7 +61,7 @@ export async function resolveModel(
     return {};
   }
   if (alias === 'deepseek') {
-    const key = (await userLlmKey(userId, 'deepseek')) ?? process.env.DEEPSEEK_API_KEY;
+    const key = await llmKeyFor(userId, 'deepseek', process.env.DEEPSEEK_API_KEY);
     if (!key) {
       throw new SpawnError(400, 'deepseek API key 未配置（设置页绑定或 server 设 DEEPSEEK_API_KEY），无法使用 deepseek 别名');
     }
@@ -53,7 +71,7 @@ export async function resolveModel(
     };
   }
   if (alias === 'glm') {
-    const key = (await userLlmKey(userId, 'glm')) ?? process.env.GLM_API_KEY;
+    const key = await llmKeyFor(userId, 'glm', process.env.GLM_API_KEY);
     if (!key) {
       throw new SpawnError(400, 'glm API key 未配置（设置页绑定或 server 设 GLM_API_KEY），无法使用 glm 别名');
     }
