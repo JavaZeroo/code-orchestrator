@@ -1,9 +1,10 @@
-import { LogOut, MessageSquare, Plus, Settings, Workflow, Zap } from 'lucide-react';
+import { LayoutDashboard, LogOut, MessageSquare, Plus, Settings, Workflow, Zap } from 'lucide-react';
 import { useState } from 'react';
 import { authApi, LoginPage, SettingsModal, useMe } from './Auth';
 import { NewSession } from './NewSession';
 import { NotificationBell } from './Notifications';
 import { SessionView } from './SessionView';
+import { Dashboard } from './Dashboard';
 import { TriggersPage } from './TriggersPage';
 import { WorkflowsPage } from './WorkflowsPage';
 import { Button } from './components/ui/button';
@@ -64,7 +65,7 @@ function SessionsScreen({ selected, setSelected }: { selected: string | 'new'; s
 }
 
 export function App() {
-  const [tab, setTab] = useState<'sessions' | 'workflows' | 'triggers'>('sessions');
+  const [tab, setTab] = useState<'sessions' | 'workflows' | 'triggers' | 'dashboard'>('sessions');
   const [selectedSession, setSelectedSession] = useState<string | 'new'>('new');
   const [showSettings, setShowSettings] = useState(false);
   const [openRunId, setOpenRunId] = useState<string | null>(null);
@@ -104,6 +105,9 @@ export function App() {
         <Button variant={tab === 'triggers' ? 'secondary' : 'ghost'} size="sm" onClick={() => setTab('triggers')}>
           <Zap size={14} /> 触发器
         </Button>
+        <Button variant={tab === 'dashboard' ? 'secondary' : 'ghost'} size="sm" onClick={() => setTab('dashboard')}>
+          <LayoutDashboard size={14} /> 看板
+        </Button>
         <div className="ml-auto flex items-center gap-2">
           <NotificationBell onOpenSession={openSession} onOpenRun={openRun} />
           <span className="text-xs text-dim">
@@ -131,6 +135,7 @@ export function App() {
           <WorkflowsPage onOpenSession={openSession} openRunId={openRunId} onOpenRunConsumed={() => setOpenRunId(null)} />
         )}
         {tab === 'triggers' && <TriggersPage me={me} onOpenRun={openRun} />}
+        {tab === 'dashboard' && <Dashboard onOpenSession={openSession} onOpenRun={openRun} />}
       </div>
       {showSettings && <SettingsModal me={me} onClose={() => setShowSettings(false)} onChanged={refresh} />}
     </div>
