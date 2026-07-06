@@ -36,7 +36,12 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       .from(schema.workflowDefs)
       .orderBy(desc(schema.workflowDefs.createdAt))
       .limit(100);
-    return { workflows: defs };
+    return {
+      workflows: defs.map((def) => ({
+        ...def,
+        nodeCount: ((def.graph as Record<string, unknown>).nodes as unknown[])?.length ?? 0,
+      })),
+    };
   });
 
   app.get<{ Params: { id: string } }>('/api/workflows/:id', async (req, reply) => {
