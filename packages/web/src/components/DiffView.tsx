@@ -6,7 +6,7 @@ import { cn } from '../lib/utils';
 export function TextDiff({ oldText, newText }: { oldText: string; newText: string }) {
   const parts = useMemo(() => diffLines(oldText, newText), [oldText, newText]);
   return (
-    <pre className="overflow-x-auto rounded-md border border-line bg-[#0d1117] p-2 font-mono text-xs leading-relaxed">
+    <pre className="overflow-x-auto rounded-md border border-line bg-bg p-2 font-mono text-xs leading-relaxed">
       {parts.map((p, i) => (
         <span
           key={i}
@@ -34,7 +34,7 @@ export function TextDiff({ oldText, newText }: { oldText: string; newText: strin
 /** unified diff 文本着色（git diff 输出用） */
 export function UnifiedDiff({ diff }: { diff: string }) {
   return (
-    <pre className="overflow-x-auto rounded-md border border-line bg-[#0d1117] p-2 font-mono text-xs leading-relaxed">
+    <pre className="overflow-x-auto rounded-md border border-line bg-bg p-2 font-mono text-xs leading-relaxed">
       {diff.split('\n').map((line, i) => (
         <span
           key={i}

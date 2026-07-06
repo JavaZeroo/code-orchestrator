@@ -1,19 +1,55 @@
 @import 'tailwindcss';
 @import '@xyflow/react/dist/style.css';
 
+@import '@fontsource-variable/bricolage-grotesque';
+@import '@fontsource-variable/hanken-grotesk';
+@import '@fontsource-variable/jetbrains-mono';
+
+/* ============================================================
+   Orchestration Console — 设计系统
+   暖炭黑基底 · 电光青柠信号 · 状态语义 · 仪表盘密度
+   ============================================================ */
 @theme {
-  --color-bg: oklch(0.16 0.01 260);
-  --color-panel: oklch(0.2 0.012 260);
-  --color-panel-2: oklch(0.24 0.014 260);
-  --color-line: oklch(0.3 0.015 260);
-  --color-ink: oklch(0.88 0.01 260);
-  --color-dim: oklch(0.62 0.015 260);
-  --color-accent: oklch(0.65 0.16 255);
-  --color-ok: oklch(0.72 0.17 150);
-  --color-warn: oklch(0.75 0.15 80);
-  --color-danger: oklch(0.63 0.2 25);
-  --font-sans: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-mono: ui-monospace, 'SF Mono', Consolas, monospace;
+  /* 中性（暖炭黑，极低彩度、微暖 hue 75） */
+  --color-bg: oklch(0.145 0.006 75);
+  --color-bg-2: oklch(0.17 0.006 75);
+  --color-panel: oklch(0.194 0.007 75);
+  --color-panel-2: oklch(0.232 0.008 75);
+  --color-panel-3: oklch(0.27 0.009 75);
+  --color-line: oklch(0.3 0.008 75);
+  --color-line-2: oklch(0.4 0.01 75);
+  --color-ink: oklch(0.95 0.005 75);
+  --color-ink-2: oklch(0.82 0.007 75);
+  --color-dim: oklch(0.66 0.009 75);
+  --color-faint: oklch(0.52 0.008 75);
+
+  /* 品牌/信号：电光青柠 */
+  --color-accent: oklch(0.88 0.185 122);
+  --color-accent-2: oklch(0.82 0.19 128);
+  --color-accent-ink: oklch(0.24 0.06 122);
+
+  /* 状态语义 */
+  --color-ok: oklch(0.76 0.15 158);
+  --color-run: oklch(0.8 0.15 72);
+  --color-warn: oklch(0.82 0.15 85);
+  --color-danger: oklch(0.67 0.21 18);
+  --color-info: oklch(0.73 0.12 235);
+  --color-human: oklch(0.72 0.15 300);
+
+  /* 圆角 */
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+
+  /* 字体 */
+  --font-display: 'Bricolage Grotesque Variable', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-sans: 'Hanken Grotesk Variable', -apple-system, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SF Mono', Consolas, monospace;
+
+  /* 阴影（分层景深） */
+  --shadow-panel: 0 1px 2px oklch(0 0 0 / 0.4), 0 8px 24px -12px oklch(0 0 0 / 0.5);
+  --shadow-pop: 0 4px 12px oklch(0 0 0 / 0.4), 0 16px 40px -12px oklch(0 0 0 / 0.6);
 }
 
 html,
@@ -24,32 +60,121 @@ body,
 
 body {
   @apply bg-bg text-ink font-sans text-sm antialiased;
+  font-feature-settings: 'cv11', 'ss01';
+  /* 氛围：极淡网格 + 顶部青柠辉光 */
+  background-image:
+    radial-gradient(120% 80% at 50% -10%, oklch(0.88 0.185 122 / 0.05), transparent 60%),
+    linear-gradient(to bottom, oklch(0.19 0.007 75 / 0.5), transparent 30%),
+    linear-gradient(oklch(0.3 0.008 75 / 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(0.3 0.008 75 / 0.09) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
+  background-attachment: fixed;
 }
 
-/* 滚动条 */
+/* 细颗粒噪点覆盖层，增质感 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+#root {
+  position: relative;
+  z-index: 1;
+}
+
+::selection {
+  background: oklch(0.88 0.185 122 / 0.28);
+  color: var(--color-ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  @apply rounded bg-line;
+  @apply rounded-full;
+  background: var(--color-line-2);
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }
-::-webkit-scrollbar-track {
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-faint);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-/* markdown 正文排版（时间线气泡内） */
+/* ---------- 复用工具 ---------- */
+@utility surface {
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-lg);
+}
+@utility surface-2 {
+  background: var(--color-panel-2);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+}
+@utility mono-nums {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 活跃指示器心跳 */
+@keyframes live-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 currentColor;
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 4px transparent;
+    opacity: 0.6;
+  }
+}
+.live-dot {
+  animation: live-pulse 1.8s ease-in-out infinite;
+}
+
+/* 页面载入交错上浮 */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise {
+  animation: rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ---------- markdown 正文 ---------- */
 .md {
-  @apply leading-relaxed;
+  @apply leading-relaxed text-ink-2;
 }
 .md > * + * {
-  @apply mt-2;
+  @apply mt-2.5;
 }
 .md h1,
 .md h2,
 .md h3,
 .md h4 {
-  @apply mt-3 font-semibold text-ink;
+  @apply mt-4 font-semibold text-ink;
+  font-family: var(--font-display);
 }
 .md h1 {
   @apply text-lg;
@@ -67,35 +192,38 @@ body {
   @apply mt-1;
 }
 .md code:not(pre code) {
-  @apply rounded bg-panel-2 px-1.5 py-0.5 font-mono text-[0.85em] text-amber-200/90;
+  @apply rounded bg-panel-2 px-1.5 py-0.5 font-mono text-[0.85em];
+  color: var(--color-accent);
 }
 .md pre {
-  @apply my-2 overflow-x-auto rounded-lg border border-line bg-[#0d1117] p-3 font-mono text-[13px] leading-relaxed;
+  @apply my-3 overflow-x-auto rounded-lg border border-line p-3.5 font-mono text-[13px] leading-relaxed;
+  background: oklch(0.13 0.006 75);
 }
 .md pre.shiki {
-  background: #0d1117 !important;
+  background: oklch(0.13 0.006 75) !important;
 }
 .md blockquote {
-  @apply border-l-2 border-line pl-3 text-dim;
+  @apply border-l-2 pl-3 text-dim;
+  border-color: var(--color-accent);
 }
 .md table {
-  @apply my-2 w-full border-collapse text-[13px];
+  @apply my-3 w-full border-collapse text-[13px];
 }
 .md th,
 .md td {
-  @apply border border-line px-2 py-1 text-left;
+  @apply border border-line px-2.5 py-1.5 text-left;
 }
 .md th {
-  @apply bg-panel-2 font-medium;
+  @apply bg-panel-2 font-medium text-ink;
 }
 .md a {
-  @apply text-accent underline underline-offset-2;
+  @apply underline decoration-1 underline-offset-2;
+  color: var(--color-accent);
 }
 .md hr {
   @apply border-line;
 }
 
-/* React Flow 暗色适配 */
 .react-flow__attribution {
   display: none;
 }

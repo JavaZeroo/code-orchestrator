@@ -8,12 +8,12 @@ const NODE_W = 190;
 const NODE_H = 54;
 
 const STATUS_COLOR: Record<string, string> = {
-  pending: '#3a4048',
-  running: '#4f8cff',
-  waiting_human: '#d29922',
-  done: '#3fb950',
-  failed: '#f85149',
-  skipped: '#555',
+  pending: 'var(--color-line-2)',
+  running: 'var(--color-run)',
+  waiting_human: 'var(--color-human)',
+  done: 'var(--color-ok)',
+  failed: 'var(--color-danger)',
+  skipped: 'var(--color-faint)',
 };
 
 const TYPE_ICON: Record<string, string> = {
@@ -55,12 +55,16 @@ export function FlowGraph({ def, statuses, onNodeClick }: Props) {
         },
         style: {
           width: NODE_W,
-          background: '#171a21',
-          color: '#d7dce4',
-          border: `2px solid ${border}`,
-          borderRadius: 8,
+          background: 'var(--color-panel-2)',
+          color: 'var(--color-ink)',
+          border: `1.5px solid ${border}`,
+          borderRadius: 10,
           fontSize: 13,
-          ...(status === 'running' ? { boxShadow: `0 0 12px ${border}66` } : {}),
+          fontWeight: 500,
+          boxShadow:
+            status === 'running'
+              ? `0 0 0 3px color-mix(in oklch, ${border} 22%, transparent), var(--shadow-panel)`
+              : 'var(--shadow-panel)',
         },
       };
     });
@@ -69,7 +73,7 @@ export function FlowGraph({ def, statuses, onNodeClick }: Props) {
       source: from,
       target: to,
       animated: (statuses?.[to] ?? '') === 'running',
-      style: { stroke: '#3a4048' },
+      style: { stroke: 'var(--color-line-2)', strokeWidth: 1.5 },
     }));
     return { nodes, edges };
   }, [def, statuses]);
@@ -85,7 +89,7 @@ export function FlowGraph({ def, statuses, onNodeClick }: Props) {
       proOptions={{ hideAttribution: true }}
       onNodeClick={(_, node) => onNodeClick?.(node.id)}
     >
-      <Background gap={20} color="#20242c" />
+      <Background gap={22} color="var(--color-line)" />
     </ReactFlow>
   );
 }

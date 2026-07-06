@@ -34,8 +34,8 @@ function DraftPane({ sessionId, onSaved }: { sessionId: string; onSaved: (id: st
 
   return (
     <div className="flex w-[46%] flex-col overflow-hidden">
-      <header className="flex items-center justify-between border-b border-line bg-panel px-4 py-2.5">
-        <b>工作流草图</b>
+      <header className="flex items-center justify-between border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
+        <b className="font-display text-[14px] font-semibold text-ink">工作流草图</b>
         <Button variant="default" size="sm" disabled={!draft || saving} onClick={save}>
           <Save size={13} /> {saving ? '保存中…' : '保存为工作流'}
         </Button>
@@ -85,12 +85,12 @@ export function Designer({ onSaved, onBack }: { onSaved: (workflowId: string) =>
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <header className="flex items-center gap-3 border-b border-line bg-panel px-4 py-2.5">
+      <header className="flex items-center gap-3 border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft size={14} /> 返回
         </Button>
-        <b>对话式搭建工作流</b>
-        <span className="text-xs text-dim">描述流程 → 实时出图 → 确认保存</span>
+        <b className="font-display text-[14px] font-semibold text-ink">对话式搭建工作流</b>
+        <span className="hidden text-xs text-faint sm:inline">描述流程 → 实时出图 → 确认保存</span>
       </header>
       {error && <div className="m-4 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div>}
       {session ? (

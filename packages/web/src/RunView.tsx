@@ -5,19 +5,19 @@ import { api, type ApprovalRow, type NodeStateRow, type RunRow, type WorkflowDef
 import { FlowGraph } from './FlowGraph';
 import { Markdown } from './components/Markdown';
 import { Button } from './components/ui/button';
-import { Badge } from './components/ui/primitives';
+import { Badge, StatusDot, type BadgeTone } from './components/ui/primitives';
 
-const RUN_META: Record<string, { label: string; tone: 'accent' | 'warn' | 'ok' | 'danger' | 'neutral' }> = {
-  running: { label: '运行中', tone: 'accent' },
-  waiting_human: { label: '等待审批', tone: 'warn' },
+const RUN_META: Record<string, { label: string; tone: BadgeTone; live?: boolean }> = {
+  running: { label: '运行中', tone: 'run', live: true },
+  waiting_human: { label: '等待审批', tone: 'human' },
   done: { label: '已完成', tone: 'ok' },
   failed: { label: '失败', tone: 'danger' },
   cancelled: { label: '已取消', tone: 'neutral' },
 };
 
-const NODE_TONE: Record<string, 'accent' | 'warn' | 'ok' | 'danger' | 'neutral'> = {
-  running: 'accent',
-  waiting_human: 'warn',
+const NODE_TONE: Record<string, BadgeTone> = {
+  running: 'run',
+  waiting_human: 'human',
   done: 'ok',
   failed: 'danger',
   pending: 'neutral',
@@ -60,32 +60,35 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <header className="flex items-center justify-between border-b border-line bg-panel px-4 py-2.5">
-        <div className="flex items-center gap-3">
+      <header className="flex items-center justify-between gap-3 border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
+        <div className="flex min-w-0 items-center gap-2.5">
           <Button variant="ghost" size="sm" onClick={onBack}>
             <ArrowLeft size={14} /> 返回
           </Button>
-          <b>{def?.name ?? runId}</b>
-          <span className="text-xs text-dim">run {runId.slice(0, 8)}</span>
+          <span className="truncate font-display text-[14px] font-semibold text-ink">{def?.name ?? runId}</span>
+          <span className="mono-nums text-[11px] text-faint">run {runId.slice(0, 8)}</span>
         </div>
-        <Badge tone={runMeta.tone}>{runMeta.label}</Badge>
+        <div className="flex shrink-0 items-center gap-2">
+          <StatusDot tone={runMeta.tone} live={runMeta.live} />
+          <Badge tone={runMeta.tone}>{runMeta.label}</Badge>
+        </div>
       </header>
       <div className="flex flex-1 overflow-hidden">
         <div className="min-h-72 flex-1">
           {def && <FlowGraph def={def.graph} statuses={statuses} onNodeClick={setSelected} />}
         </div>
         {selected && selNode && (
-          <div className="flex w-96 shrink-0 flex-col gap-3 overflow-y-auto border-l border-line bg-panel p-4">
-            <div className="flex items-center gap-2">
-              <h3 className="font-semibold">{selNode.title ?? selNode.id}</h3>
-              <span className="text-xs text-dim">({selNode.type})</span>
-              {selState?.model && <span className="rounded bg-panel-2 px-1 py-0.5 font-mono text-xs text-dim">{selState.model}</span>}
+          <div className="flex w-96 shrink-0 flex-col gap-3 overflow-y-auto border-l border-line bg-bg-2/40 p-4 backdrop-blur-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-display font-semibold text-ink">{selNode.title ?? selNode.id}</h3>
+              <span className="text-[11px] text-faint">({selNode.type})</span>
+              {selState?.model && <span className="mono-nums rounded bg-panel-2 px-1.5 py-0.5 text-[10px] text-accent/80">{selState.model}</span>}
               {selState && <Badge tone={NODE_TONE[selState.status] ?? 'neutral'}>{selState.status}</Badge>}
             </div>
             {selNode.type === 'agent' && (
               <div>
-                <div className="mb-1 text-xs text-dim">prompt</div>
-                <pre className="max-h-40 overflow-auto rounded-md border border-line bg-[#0d1117] p-2 font-mono text-xs whitespace-pre-wrap">
+                <div className="mb-1 text-[11px] font-medium tracking-wide text-dim uppercase">prompt</div>
+                <pre className="max-h-40 overflow-auto rounded-lg border border-line bg-bg p-2.5 font-mono text-xs whitespace-pre-wrap text-ink-2">
                   {selNode.prompt}
                 </pre>
               </div>

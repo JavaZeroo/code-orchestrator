@@ -1,4 +1,4 @@
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, GitPullRequest, ShieldCheck, Workflow } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type LlmEndpointRow } from './api';
@@ -76,6 +76,26 @@ export const authApi = {
     fetch('/api/lark/test', { method: 'POST' }).then((r) => jauth<{ ok: boolean; code?: number; msg?: string }>(r)),
 };
 
+function AuthMark() {
+  return (
+    <svg viewBox="0 0 44 44" className="size-11" fill="none" aria-hidden>
+      <rect x="1" y="1" width="42" height="42" rx="12" fill="var(--color-accent)" opacity="0.14" />
+      <rect x="1.5" y="1.5" width="41" height="41" rx="11.5" stroke="var(--color-accent)" strokeOpacity="0.5" />
+      <circle cx="22" cy="22" r="12.5" stroke="var(--color-accent)" strokeWidth="1.7" strokeDasharray="3.5 3.5" opacity="0.8" />
+      <circle cx="22" cy="22" r="4.4" fill="var(--color-accent)" />
+      <circle cx="22" cy="9.5" r="2.6" fill="var(--color-accent)" />
+      <circle cx="33" cy="28" r="2.2" fill="var(--color-ink)" opacity="0.55" />
+      <circle cx="11" cy="28" r="2.2" fill="var(--color-ink)" opacity="0.55" />
+    </svg>
+  );
+}
+
+const PITCH: { icon: typeof Workflow; text: string }[] = [
+  { icon: Workflow, text: 'PM 规划' },
+  { icon: GitPullRequest, text: 'Agent 落地' },
+  { icon: ShieldCheck, text: '你审合入' },
+];
+
 export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [name, setName] = useState('');
@@ -96,33 +116,65 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
   };
 
   return (
-    <div className="flex h-full items-center justify-center">
-      <div className="flex w-80 flex-col gap-3 rounded-xl border border-line bg-panel p-7">
-        <h2 className="text-center text-lg font-semibold">code-orchestrator</h2>
-        <div className="flex gap-1 rounded-lg bg-bg p-1">
-          {(['signin', 'signup'] as const).map((m) => (
-            <button
-              key={m}
-              className={cn('flex-1 rounded-md py-1.5 text-sm transition-colors', mode === m ? 'bg-panel-2 text-ink' : 'text-dim')}
-              onClick={() => setMode(m)}
-            >
-              {m === 'signin' ? '登录' : '注册'}
-            </button>
+    <div className="flex h-full items-center justify-center p-6">
+      <div className="rise flex w-full max-w-sm flex-col items-center gap-6">
+        {/* 品牌 */}
+        <div className="flex flex-col items-center gap-3 text-center">
+          <AuthMark />
+          <div>
+            <h1 className="font-display text-2xl font-semibold tracking-tight text-ink">orchestrator</h1>
+            <p className="mt-1 text-[13px] text-dim">自主软件开发编排台</p>
+          </div>
+        </div>
+
+        {/* 表单卡 */}
+        <div className="w-full surface rounded-2xl p-6 shadow-[var(--shadow-panel)]">
+          <div className="mb-4 flex gap-1 rounded-xl border border-line bg-bg-2/60 p-1">
+            {(['signin', 'signup'] as const).map((m) => (
+              <button
+                key={m}
+                className={cn(
+                  'flex-1 rounded-lg py-1.5 text-[13px] font-medium transition-all',
+                  mode === m ? 'bg-panel-3 text-ink shadow-[var(--shadow-panel)]' : 'text-dim hover:text-ink-2',
+                )}
+                onClick={() => {
+                  setMode(m);
+                  setError(null);
+                }}
+              >
+                {m === 'signin' ? '登录' : '注册'}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-col gap-2.5">
+            {mode === 'signup' && <Input placeholder="姓名" value={name} onChange={(e) => setName(e.target.value)} />}
+            <Input placeholder="邮箱" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <Input
+              placeholder="密码（至少 8 位）"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && submit()}
+            />
+            {error && (
+              <div className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</div>
+            )}
+            <Button variant="default" className="mt-1" disabled={busy || !email || password.length < 8} onClick={submit}>
+              {busy ? '…' : mode === 'signin' ? '登录' : '注册并登录'}
+            </Button>
+          </div>
+        </div>
+
+        {/* 定位条 */}
+        <div className="flex items-center gap-1.5 text-[11px] text-faint">
+          {PITCH.map((p, i) => (
+            <span key={p.text} className="flex items-center gap-1.5">
+              {i > 0 && <span className="text-line-2">·</span>}
+              <p.icon size={12} className="text-accent/70" />
+              {p.text}
+            </span>
           ))}
         </div>
-        {mode === 'signup' && <Input placeholder="姓名" value={name} onChange={(e) => setName(e.target.value)} />}
-        <Input placeholder="邮箱" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <Input
-          placeholder="密码（至少 8 位）"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && submit()}
-        />
-        {error && <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs text-danger">{error}</div>}
-        <Button variant="default" disabled={busy || !email || password.length < 8} onClick={submit}>
-          {busy ? '…' : mode === 'signin' ? '登录' : '注册并登录'}
-        </Button>
       </div>
     </div>
   );

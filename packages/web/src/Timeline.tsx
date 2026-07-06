@@ -46,7 +46,7 @@ function ToolCard({ tool }: { tool: ToolCall }) {
               完成
             </Badge>
           ) : (
-            <Badge tone="accent" className="!py-0">
+            <Badge tone="run" className="!py-0">
               运行中
             </Badge>
           )}
@@ -57,7 +57,7 @@ function ToolCard({ tool }: { tool: ToolCall }) {
           {isEdit && typeof tool.args.old_string === 'string' && typeof tool.args.new_string === 'string' ? (
             <TextDiff oldText={tool.args.old_string} newText={tool.args.new_string} />
           ) : isWrite && typeof tool.args.content === 'string' ? (
-            <pre className="max-h-72 overflow-auto rounded-md border border-line bg-[#0d1117] p-2 font-mono text-xs">
+            <pre className="max-h-72 overflow-auto rounded-md border border-line bg-bg p-2 font-mono text-xs text-ink-2">
               {tool.args.content}
             </pre>
           ) : (
@@ -89,7 +89,7 @@ function ApprovalCard({ item, onDecide }: { item: ApprovalItem; onDecide: (id: s
         {status === 'approved' && <Badge tone="ok">已批准</Badge>}
         {status === 'denied' && <Badge tone="danger">已拒绝</Badge>}
       </div>
-      <pre className="mb-2 max-h-52 overflow-auto rounded-md border border-line bg-[#0d1117] p-2 font-mono text-xs text-dim">
+      <pre className="mb-2 max-h-52 overflow-auto rounded-md border border-line bg-bg p-2 font-mono text-xs text-dim">
         {JSON.stringify(input, null, 2)}
       </pre>
       {status === 'pending' && (

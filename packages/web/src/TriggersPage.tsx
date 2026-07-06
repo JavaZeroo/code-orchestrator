@@ -3,7 +3,7 @@
  * 并展示需求列表（命中 issue → run 追溯）。最初愿景的入口。
  */
 
-import { ExternalLink, Play, Plus, RefreshCw, Trash2, Zap } from 'lucide-react';
+import { ExternalLink, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import type { CreateTriggerBody, ForgeKind, RequirementRow, TriggerRow } from './api';
@@ -259,12 +259,12 @@ export function TriggersPage({ me, onOpenRun }: { me: Me; onOpenRun: (runId: str
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 overflow-y-auto p-5">
-      <div className="flex items-center gap-2">
-        <Zap size={18} className="text-accent" />
-        <h2 className="text-lg font-semibold">需求录入触发器</h2>
-        <p className="text-xs text-dim">issue 进来 → 自动起工作流</p>
-        <Button variant="secondary" size="sm" className="ml-auto" disabled={polling} onClick={pollNow}>
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 overflow-y-auto p-6">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-dim">
+          某个 forge 仓库的 issue 满足条件 → <span className="text-ink-2">自动起工作流</span>，命中记录可追溯到运行。
+        </p>
+        <Button variant="secondary" size="sm" className="shrink-0" disabled={polling} onClick={pollNow}>
           <RefreshCw size={13} className={cn(polling && 'animate-spin')} /> 立即轮询
         </Button>
       </div>

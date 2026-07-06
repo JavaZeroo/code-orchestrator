@@ -1,80 +1,106 @@
 /**
- * Agent 工作看板页（#18）：三栏展示进行中/等我处理/最近完成。
- * 数据来自现有接口 GET /api/sessions、GET /api/runs、GET /api/approvals?status=pending。
+ * 看板：仪表盘式总览。顶部 KPI 读数条 + 三栏(进行中/等我处理/最近完成)。
+ * 数据来自 GET /api/sessions、/api/runs、/api/approvals?status=pending。
  */
 
-import { Badge, Card, Spinner } from './components/ui/primitives';
+import { Activity, ArrowRight, CheckCircle2, type LucideIcon, GitPullRequest, Workflow as WorkflowIcon } from 'lucide-react';
+import { Badge, Card, Spinner, StatusDot } from './components/ui/primitives';
 import { useApprovals, useRuns, useSessions, useWorkflows } from './lib/queries';
 import { cn, relTime } from './lib/utils';
 
-const RUN_TONE: Record<string, 'accent' | 'warn' | 'ok' | 'danger' | 'neutral'> = {
-  running: 'accent',
-  waiting_human: 'warn',
+const RUN_TONE: Record<string, 'accent' | 'run' | 'ok' | 'danger' | 'neutral' | 'human'> = {
+  running: 'run',
+  waiting_human: 'human',
   done: 'ok',
   failed: 'danger',
   cancelled: 'neutral',
 };
+const RUN_LABEL: Record<string, string> = { running: '运行中', waiting_human: '待处理', done: '完成', failed: '失败', cancelled: '取消' };
 
-/** 从 ISO 字符串计算已过去时长（用于"进行中"条目的耗时显示） */
 function elapsed(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const sec = Math.floor(diff / 1000);
+  const sec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
   if (sec < 60) return `${sec}秒`;
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}分钟`;
-  const h = Math.floor(min / 60);
-  const m = min % 60;
-  return `${h}小时${m}分钟`;
+  if (min < 60) return `${min}分`;
+  return `${Math.floor(min / 60)}时${min % 60}分`;
 }
 
-export function Dashboard({
-  onOpenSession,
-  onOpenRun,
-}: {
-  onOpenSession: (id: string) => void;
-  onOpenRun: (runId: string) => void;
-}) {
-  const { data: sessions = [], isLoading: sessionsLoading } = useSessions();
-  const { data: runs = [], isLoading: runsLoading } = useRuns();
-  const { data: approvals = [], isLoading: approvalsLoading } = useApprovals();
+function Stat({ icon: Icon, label, value, tone, live }: { icon: LucideIcon; label: string; value: number; tone: string; live?: boolean }) {
+  const toneCls: Record<string, string> = {
+    accent: 'text-accent border-accent/25 bg-accent/5',
+    run: 'text-run border-run/25 bg-run/5',
+    human: 'text-human border-human/25 bg-human/5',
+    ok: 'text-ok border-ok/25 bg-ok/5',
+    neutral: 'text-dim border-line bg-panel-2',
+  };
+  return (
+    <Card className={cn('relative flex items-center gap-3.5 overflow-hidden p-4', value > 0 && tone === 'human' && 'ring-1 ring-human/30')}>
+      <div className={cn('flex size-10 shrink-0 items-center justify-center rounded-xl border', toneCls[tone] ?? toneCls.neutral)}>
+        <Icon size={18} />
+      </div>
+      <div className="min-w-0">
+        <div className="flex items-baseline gap-1.5">
+          <span className="font-display text-2xl leading-none font-semibold tracking-tight text-ink tabular-nums">{value}</span>
+          {live && value > 0 && <StatusDot tone={tone} live className="mb-0.5" />}
+        </div>
+        <div className="mt-1 text-[11px] font-medium tracking-wide text-dim">{label}</div>
+      </div>
+    </Card>
+  );
+}
+
+function Lane({ title, tone, count, children }: { title: string; tone: string; count: number; children: React.ReactNode }) {
+  return (
+    <section className="flex min-w-0 flex-1 flex-col gap-2.5">
+      <div className="flex items-center gap-2 px-0.5">
+        <StatusDot tone={tone} live={tone === 'run' && count > 0} />
+        <h3 className="text-[13px] font-semibold text-ink-2">{title}</h3>
+        <span className="mono-nums rounded-full bg-panel-2 px-1.5 text-[11px] text-dim">{count}</span>
+      </div>
+      <div className="flex flex-col gap-2">{children}</div>
+    </section>
+  );
+}
+
+function RowCard({ onClick, dot, live, title, meta, right }: { onClick?: () => void; dot: string; live?: boolean; title: string; meta: React.ReactNode; right?: React.ReactNode }) {
+  return (
+    <Card
+      onClick={onClick}
+      className={cn('group flex items-center gap-2.5 p-2.5 transition-all', onClick && 'cursor-pointer hover:border-line-2 hover:bg-panel-2')}
+    >
+      <StatusDot tone={dot} live={live} className="mt-px" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] font-medium text-ink-2">{title}</div>
+        <div className="mono-nums mt-0.5 flex flex-wrap items-center gap-x-2 text-[10.5px] text-faint">{meta}</div>
+      </div>
+      {right}
+      {onClick && <ArrowRight size={13} className="shrink-0 text-faint opacity-0 transition-opacity group-hover:opacity-100" />}
+    </Card>
+  );
+}
+
+export function Dashboard({ onOpenSession, onOpenRun }: { onOpenSession: (id: string) => void; onOpenRun: (runId: string) => void }) {
+  const { data: sessions = [], isLoading: sl } = useSessions();
+  const { data: runs = [], isLoading: rl } = useRuns();
+  const { data: approvals = [], isLoading: al } = useApprovals();
   const { data: defs = [] } = useWorkflows();
 
-  const loading = sessionsLoading || runsLoading || approvalsLoading;
-
-  // 进行中：正 active 的会话
-  const activeSessions = sessions.filter(
-    (s) => s.state === 'thinking' || s.state === 'starting',
-  );
-
-  // 根据 runId 查找工作流名称
   const runMap = new Map(runs.map((r) => [r.id, r]));
   const defMap = new Map(defs.map((d) => [d.id, d]));
-  const runName = (runId: string | null) => {
-    if (!runId) return null;
-    const run = runMap.get(runId);
-    if (!run) return null;
-    return defMap.get(run.defId)?.name ?? run.defId.slice(0, 8);
-  };
+  const runName = (runId: string | null) => (runId ? defMap.get(runMap.get(runId)?.defId ?? '')?.name ?? null : null);
 
-  // 等我处理：待审批的会话 + pending 审批（API 已过滤 status=pending）
+  const activeSessions = sessions.filter((s) => s.state === 'thinking' || s.state === 'starting');
   const waitingSessions = sessions.filter((s) => s.state === 'waiting_approval');
-  const pendingApprovals = approvals;
+  const activeRuns = runs.filter((r) => r.status === 'running' || r.status === 'waiting_human');
+  const doneRuns = runs.filter((r) => r.status === 'done');
+  const waitingCount = waitingSessions.length + approvals.length;
 
-  // 最近完成：done/failed/cancelled run + idle 会话，均按时间排序取前 N
   const recentRuns = runs
     .filter((r) => r.status === 'done' || r.status === 'failed' || r.status === 'cancelled')
-    .sort(
-      (a, b) =>
-        new Date(b.endedAt ?? b.startedAt).getTime() -
-        new Date(a.endedAt ?? a.startedAt).getTime(),
-    )
-    .slice(0, 10);
-  const idleSessions = sessions
-    .filter((s) => s.state === 'idle')
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .slice(0, 10);
+    .sort((a, b) => new Date(b.endedAt ?? b.startedAt).getTime() - new Date(a.endedAt ?? a.startedAt).getTime())
+    .slice(0, 8);
 
-  if (loading) {
+  if (sl || rl || al) {
     return (
       <div className="flex flex-1 items-center justify-center gap-2 text-dim">
         <Spinner /> 加载中…
@@ -83,166 +109,80 @@ export function Dashboard({
   }
 
   return (
-    <div className="flex flex-1 gap-4 overflow-y-auto p-6">
-      {/* ──── 进行中 ──── */}
-      <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <h3 className="flex items-center gap-2 text-sm font-semibold">
-          进行中
-          {activeSessions.length > 0 && (
-            <span className="rounded-full bg-accent/15 px-1.5 py-0.5 text-xs text-accent">
-              {activeSessions.length}
-            </span>
-          )}
-        </h3>
-
-        {activeSessions.length === 0 && (
-          <p className="text-sm text-dim">暂无进行中的会话。</p>
-        )}
-
-        {activeSessions.map((s) => (
-          <Card
-            key={s.id}
-            className="cursor-pointer p-3 hover:bg-panel-2"
-            onClick={() => onOpenSession(s.id)}
-          >
-            <div className="flex items-center gap-2">
-              <span className="size-2 shrink-0 rounded-full bg-accent animate-pulse" />
-              <span className="truncate text-sm font-medium">
-                {s.cwd.split('/').pop() || s.cwd}
-              </span>
-            </div>
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-dim">
-              <span>{s.model ?? 'claude'}</span>
-              {runName(s.runId) && <span>· {runName(s.runId)}</span>}
-              {s.nodeId && <span>· {s.nodeId}</span>}
-              <span>· {elapsed(s.createdAt)}</span>
-            </div>
-          </Card>
-        ))}
+    <div className="flex flex-1 flex-col gap-5 overflow-y-auto p-6">
+      {/* KPI 读数条 */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat icon={Activity} label="进行中 Agent" value={activeSessions.length} tone="run" live />
+        <Stat icon={GitPullRequest} label="等我处理" value={waitingCount} tone="human" />
+        <Stat icon={WorkflowIcon} label="活跃工作流" value={activeRuns.length} tone="accent" />
+        <Stat icon={CheckCircle2} label="已完成" value={doneRuns.length} tone="ok" />
       </div>
 
-      {/* ──── 等我处理 ──── */}
-      <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-warn">
-          等我处理
-          {(waitingSessions.length + pendingApprovals.length) > 0 && (
-            <span className="rounded-full bg-warn/15 px-1.5 py-0.5 text-xs text-warn">
-              {waitingSessions.length + pendingApprovals.length}
-            </span>
-          )}
-        </h3>
+      {/* 三栏看板 */}
+      <div className="flex flex-1 flex-col gap-5 lg:flex-row">
+        <Lane title="进行中" tone="run" count={activeSessions.length}>
+          {activeSessions.length === 0 && <p className="px-1 py-4 text-xs text-faint">暂无进行中的会话</p>}
+          {activeSessions.map((s) => (
+            <RowCard
+              key={s.id}
+              onClick={() => onOpenSession(s.id)}
+              dot="run"
+              live
+              title={s.cwd.split('/').pop() || s.cwd}
+              meta={
+                <>
+                  <span className="text-accent/80">{s.model ?? 'claude'}</span>
+                  {runName(s.runId) && <span>· {runName(s.runId)}</span>}
+                  {s.nodeId && <span>· {s.nodeId}</span>}
+                  <span>· {elapsed(s.createdAt)}</span>
+                </>
+              }
+            />
+          ))}
+        </Lane>
 
-        {waitingSessions.length === 0 && pendingApprovals.length === 0 && (
-          <p className="text-sm text-dim">暂无待处理项。</p>
-        )}
+        <Lane title="等我处理" tone="human" count={waitingCount}>
+          {waitingCount === 0 && <p className="px-1 py-4 text-xs text-faint">没有待你处理的项 ✓</p>}
+          {approvals.map((a) => (
+            <RowCard
+              key={a.id}
+              onClick={() => (a.sessionId ? onOpenSession(a.sessionId) : a.runId ? onOpenRun(a.runId) : undefined)}
+              dot="human"
+              title={a.title}
+              meta={
+                <>
+                  {a.runId && <span>run {a.runId.slice(0, 8)}</span>}
+                  {a.nodeId && <span>· {a.nodeId}</span>}
+                </>
+              }
+              right={<Badge tone={a.kind === 'gate' ? 'human' : 'warn'}>{a.kind === 'gate' ? '合并门' : '审批'}</Badge>}
+            />
+          ))}
+          {waitingSessions.map((s) => (
+            <RowCard
+              key={s.id}
+              onClick={() => onOpenSession(s.id)}
+              dot="human"
+              title={s.cwd.split('/').pop() || s.cwd}
+              meta={<span>{s.model ?? 'claude'} · {elapsed(s.createdAt)}</span>}
+              right={<Badge tone="warn">工具审批</Badge>}
+            />
+          ))}
+        </Lane>
 
-        {/* 待审批项 */}
-        {pendingApprovals.map((a) => (
-          <Card
-            key={a.id}
-            className={cn(
-              'cursor-pointer border-warn/40 p-3 hover:bg-panel-2',
-              a.kind === 'gate' && 'border-accent/40',
-            )}
-            onClick={() => {
-              if (a.sessionId) onOpenSession(a.sessionId);
-              else if (a.runId) onOpenRun(a.runId);
-            }}
-          >
-            <div className="flex items-center gap-2">
-              <Badge tone={a.kind === 'gate' ? 'accent' : 'warn'}>
-                {a.kind === 'gate' ? '门禁' : '审批'}
-              </Badge>
-              <span className="truncate text-sm">{a.title}</span>
-            </div>
-            <div className="mt-1 text-xs text-dim">
-              {a.sessionId && <span>会话 {a.sessionId.slice(0, 8)}</span>}
-              {a.runId && <span>运行 {a.runId.slice(0, 8)}</span>}
-              {a.nodeId && <span> · 节点 {a.nodeId}</span>}
-            </div>
-          </Card>
-        ))}
-
-        {/* waiting_approval 的会话 */}
-        {waitingSessions.map((s) => (
-          <Card
-            key={s.id}
-            className="cursor-pointer border-warn/40 p-3 hover:bg-panel-2"
-            onClick={() => onOpenSession(s.id)}
-          >
-            <div className="flex items-center gap-2">
-              <span className="size-2 shrink-0 rounded-full bg-warn" />
-              <span className="truncate text-sm font-medium">
-                {s.cwd.split('/').pop() || s.cwd}
-              </span>
-            </div>
-            <div className="mt-1 text-xs text-dim">
-              <span>{s.model ?? 'claude'}</span>
-              <span> · {elapsed(s.createdAt)}</span>
-              {s.runId && <span> · 工作流</span>}
-            </div>
-          </Card>
-        ))}
-      </div>
-
-      {/* ──── 最近完成 ──── */}
-      <div className="flex min-w-0 flex-1 flex-col gap-3">
-        <h3 className="flex items-center gap-2 text-sm font-semibold">
-          最近完成
-          {(recentRuns.length + idleSessions.length) > 0 && (
-            <span className="rounded-full bg-dim/15 px-1.5 py-0.5 text-xs text-dim">
-              {recentRuns.length + idleSessions.length}
-            </span>
-          )}
-        </h3>
-
-        {recentRuns.length === 0 && idleSessions.length === 0 && (
-          <p className="text-sm text-dim">暂无已完成项。</p>
-        )}
-
-        {/* 最近结束的 run */}
-        {recentRuns.map((r) => (
-          <Card
-            key={r.id}
-            className="cursor-pointer p-3 hover:bg-panel-2"
-            onClick={() => onOpenRun(r.id)}
-          >
-            <div className="flex items-center gap-2">
-              <Badge tone={RUN_TONE[r.status] ?? 'neutral'}>{r.status}</Badge>
-              <span className="truncate text-sm">
-                {defs.find((d) => d.id === r.defId)?.name ?? r.defId.slice(0, 8)}
-              </span>
-            </div>
-            <div className="mt-1 text-xs text-dim">
-              {r.endedAt ? relTime(r.endedAt) : relTime(r.startedAt)}
-            </div>
-          </Card>
-        ))}
-
-        {/* 列表分隔 */}
-        {recentRuns.length > 0 && idleSessions.length > 0 && (
-          <hr className="border-line/60" />
-        )}
-
-        {/* idle 会话 */}
-        {idleSessions.map((s) => (
-          <Card
-            key={s.id}
-            className="cursor-pointer p-3 hover:bg-panel-2"
-            onClick={() => onOpenSession(s.id)}
-          >
-            <div className="flex items-center gap-2">
-              <span className="size-2 shrink-0 rounded-full bg-ok" />
-              <span className="truncate text-sm font-medium">
-                {s.cwd.split('/').pop() || s.cwd}
-              </span>
-            </div>
-            <div className="mt-1 text-xs text-dim">
-              <span>{s.model ?? 'claude'}</span>
-              <span> · {relTime(s.createdAt)}</span>
-            </div>
-          </Card>
-        ))}
+        <Lane title="最近完成" tone="ok" count={recentRuns.length}>
+          {recentRuns.length === 0 && <p className="px-1 py-4 text-xs text-faint">暂无已完成项</p>}
+          {recentRuns.map((r) => (
+            <RowCard
+              key={r.id}
+              onClick={() => onOpenRun(r.id)}
+              dot={RUN_TONE[r.status] ?? 'neutral'}
+              title={defs.find((d) => d.id === r.defId)?.name ?? r.defId.slice(0, 8)}
+              meta={<span>{relTime(r.endedAt ?? r.startedAt)}</span>}
+              right={<Badge tone={RUN_TONE[r.status] ?? 'neutral'}>{RUN_LABEL[r.status] ?? r.status}</Badge>}
+            />
+          ))}
+        </Lane>
       </div>
     </div>
   );

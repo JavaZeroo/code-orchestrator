@@ -27,4 +27,9 @@ export const useRequirements = () =>
 export const useApprovals = () =>
   useQuery({ queryKey: ['approvals'], queryFn: api.pendingApprovals, refetchInterval: 8_000 });
 
+export const useProjects = () =>
+  useQuery({ queryKey: ['projects'], queryFn: api.projects, refetchInterval: 20_000 });
+
+export const useWork = () => useQuery({ queryKey: ['work'], queryFn: api.work, refetchInterval: 8_000 });
+
 export const invalidate = (key: string) => void queryClient.invalidateQueries({ queryKey: [key] });

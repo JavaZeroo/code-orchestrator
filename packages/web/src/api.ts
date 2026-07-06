@@ -122,6 +122,36 @@ export interface RequirementRow {
   createdAt: string;
 }
 
+export type Autonomy = 'manual' | 'agent' | 'auto';
+export interface ProjectRow {
+  id: string;
+  name: string;
+  forge: ForgeKind;
+  repo: string;
+  autonomy: Autonomy;
+  guardrails: string[];
+  defaultDefId: string | null;
+  models: Record<string, string>;
+  vars: Record<string, string>;
+  createdAt: string;
+}
+
+export interface WorkItem {
+  id: string;
+  key: string;
+  type: string;
+  parentId: string | null;
+  title: string | null;
+  status: string;
+  owner: string | null;
+  refs: Record<string, unknown>;
+  meta: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  endedAt: string | null;
+  children: WorkItem[];
+}
+
 async function j<T>(r: Response): Promise<T> {
   if (r.status === 401) {
     window.dispatchEvent(new Event('co:unauthorized'));
@@ -189,4 +219,10 @@ export const api = {
     }).then((r) => j<{ ok: boolean; label: string }>(r)),
   deleteEndpoint: (label: string) =>
     fetch(`/api/llm/endpoints/${encodeURIComponent(label)}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
+  projects: () => fetch('/api/projects').then((r) => j<{ projects: ProjectRow[] }>(r)).then((d) => d.projects),
+  createProject: (body: Partial<ProjectRow>) => post('/api/projects', body).then((r) => j<{ id: string }>(r)),
+  patchProject: (id: string, patch: Partial<ProjectRow>) =>
+    fetch(`/api/projects/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
+  deleteProject: (id: string) => fetch(`/api/projects/${id}`, { method: 'DELETE' }).then((r) => j(r)),
+  work: () => fetch('/api/work?limit=400').then((r) => j<{ tree: WorkItem[]; count: number }>(r)),
 };

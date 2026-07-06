@@ -234,9 +234,9 @@ export function NotificationBell({
         )}
       </Button>
       {open && (
-        <div className="absolute top-full right-0 z-50 mt-1.5 w-80 overflow-hidden rounded-lg border border-line bg-panel shadow-lg">
-          <div className="flex items-center justify-between border-b border-line px-3 py-2">
-            <span className="text-sm font-medium">通知</span>
+        <div className="surface absolute top-full right-0 z-50 mt-2 w-80 overflow-hidden shadow-[var(--shadow-pop)]">
+          <div className="flex items-center justify-between border-b border-line bg-bg-2/40 px-3 py-2">
+            <span className="font-display text-[13px] font-semibold text-ink">通知</span>
             {items.length > 0 && (
               <button className="cursor-pointer text-xs text-dim transition-colors hover:text-ink" onClick={() => setItems([])}>
                 清空
