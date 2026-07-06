@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
@@ -41,7 +41,11 @@ if (authEnabled) {
   app.log.warn('AUTH_SECRET 或 DATABASE_URL 未配置——API 未鉴权运行（仅限开发骨架）');
 }
 
-app.get('/health', async () => ({ ok: true, db: hasDb(), auth: authEnabled, time: Date.now() }));
+const { version } = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../package.json'), 'utf8'),
+) as { version: string };
+
+app.get('/health', async () => ({ ok: true, db: hasDb(), auth: authEnabled, time: Date.now(), version }));
 
 app.get('/api/machines', async () => ({ machines: listMachines() }));
 
