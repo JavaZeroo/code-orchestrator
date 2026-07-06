@@ -809,7 +809,7 @@ async function loadAgentNode(runId: string, nodeId: string): Promise<AgentNode |
 }
 
 /** 评审结论解析：优先看显式 VERDICT 行，回落表情/关键词 */
-function verdictChangesRequested(summary: string): boolean {
+export function verdictChangesRequested(summary: string): boolean {
   if (/VERDICT:\s*CHANGES_REQUESTED/i.test(summary)) {
     return true;
   }

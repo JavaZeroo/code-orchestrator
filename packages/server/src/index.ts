@@ -21,6 +21,7 @@ import { registerSessionRoutes } from './routes/sessions';
 import { registerTriggerRoutes } from './routes/triggers';
 import { registerWorkRoutes } from './routes/work';
 import { registerWorkflowRoutes } from './routes/workflows';
+import { startAutoMergeReconciler } from './services/autoMerge';
 import { rebuildWorkItems, startWorkProjector } from './services/workProjector';
 import { registerClientHub } from './ws/clientHub';
 import { listMachines, registerRunnerHub } from './ws/runnerHub';
@@ -87,6 +88,8 @@ if (hasDb()) {
   void rebuildWorkItems()
     .then((n) => console.log(`[work] backfilled from ${n} events`))
     .catch((err) => console.error('[work] backfill failed:', err));
+  // Auto-merge 控制回路：能力常开，开关在 Project.autonomy（用户按项目拨）
+  startAutoMergeReconciler();
 }
 
 // 生产形态：托管 web 构建产物（pnpm --filter @co/web build 后生效）
