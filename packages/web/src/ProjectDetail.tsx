@@ -43,7 +43,8 @@ function parseVars(text: string): Record<string, string> {
 }
 
 function CreateTriggerForm({ me, projectId }: { me: Me; projectId: string }) {
-  const { data: workflows = [] } = useWorkflows();
+  const { data: allWorkflows = [] } = useWorkflows();
+  const workflows = allWorkflows.filter((w) => w.projectId === projectId);
   const [forge, setForge] = useState<ForgeKind>('github');
   const [repo, setRepo] = useState('');
   const [defId, setDefId] = useState('');
