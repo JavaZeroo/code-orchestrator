@@ -16,6 +16,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Ensure node/pnpm on PATH
         run: echo "/root/.nvm/versions/node/v24.15.0/bin" >> "$GITHUB_PATH"
+      # 源码禁止裸控制字节（NUL 等）：会让 git 把文件判成二进制，diff/评审全盲。
+      # 真需要控制字符时写 \u0000 转义（autoMerge.ts 的 glob 占位符踩过此坑）。
+      - name: No raw control bytes in sources
+        run: |
+          if grep -rlP '[\x00-\x08\x0B\x0C\x0E-\x1F]' --include='*.ts' --include='*.tsx' packages/ ; then
+            echo '::error::以上源码文件含裸控制字节（git 会判为二进制，diff 不可评审）——请改用 \u 转义'
+            exit 1
+          fi
       - name: Install deps (warm store, offline)
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Typecheck
