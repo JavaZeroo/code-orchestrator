@@ -75,7 +75,7 @@ async function activeMachineIds(): Promise<string[]> {
   return rows.map((r) => r.machineId);
 }
 
-async function readyMachineIds(projectId?: string): Promise<string[]> {
+export async function readyMachineIds(projectId?: string): Promise<string[]> {
   if (!hasDb() || !projectId) {
     return [];
   }

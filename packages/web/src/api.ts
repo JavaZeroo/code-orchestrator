@@ -204,8 +204,11 @@ export const api = {
   sessions: () => fetch('/api/sessions').then((r) => j<{ sessions: SessionRow[] }>(r)).then((d) => d.sessions),
   events: (sessionId: string) =>
     fetch(`/api/sessions/${sessionId}/events`).then((r) => j<{ events: EventRow[] }>(r)).then((d) => d.events),
-  spawn: (body: { machineId: string; cwd: string; prompt?: string; model?: string; effort?: Effort; designer?: boolean; taskIntake?: boolean; projectId?: string | null }) =>
-    post('/api/sessions', body).then((r) => j<{ sessionId: string }>(r)),
+  spawn: (body: { projectId?: string | null; prompt?: string; model?: string; effort?: Effort;
+                  machineId?: string; cwd?: string; container?: boolean;
+                  designer?: boolean; taskIntake?: boolean }) =>
+    post('/api/sessions', body).then((r) =>
+      j<{ sessionId?: string; resolved?: { machineId: string; cwd: string }; queued?: boolean; taskId?: string }>(r)),
   workflows: () => fetch('/api/workflows').then((r) => j<{ workflows: WorkflowDefRow[] }>(r)).then((d) => d.workflows),
   createWorkflow: (graph: WorkflowDef, createdVia: 'chat' | 'manual', projectId?: string | null) =>
     post('/api/workflows', { graph, createdVia, projectId }).then((r) => j<{ id: string }>(r)),

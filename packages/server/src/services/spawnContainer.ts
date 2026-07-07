@@ -114,7 +114,7 @@ export async function spawnContainerSession(
   req: ContainerSpawnRequest,
   startAgent?: StartAgentInContainer,
   opts: { alreadyQueued?: boolean } = {},
-): Promise<{ sessionId: string }> {
+): Promise<{ sessionId: string; machineId: string; cwd: string }> {
   const project = await loadProject(req.projectId);
   if (!project) {
     throw new Error(`project not found: ${req.projectId}`);
@@ -223,7 +223,7 @@ export async function spawnContainerSession(
     await (startAgent ?? defaultStartAgent)({ sessionId, machineId, containerId, workdir: WORKSPACE, env: containerEnv, prompt: req.prompt, model: resolved.model ?? req.model, meta: req.meta });
 
     await publish({ type: 'session.created', sessionId, runId: req.runId, payload: { machineId, cwd: WORKSPACE, projectId: req.projectId, containerId } });
-    return { sessionId };
+    return { sessionId, machineId, cwd: WORKSPACE };
   } catch (err) {
     // 回滚：释放预留 + 标 dead（容器由 runner 侧或后续 GC 清理；此处尽力）
     await releaseReservationForSession(sessionId).catch(() => {});
