@@ -1,0 +1,27 @@
+# code-orchestrator host runner（design-v2 #37）：在有 docker 的宿主机常驻一个 runner，
+# 承载容器化 agent 会话（agent 跑在训练容器内）。装法：
+#   1) 备好运行时目录（node + runner.mjs + agent.mjs + node_modules/@anthropic-ai/claude-agent-sdk[+linux-arm64] + ws），默认 /opt/co-runtime
+#   2) 按本机改下面 Environment（CO server 地址、token、数据盘根、加速器数量）
+#   3) sudo cp 本文件 /etc/systemd/system/ && sudo systemctl enable --now co-host-runner
+[Unit]
+Description=code-orchestrator host runner
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/co-runtime
+Environment=SERVER_URL=ws://CO_SERVER_HOST:7620/ws/runner
+Environment=RUNNER_SHARED_TOKEN=CHANGE_ME
+Environment=MACHINE_ID=npu-host
+Environment=MACHINE_NAME=npu-host
+Environment=MACHINE_LABELS=npu,host,docker
+Environment=DATA_ROOT=/data
+# 该机加速器张数（Ascend）：0=无卡；>0 时 ACCEL_KIND=ascend-npu 一并设
+Environment=ACCEL_COUNT=0
+Environment=CO_CONTAINER_RUNTIME=/opt/co-runtime
+ExecStart=/opt/co-runtime/node /opt/co-runtime/runner.mjs
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
