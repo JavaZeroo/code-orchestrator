@@ -30,6 +30,7 @@ export const useApprovals = () =>
 export const useProjects = () =>
   useQuery({ queryKey: ['projects'], queryFn: api.projects, refetchInterval: 20_000 });
 
-export const useWork = () => useQuery({ queryKey: ['work'], queryFn: api.work, refetchInterval: 8_000 });
+export const useWork = (projectId?: string | null) =>
+  useQuery({ queryKey: ['work', projectId], queryFn: () => api.work(projectId), refetchInterval: 8_000 });
 
 export const invalidate = (key: string) => void queryClient.invalidateQueries({ queryKey: [key] });

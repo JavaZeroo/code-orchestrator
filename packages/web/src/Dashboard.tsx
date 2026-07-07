@@ -1,5 +1,5 @@
 /**
- * 看板：仪表盘式总览。顶部 KPI 读数条 + 三栏(进行中/等我处理/最近完成)。
+ * 看板：注意力页。顶部 KPI 读数条 + 两栏(进行中/等我处理)。
  * 数据来自 GET /api/sessions、/api/runs、/api/approvals?status=pending。
  */
 
@@ -7,7 +7,7 @@ import { Activity, ArrowRight, CheckCircle2, type LucideIcon, GitPullRequest, Wo
 import { Badge, Card, Spinner, StatusDot } from './components/ui/primitives';
 import { useApprovals, useRuns, useSessions, useWorkflows } from './lib/queries';
 import { useProjectScope } from './lib/project';
-import { cn, relTime } from './lib/utils';
+import { cn } from './lib/utils';
 
 const RUN_TONE: Record<string, 'accent' | 'run' | 'ok' | 'danger' | 'neutral' | 'human'> = {
   running: 'run',
@@ -103,11 +103,6 @@ export function Dashboard({ onOpenSession, onOpenRun }: { onOpenSession: (id: st
   const doneRuns = runs.filter((r) => r.status === 'done');
   const waitingCount = waitingSessions.length + approvals.length;
 
-  const recentRuns = runs
-    .filter((r) => r.status === 'done' || r.status === 'failed' || r.status === 'cancelled')
-    .sort((a, b) => new Date(b.endedAt ?? b.startedAt).getTime() - new Date(a.endedAt ?? a.startedAt).getTime())
-    .slice(0, 8);
-
   if (sl || rl || al) {
     return (
       <div className="flex flex-1 items-center justify-center gap-2 text-dim">
@@ -126,7 +121,7 @@ export function Dashboard({ onOpenSession, onOpenRun }: { onOpenSession: (id: st
         <Stat icon={CheckCircle2} label="已完成" value={doneRuns.length} tone="ok" />
       </div>
 
-      {/* 三栏看板 */}
+      {/* 两栏看板 */}
       <div className="flex flex-1 flex-col gap-5 lg:flex-row">
         <Lane title="进行中" tone="run" count={activeSessions.length}>
           {activeSessions.length === 0 && <p className="px-1 py-4 text-xs text-faint">暂无进行中的会话</p>}
@@ -174,20 +169,6 @@ export function Dashboard({ onOpenSession, onOpenRun }: { onOpenSession: (id: st
               title={s.cwd.split('/').pop() || s.cwd}
               meta={<span>{s.model ?? 'claude'} · {elapsed(s.createdAt)}</span>}
               right={<Badge tone="warn">工具审批</Badge>}
-            />
-          ))}
-        </Lane>
-
-        <Lane title="最近完成" tone="ok" count={recentRuns.length}>
-          {recentRuns.length === 0 && <p className="px-1 py-4 text-xs text-faint">暂无已完成项</p>}
-          {recentRuns.map((r) => (
-            <RowCard
-              key={r.id}
-              onClick={() => onOpenRun(r.id)}
-              dot={RUN_TONE[r.status] ?? 'neutral'}
-              title={defs.find((d) => d.id === r.defId)?.name ?? r.defId.slice(0, 8)}
-              meta={<span>{relTime(r.endedAt ?? r.startedAt)}</span>}
-              right={<Badge tone={RUN_TONE[r.status] ?? 'neutral'}>{RUN_LABEL[r.status] ?? r.status}</Badge>}
             />
           ))}
         </Lane>

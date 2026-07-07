@@ -239,5 +239,7 @@ export const api = {
   /** 容器化会话（design-v2 #37）：项目须配 baseImage；无空闲机返回 {queued} */
   createContainerSession: (body: { projectId: string; prompt?: string; model?: string; machineId?: string }) =>
     post('/api/container-sessions', body).then((r) => j<{ sessionId?: string; queued?: boolean; taskId?: string }>(r)),
-  work: () => fetch('/api/work?limit=400').then((r) => j<{ tree: WorkItem[]; count: number }>(r)),
+  work: (projectId?: string | null) =>
+    fetch(`/api/work?limit=400${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ''}`)
+      .then((r) => j<{ tree: WorkItem[]; count: number }>(r)),
 };

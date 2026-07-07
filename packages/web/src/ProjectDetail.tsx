@@ -1,24 +1,27 @@
 /**
- * 需求录入触发器页（task #22）：配置「某 forge repo 的 issue 满足条件 → 自动起工作流」，
- * 并展示需求列表（命中 issue → run 追溯）。最初愿景的入口。
+ * 项目详情页（#37）：概览 / 自动化 / 流程模板 三区竖排。
+ * 内容从 ProjectsPage（概览）、TriggersPage（自动化）、WorkflowsPage（模板）搬迁。
  */
 
-import { ExternalLink, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { ExternalLink, MessageCircle, Play, Plus, RefreshCw, Trash2, Workflow as WorkflowIcon } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import type { CreateTriggerBody, ForgeKind, RequirementRow, TriggerRow } from './api';
+import type { CreateTriggerBody, ForgeKind, ProjectRow, RequirementRow, TriggerRow } from './api';
 import { api } from './api';
 import type { Me } from './Auth';
+import { Designer } from './Designer';
 import { Button } from './components/ui/button';
-import { Badge, Card, Input, Label, Spinner, Textarea } from './components/ui/primitives';
+import { Badge, Card, Input, Label, Spinner, Textarea, type BadgeTone } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { invalidate, useRequirements, useTriggers, useWorkflows } from './lib/queries';
-import { useProjectScope } from './lib/project';
 import { cn, relTime } from './lib/utils';
+import { AutonomySwitch, LaunchContainer } from './ProjectsPage';
+
+/* ──────── 自动化：触发器相关子组件（从 TriggersPage 搬迁） ──────── */
 
 const FORGE_LABEL: Record<ForgeKind, string> = { gitcode: 'GitCode', github: 'GitHub' };
 
-const REQ_TONE: Record<string, 'accent' | 'warn' | 'ok' | 'danger' | 'neutral'> = {
+const REQ_TONE: Record<string, BadgeTone> = {
   running: 'accent',
   waiting_human: 'warn',
   done: 'ok',
@@ -26,7 +29,6 @@ const REQ_TONE: Record<string, 'accent' | 'warn' | 'ok' | 'danger' | 'neutral'> 
   cancelled: 'neutral',
 };
 
-/** 每行 `key=value` 解析为静态附加变量 */
 function parseVars(text: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const line of text.split('\n')) {
@@ -241,12 +243,30 @@ function RequirementRowItem({ r, onOpenRun }: { r: RequirementRow; onOpenRun: (r
   );
 }
 
-export function TriggersPage({ me, onOpenRun }: { me: Me; onOpenRun: (runId: string) => void }) {
+/* ──────── ProjectDetail ──────── */
+
+export function ProjectDetail({
+  project,
+  me,
+  onBack,
+  onOpenSession,
+  onOpenRun,
+}: {
+  project: ProjectRow;
+  me: Me;
+  onBack: () => void;
+  onOpenSession: (id: string) => void;
+  onOpenRun: (runId: string) => void;
+}) {
+  const [view, setView] = useState<'detail' | 'designer'>('detail');
+  const { data: allDefs = [] } = useWorkflows();
   const { data: allTriggers = [], isLoading: tLoading } = useTriggers();
   const { data: allRequirements = [], isLoading: rLoading } = useRequirements();
-  const { inScope } = useProjectScope();
-  const triggers = allTriggers.filter((t) => inScope(t.projectId));
-  const requirements = allRequirements.filter((r) => inScope(r.projectId));
+
+  // 按项目过滤
+  const defs = allDefs.filter((d) => d.projectId === project.id);
+  const triggers = allTriggers.filter((t) => t.projectId === project.id);
+  const requirements = allRequirements.filter((r) => r.projectId === project.id);
   const [polling, setPolling] = useState(false);
 
   const pollNow = () => {
@@ -262,21 +282,79 @@ export function TriggersPage({ me, onOpenRun }: { me: Me; onOpenRun: (runId: str
       .finally(() => setPolling(false));
   };
 
+  const setAutonomy = (autonomy: typeof project.autonomy) => {
+    api
+      .patchProject(project.id, { autonomy })
+      .then(() => {
+        toast.success(`自治已设为 ${autonomy}`);
+        invalidate('projects');
+      })
+      .catch((e) => toast.error(String(e)));
+  };
+
+  if (view === 'designer') {
+    return <Designer onBack={() => setView('detail')} onSaved={() => setView('detail')} />;
+  }
+
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 overflow-y-auto p-6">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-dim">
-          某个 forge 仓库的 issue 满足条件 → <span className="text-ink-2">自动起工作流</span>，命中记录可追溯到运行。
-        </p>
-        <Button variant="secondary" size="sm" className="shrink-0" disabled={polling} onClick={pollNow}>
-          <RefreshCw size={13} className={cn(polling && 'animate-spin')} /> 立即轮询
+    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 overflow-y-auto p-6">
+      {/* 返回 + 标题 */}
+      <div className="flex items-center gap-3">
+        <Button variant="ghost" size="sm" onClick={onBack}>
+          ← 返回项目列表
         </Button>
+        <h1 className="truncate font-display text-[16px] font-semibold text-ink">{project.name}</h1>
+        <Badge tone="neutral">{project.forge === 'gitcode' ? 'GitCode' : 'GitHub'}</Badge>
+        <span className="mono-nums hidden truncate text-[11px] text-faint sm:inline">{project.repo}</span>
       </div>
 
-      <CreateTriggerForm me={me} />
+      {/* ── 概览 ── */}
+      <Card className="flex flex-col gap-4 p-4">
+        <h2 className="text-sm font-semibold text-ink-2">概览</h2>
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-semibold tracking-wide text-dim uppercase">自治开关</span>
+          <AutonomySwitch value={project.autonomy} onChange={setAutonomy} />
+        </div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-dim">
+          {Object.keys(project.models).length > 0 && (
+            <span className="inline-flex items-center gap-1.5">
+              {(['pm', 'dev', 'se'] as const).filter((k) => project.models[k]).map((k) => (
+                <span key={k} className="mono-nums rounded bg-panel-2 px-1.5 py-0.5 text-[10px]">
+                  {k}:{project.models[k]}
+                </span>
+              ))}
+            </span>
+          )}
+          <span className="inline-flex items-center gap-1">
+            护栏 {project.guardrails.length} 条
+          </span>
+        </div>
+        {project.baseImage ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-3">
+            <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-dim">
+              <span className="mono-nums truncate" title={project.baseImage}>{project.baseImage}</span>
+              {project.accel && <Badge tone="run">{project.accel.kind}</Badge>}
+            </span>
+            <LaunchContainer p={project} onOpenSession={onOpenSession} />
+          </div>
+        ) : null}
+      </Card>
 
-      <div>
-        <h3 className="mb-2 text-sm font-semibold text-dim">
+      {/* ── 自动化 ── */}
+      <section className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-ink-2">自动化</h2>
+          <Button variant="secondary" size="sm" className="shrink-0" disabled={polling} onClick={pollNow}>
+            <RefreshCw size={13} className={cn(polling && 'animate-spin')} /> 立即轮询
+          </Button>
+        </div>
+        <p className="text-xs text-dim">
+          issue 满足条件 → 自动起工作流。
+          <span className="text-ink-2"> seeded/failed 基线在这里查看</span>——它们是配置域诊断日志，不进任务树。
+        </p>
+        <CreateTriggerForm me={me} />
+
+        <h3 className="pt-2 text-xs font-semibold text-dim">
           触发器 {triggers.length > 0 && <span className="text-dim/70">({triggers.length})</span>}
         </h3>
         <Card className="overflow-hidden p-0">
@@ -290,10 +368,8 @@ export function TriggersPage({ me, onOpenRun }: { me: Me; onOpenRun: (runId: str
             triggers.map((t) => <TriggerRowItem key={t.id} t={t} />)
           )}
         </Card>
-      </div>
 
-      <div>
-        <h3 className="mb-2 text-sm font-semibold text-dim">
+        <h3 className="pt-2 text-xs font-semibold text-dim">
           需求列表 {requirements.length > 0 && <span className="text-dim/70">({requirements.length})</span>}
         </h3>
         <Card className="overflow-hidden p-0">
@@ -302,12 +378,47 @@ export function TriggersPage({ me, onOpenRun }: { me: Me; onOpenRun: (runId: str
               <Spinner /> 加载中…
             </div>
           ) : requirements.length === 0 ? (
-            <p className="p-6 text-center text-sm text-dim">暂无命中的需求。触发器轮询到匹配 issue 后会在这里出现。</p>
+            <p className="p-6 text-center text-sm text-dim">暂无命中的需求。</p>
           ) : (
             requirements.map((r) => <RequirementRowItem key={r.id} r={r} onOpenRun={onOpenRun} />)
           )}
         </Card>
-      </div>
+      </section>
+
+      {/* ── 流程模板 ── */}
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-semibold text-ink-2">流程模板</h2>
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-dim">当前项目的流程定义，只读展示。启动改由「任务」tab 操作。</p>
+          <Button variant="default" size="sm" className="shrink-0" onClick={() => setView('designer')}>
+            <MessageCircle size={14} /> 对话式新建
+          </Button>
+        </div>
+        {defs.length === 0 ? (
+          <Card className="flex flex-col items-center gap-2 py-8 text-center">
+            <WorkflowIcon size={24} className="text-faint" />
+            <p className="text-sm text-dim">还没有工作流 —— 点「对话式新建」，跟 agent 说你要什么流程。</p>
+          </Card>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {defs.map((d) => (
+              <Card key={d.id} className="p-3.5 transition-colors hover:border-line-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-panel-2 text-accent">
+                    <WorkflowIcon size={15} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="block truncate font-display text-[14px] font-semibold text-ink">{d.name}</span>
+                    <span className="mono-nums block text-[11px] text-faint">
+                      {d.graph.nodes.length} 节点 · v{d.version} · {d.createdVia === 'chat' ? '对话生成' : '手工'}
+                    </span>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { FolderGit2, type LucideIcon, LayoutDashboard, LogOut, MessageSquareText, Settings, Workflow, Zap } from 'lucide-react';
+import { FolderGit2, type LucideIcon, LayoutDashboard, ListTree, LogOut, MessageSquareText, Settings } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { authApi, LoginPage, SettingsModal, useMe, type Me } from './Auth';
 import { Dashboard } from './Dashboard';
@@ -6,8 +6,7 @@ import { NewSession } from './NewSession';
 import { NotificationBell } from './Notifications';
 import { ProjectsPage } from './ProjectsPage';
 import { SessionView } from './SessionView';
-import { TriggersPage } from './TriggersPage';
-import { WorkflowsPage } from './WorkflowsPage';
+import { TasksPage } from './TasksPage';
 import { Button } from './components/ui/button';
 import { Spinner, StatusDot } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
@@ -15,13 +14,12 @@ import { useProjects, useRuns, useSessions } from './lib/queries';
 import { ProjectProvider, useCurrentProject, useProjectScope } from './lib/project';
 import { cn } from './lib/utils';
 
-type Tab = 'dashboard' | 'projects' | 'triggers' | 'workflows' | 'sessions';
+type Tab = 'dashboard' | 'tasks' | 'projects' | 'sessions';
 
 const NAV: { id: Tab; label: string; icon: LucideIcon; hint: string }[] = [
   { id: 'dashboard', label: '看板', icon: LayoutDashboard, hint: '总览 · 谁在干活 · 谁等我' },
+  { id: 'tasks', label: '任务', icon: ListTree, hint: '血缘树 · 运行追溯' },
   { id: 'projects', label: '项目', icon: FolderGit2, hint: '策略容器 · 自治开关' },
-  { id: 'triggers', label: '需求', icon: Zap, hint: 'issue → 自动起流水线' },
-  { id: 'workflows', label: '工作流', icon: Workflow, hint: '流水线与运行' },
   { id: 'sessions', label: '会话', icon: MessageSquareText, hint: 'Agent 会话' },
 ];
 
@@ -229,7 +227,7 @@ export function App() {
   };
   const openRun = (runId: string) => {
     setOpenRunId(runId);
-    setTab('workflows');
+    setTab('tasks');
   };
   const active = NAV.find((n) => n.id === tab)!;
 
@@ -249,11 +247,10 @@ export function App() {
         <main className="flex min-h-0 flex-1 overflow-hidden">
           <div key={tab} className="rise flex min-h-0 flex-1 overflow-hidden">
             {tab === 'dashboard' && <Dashboard onOpenSession={openSession} onOpenRun={openRun} />}
-            {tab === 'projects' && <ProjectsPage onOpenSession={openSession} />}
-            {tab === 'triggers' && <TriggersPage me={me} onOpenRun={openRun} />}
-            {tab === 'workflows' && (
-              <WorkflowsPage onOpenSession={openSession} openRunId={openRunId} onOpenRunConsumed={() => setOpenRunId(null)} />
+            {tab === 'tasks' && (
+              <TasksPage onOpenSession={openSession} openRunId={openRunId} onOpenRunConsumed={() => setOpenRunId(null)} />
             )}
+            {tab === 'projects' && <ProjectsPage me={me} onOpenSession={openSession} onOpenRun={openRun} />}
             {tab === 'sessions' && <SessionsScreen selected={selectedSession} setSelected={setSelectedSession} />}
           </div>
         </main>
