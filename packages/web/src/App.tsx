@@ -10,7 +10,9 @@ import { TriggersPage } from './TriggersPage';
 import { WorkflowsPage } from './WorkflowsPage';
 import { Button } from './components/ui/button';
 import { Spinner, StatusDot } from './components/ui/primitives';
-import { useSessions } from './lib/queries';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
+import { useProjects, useSessions } from './lib/queries';
+import { ProjectProvider, useCurrentProject } from './lib/project';
 import { cn } from './lib/utils';
 
 type Tab = 'dashboard' | 'projects' | 'triggers' | 'workflows' | 'sessions';
@@ -46,6 +48,31 @@ function BrandMark() {
   );
 }
 
+function ProjectSwitcher() {
+  const { data: projects = [] } = useProjects();
+  const { projectId, setProjectId } = useCurrentProject();
+  return (
+    <div className="px-2.5 pb-1">
+      <Select value={projectId ?? '__all__'} onValueChange={(v) => setProjectId(v === '__all__' ? null : v)}>
+        <SelectTrigger className="w-full">
+          <span className="flex min-w-0 items-center gap-2">
+            <FolderGit2 size={13} className="shrink-0 text-accent" />
+            <SelectValue placeholder="全部项目" />
+          </span>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="__all__">全部项目</SelectItem>
+          {projects.map((p) => (
+            <SelectItem key={p.id} value={p.id}>
+              {p.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 function Sidebar({
   tab,
   setTab,
@@ -67,6 +94,8 @@ function Sidebar({
           <div className="mono-nums text-[10px] tracking-wide text-faint">AUTONOMOUS · DEV · CONSOLE</div>
         </div>
       </div>
+
+      <ProjectSwitcher />
 
       <nav className="flex flex-1 flex-col gap-0.5 px-2.5 pt-2">
         <div className="px-2 pb-1.5 text-[10px] font-semibold tracking-widest text-faint uppercase">Console</div>
@@ -192,6 +221,7 @@ export function App() {
   const active = NAV.find((n) => n.id === tab)!;
 
   return (
+    <ProjectProvider>
     <div className="flex h-full overflow-hidden">
       <Sidebar tab={tab} setTab={setTab} me={me} onSettings={() => setShowSettings(true)} />
       <div className="flex min-w-0 flex-1 flex-col">
@@ -206,7 +236,7 @@ export function App() {
         <main className="flex min-h-0 flex-1 overflow-hidden">
           <div key={tab} className="rise flex min-h-0 flex-1 overflow-hidden">
             {tab === 'dashboard' && <Dashboard onOpenSession={openSession} onOpenRun={openRun} />}
-            {tab === 'projects' && <ProjectsPage />}
+            {tab === 'projects' && <ProjectsPage onOpenSession={openSession} />}
             {tab === 'triggers' && <TriggersPage me={me} onOpenRun={openRun} />}
             {tab === 'workflows' && (
               <WorkflowsPage onOpenSession={openSession} openRunId={openRunId} onOpenRunConsumed={() => setOpenRunId(null)} />
@@ -217,5 +247,6 @@ export function App() {
       </div>
       {showSettings && <SettingsModal me={me} onClose={() => setShowSettings(false)} onChanged={refresh} />}
     </div>
+    </ProjectProvider>
   );
 }

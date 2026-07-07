@@ -133,6 +133,13 @@ export interface ProjectRow {
   defaultDefId: string | null;
   models: Record<string, string>;
   vars: Record<string, string>;
+  /** design-v2 容器化：薄 base 镜像（空=非容器化项目） */
+  baseImage: string | null;
+  /** 加速器需求 {kind} 或 null（非空=会话独占该 kind 机器并绑卡） */
+  accel: { kind: string } | null;
+  /** 组件默认版本 {组件:版本} */
+  components: Record<string, string>;
+  memoryRepo: string | null;
   createdAt: string;
 }
 
@@ -224,5 +231,8 @@ export const api = {
   patchProject: (id: string, patch: Partial<ProjectRow>) =>
     fetch(`/api/projects/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
   deleteProject: (id: string) => fetch(`/api/projects/${id}`, { method: 'DELETE' }).then((r) => j(r)),
+  /** 容器化会话（design-v2 #37）：项目须配 baseImage；无空闲机返回 {queued} */
+  createContainerSession: (body: { projectId: string; prompt?: string; model?: string; machineId?: string }) =>
+    post('/api/container-sessions', body).then((r) => j<{ sessionId?: string; queued?: boolean; taskId?: string }>(r)),
   work: () => fetch('/api/work?limit=400').then((r) => j<{ tree: WorkItem[]; count: number }>(r)),
 };

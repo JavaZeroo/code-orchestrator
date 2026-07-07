@@ -15,6 +15,11 @@ const bodySchema = z.object({
   defaultDefId: z.string().nullable().optional(),
   models: z.record(z.string(), z.string()).default({}),
   vars: z.record(z.string(), z.string()).default({}),
+  // design-v2：容器化执行配置
+  baseImage: z.string().nullable().optional(),
+  accel: z.object({ kind: z.string() }).nullable().optional(),
+  components: z.record(z.string(), z.string()).optional(),
+  memoryRepo: z.string().nullable().optional(),
 });
 
 export async function registerProjectRoutes(app: FastifyInstance): Promise<void> {

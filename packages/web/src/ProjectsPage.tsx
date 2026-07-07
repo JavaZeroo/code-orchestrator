@@ -1,11 +1,11 @@
 /** 项目页：per-场景策略容器。核心是每个项目的「自治开关」(manual/agent/auto)——控制权在你。 */
 
-import { Cpu, FolderGit2, Plus, ShieldCheck, Trash2 } from 'lucide-react';
+import { Container, Cpu, FolderGit2, Plus, Rocket, ShieldCheck, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api, type Autonomy, type ForgeKind, type ProjectRow } from './api';
 import { Button } from './components/ui/button';
-import { Badge, Card, Input, Label } from './components/ui/primitives';
+import { Badge, Card, Input, Label, Textarea } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { invalidate, useProjects } from './lib/queries';
 import { cn } from './lib/utils';
@@ -46,7 +46,56 @@ function AutonomySwitch({ value, onChange }: { value: Autonomy; onChange: (a: Au
   );
 }
 
-function ProjectCard({ p }: { p: ProjectRow }) {
+function LaunchContainer({ p, onOpenSession }: { p: ProjectRow; onOpenSession: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const [busy, setBusy] = useState(false);
+  const launch = () => {
+    setBusy(true);
+    api
+      .createContainerSession({ projectId: p.id, prompt: prompt.trim() || undefined, model: p.models.dev })
+      .then((r) => {
+        if (r.sessionId) {
+          toast.success('容器会话已启动');
+          onOpenSession(r.sessionId);
+        } else if (r.queued) {
+          toast('无空闲机器，已排队；有资源自动派发');
+        }
+        setOpen(false);
+        setPrompt('');
+      })
+      .catch((e) => toast.error(String(e instanceof Error ? e.message : e)))
+      .finally(() => setBusy(false));
+  };
+  if (!open) {
+    return (
+      <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
+        <Rocket size={13} /> 启动容器会话
+      </Button>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-line bg-bg-2/40 p-2.5">
+      <Textarea
+        rows={2}
+        value={prompt}
+        placeholder="给 agent 的首条任务（在训练容器内执行，可空）"
+        onChange={(e) => setPrompt(e.target.value)}
+        className="resize-none"
+      />
+      <div className="flex gap-2">
+        <Button variant="default" size="sm" disabled={busy} onClick={launch}>
+          <Rocket size={13} /> {busy ? '启动中…' : '启动'}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+          取消
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ProjectCard({ p, onOpenSession }: { p: ProjectRow; onOpenSession: (id: string) => void }) {
   const setAutonomy = (autonomy: Autonomy) => {
     api
       .patchProject(p.id, { autonomy })
@@ -104,6 +153,17 @@ function ProjectCard({ p }: { p: ProjectRow }) {
           护栏 {p.guardrails.length} 条
         </span>
       </div>
+
+      {p.baseImage ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-3">
+          <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-dim">
+            <Container size={12} className="shrink-0 text-accent" />
+            <span className="mono-nums truncate" title={p.baseImage}>{p.baseImage}</span>
+            {p.accel && <Badge tone="run">{p.accel.kind}</Badge>}
+          </span>
+          <LaunchContainer p={p} onOpenSession={onOpenSession} />
+        </div>
+      ) : null}
     </Card>
   );
 }
@@ -113,16 +173,18 @@ function CreateProject({ onDone }: { onDone: () => void }) {
   const [name, setName] = useState('');
   const [forge, setForge] = useState<ForgeKind>('github');
   const [repo, setRepo] = useState('');
+  const [baseImage, setBaseImage] = useState('');
   const [busy, setBusy] = useState(false);
 
   const create = () => {
     setBusy(true);
     api
-      .createProject({ name: name.trim(), forge, repo: repo.trim(), autonomy: 'manual' })
+      .createProject({ name: name.trim(), forge, repo: repo.trim(), autonomy: 'manual', baseImage: baseImage.trim() || null })
       .then(() => {
         toast.success('项目已创建（自治=手动，可随时拨开关）');
         setName('');
         setRepo('');
+        setBaseImage('');
         setOpen(false);
         onDone();
       })
@@ -161,7 +223,11 @@ function CreateProject({ onDone }: { onDone: () => void }) {
         仓库（owner/repo）
         <Input value={repo} placeholder="owner/repo" onChange={(e) => setRepo(e.target.value)} />
       </Label>
-      <p className="text-[11px] text-faint">新项目默认「手动」——建好后按需拨到 Agent / 全自动。</p>
+      <Label>
+        容器镜像（可选 · design-v2）
+        <Input value={baseImage} placeholder="留空=非容器化；如 mindformers:ms2.7.2_..." onChange={(e) => setBaseImage(e.target.value)} />
+      </Label>
+      <p className="text-[11px] text-faint">配了镜像即容器化项目，可「启动容器会话」；默认「手动」——建好后按需拨自治开关。</p>
       <div className="flex gap-2">
         <Button variant="default" disabled={busy || !name.trim() || !repo.trim()} onClick={create}>
           {busy ? '创建中…' : '创建'}
@@ -174,7 +240,7 @@ function CreateProject({ onDone }: { onDone: () => void }) {
   );
 }
 
-export function ProjectsPage() {
+export function ProjectsPage({ onOpenSession }: { onOpenSession: (id: string) => void }) {
   const { data: projects = [], isLoading } = useProjects();
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 overflow-y-auto p-6">
@@ -197,7 +263,7 @@ export function ProjectsPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {projects.map((p) => (
-            <ProjectCard key={p.id} p={p} />
+            <ProjectCard key={p.id} p={p} onOpenSession={onOpenSession} />
           ))}
         </div>
       )}
