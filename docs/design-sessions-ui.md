@@ -42,6 +42,18 @@
 - thinking 默认折叠为一行「思考 N 字 ▸」；turn 分隔线带时间戳；
 - `file` 事件渲染（协议 `sessionFileEventSchema` 已有）。
 
+### P5 · ChatGPT 式发起 + 自动就位（用户反馈追加，2026-07-07）
+
+P3 上线后用户反馈：新建会话仍是一张表单，不对——应该是**一个居中对话框直接开聊**；工作目录早已被 v2 弱化（项目一等化），机器也该自动挑。目标形态对标 ChatGPT composer：
+
+- **UI**（`NewSession.tsx` 重写为 ChatComposer）：会话 tab 无选中会话时 = 居中大输入框（「要做什么？」，Enter 发送）+ 输入框周围一排小 chips：`模型 ▾`、`effort ▾`、`容器`（仅 baseImage 项目显示，默认开）、`高级 ▾`（popover 覆盖机器/目录，默认「自动」）。提交即创建会话并切入会话视图（输入即首条消息）。
+- **Server（自动就位 spawn）**：`POST /api/sessions` 的 machineId/cwd 变可选，缺省时：
+  1. **机器**：项目 ready 物化且在线的机器（黏性）→ labels 含 dev 的在线机 → 唯一在线机；accel 项目走 `schedule()`（预留账本）。绝不静默取第一台（轮盘赌教训）。
+  2. **目录**：`materializeWorkspace({machineId, key: sessionId, projectId, …})` 得 cwd（runner 侧 clone/worktree + project_materializations 记账，全部现成）。
+  3. **容器**：项目有 baseImage 且未显式关 → 走既有 spawnContainer 链路。
+  4. 显式传 machineId+cwd 的旧调用行为不变（高级覆盖）。
+- 响应带 resolved `{machineId, cwd}`；会话头部已能展示。
+
 ## 撞车矩阵
 
 | 期 | protocol | runner | server | Timeline.tsx | SessionView.tsx | App.tsx | NewSession.tsx |
