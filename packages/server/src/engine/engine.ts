@@ -917,10 +917,14 @@ async function triggerRevision(
       .update(schema.nodeStates)
       .set({ status: 'pending', updatedAt: new Date() })
       .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, g)));
-    await db
+    const expired = await db
       .update(schema.approvals)
       .set({ status: 'expired' })
-      .where(and(eq(schema.approvals.runId, runId), eq(schema.approvals.nodeId, g), eq(schema.approvals.status, 'pending')));
+      .where(and(eq(schema.approvals.runId, runId), eq(schema.approvals.nodeId, g), eq(schema.approvals.status, 'pending')))
+      .returning({ id: schema.approvals.id });
+    for (const ap of expired) {
+      await publish({ type: 'approval.decided', runId, payload: { approvalId: ap.id, status: 'expired', decidedBy: 'engine:revising' } });
+    }
     await publishNodeState(runId, g, 'pending', { reason: 'revising' });
   }
   await publish({ type: 'run.node.revise', runId, payload: { reviewNode: reviewNodeId, target: targetNodeId, round: round + 1, max: maxRounds, respawned } });

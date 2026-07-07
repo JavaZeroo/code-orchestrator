@@ -227,6 +227,12 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
         .update(schema.approvals)
         .set({ status: 'expired', decidedBy: body.decidedBy, decidedAt: new Date() })
         .where(eq(schema.approvals.id, approval.id));
+      await publish({
+        type: 'approval.decided',
+        sessionId: approval.sessionId ?? undefined,
+        runId: approval.runId ?? undefined,
+        payload: { approvalId: approval.id, status: 'expired', decidedBy: body.decidedBy },
+      });
       return { ok: true, status: 'expired' };
     }
     const result = await callRunner(session.machineId, 'approval.decide', {
@@ -242,6 +248,12 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
           .update(schema.approvals)
           .set({ status: 'expired', decidedBy: body.decidedBy, decidedAt: new Date() })
           .where(eq(schema.approvals.id, approval.id));
+        await publish({
+          type: 'approval.decided',
+          sessionId: approval.sessionId ?? undefined,
+          runId: approval.runId ?? undefined,
+          payload: { approvalId: approval.id, status: 'expired', decidedBy: body.decidedBy },
+        });
         return { ok: true, status: 'expired' };
       }
       throw new HttpError(502, result.error ?? 'decide failed');
