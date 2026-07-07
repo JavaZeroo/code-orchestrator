@@ -11,15 +11,10 @@ import { env } from '../env';
 import { publish } from '../events';
 import { callRunner } from '../ws/runnerHub';
 import { decryptSecret } from './crypto';
+import { buildInjectedEnv, planModel, SpawnError } from './modelResolve';
 
-export class SpawnError extends Error {
-  constructor(
-    readonly statusCode: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+// Re-export SpawnError for callers importing from './spawn'
+export { SpawnError } from './modelResolve';
 
 /** 请求者本人绑定的 LLM key（llm_keys 表，AES-256-GCM）；无用户上下文/未绑定时返回 undefined */
 async function userLlmKey(userId: string | undefined, provider: 'deepseek' | 'glm'): Promise<string | undefined> {
@@ -57,44 +52,53 @@ export async function resolveModel(
   alias?: string,
   userId?: string,
 ): Promise<{ model?: string; env?: Record<string, string> }> {
-  if (!alias || alias === 'claude') {
-    return {};
+  // 1) 拉全部 providers（小表，一次 select）
+  const providerRows = await getDb().select().from(schema.llmProviders);
+  const snapshots = providerRows.map((r) => ({
+    name: r.name,
+    baseUrl: r.baseUrl,
+    models: r.models,
+    defaultModel: r.defaultModel,
+    apiKeyEnc: r.apiKeyEnc,
+  }));
+
+  // 2) 纯函数决策
+  const plan = planModel(alias, snapshots);
+
+  // 3) inject:false 分支——无 env 直接返回
+  if (!plan.inject) {
+    return { model: plan.model };
   }
-  if (alias === 'deepseek') {
-    const key = await llmKeyFor(userId, 'deepseek', process.env.DEEPSEEK_API_KEY);
-    if (!key) {
-      throw new SpawnError(400, 'deepseek API key 未配置（设置页绑定或 server 设 DEEPSEEK_API_KEY），无法使用 deepseek 别名');
+
+  // 4) inject:true 分支——解析 key
+  const row = snapshots.find((p) => p.name === plan.provider)!;
+  let key: string | undefined;
+  if (row.apiKeyEnc) {
+    try {
+      key = decryptSecret(row.apiKeyEnc);
+    } catch {
+      // 解密失败的视为无 key，走回落链
     }
-    return {
-      model: process.env.DEEPSEEK_MODEL ?? 'deepseek-chat',
-      env: { ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic', ANTHROPIC_AUTH_TOKEN: key },
-    };
   }
-  if (alias === 'glm') {
-    const key = await llmKeyFor(userId, 'glm', process.env.GLM_API_KEY);
-    if (!key) {
-      throw new SpawnError(400, 'glm API key 未配置（设置页绑定或 server 设 GLM_API_KEY），无法使用 glm 别名');
-    }
-    return {
-      model: process.env.GLM_MODEL ?? 'glm-4.6',
-      env: { ANTHROPIC_BASE_URL: 'https://open.bigmodel.cn/api/anthropic', ANTHROPIC_AUTH_TOKEN: key },
-    };
+
+  // deepseek/glm 回落链
+  if (!key && (plan.provider === 'deepseek' || plan.provider === 'glm')) {
+    key = await llmKeyFor(
+      userId,
+      plan.provider as 'deepseek' | 'glm',
+      process.env[plan.provider === 'deepseek' ? 'DEEPSEEK_API_KEY' : 'GLM_API_KEY'],
+    );
   }
-  // 查询自定义 LLM 端点注册表（label 匹配）
-  const endpoint = await getDb()
-    .select()
-    .from(schema.llmEndpoints)
-    .where(eq(schema.llmEndpoints.label, alias))
-    .limit(1)
-    .then((rows) => rows[0]);
-  if (endpoint) {
-    const key = decryptSecret(endpoint.apiKeyEnc);
-    return {
-      model: endpoint.model,
-      env: { ANTHROPIC_BASE_URL: endpoint.baseUrl, ANTHROPIC_AUTH_TOKEN: key },
-    };
+
+  // 可选：env 覆盖 model（deepseek/glm 设了 DEEPSEEK_MODEL/GLM_MODEL 则覆盖）
+  if (plan.provider === 'deepseek' && process.env.DEEPSEEK_MODEL) {
+    plan.model = process.env.DEEPSEEK_MODEL;
   }
-  return { model: alias };
+  if (plan.provider === 'glm' && process.env.GLM_MODEL) {
+    plan.model = process.env.GLM_MODEL;
+  }
+
+  return buildInjectedEnv(plan, key);
 }
 
 export interface SpawnRequest {

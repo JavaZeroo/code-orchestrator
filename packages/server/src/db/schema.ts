@@ -236,6 +236,20 @@ export const llmEndpoints = pgTable('llm_endpoints', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** provider→model 两级模型注册表（迁移 0012）。取代 llm_endpoints 的 label→单模型扁平表；
+ *  base_url null = 官方直连（宿主凭据）；api_key_enc null = 回落 per-user llm_keys / 环境变量。 */
+export const llmProviders = pgTable('llm_providers', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  baseUrl: text('base_url'),                                     // null = 官方直连
+  apiKeyEnc: text('api_key_enc'),                                // null = 回落链
+  models: jsonb('models').$type<string[]>().notNull().default([]),
+  defaultModel: text('default_model'),
+  createdBy: text('created_by'),                                 // 纯 text，仿 projects.created_by（v2 additive 表不挂 FK）
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const machines = pgTable('machines', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
