@@ -258,6 +258,7 @@ export const sessions = pgTable('sessions', {
   model: text('model'),
   role: text('role'),
   cwd: text('cwd').notNull(),
+  title: text('title'),
   state: text('state').notNull().default('starting'),
   nativeSessionId: text('native_session_id'),
   runId: text('run_id'),

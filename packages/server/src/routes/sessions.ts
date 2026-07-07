@@ -34,6 +34,7 @@ const spawnBodySchema = z.object({
   env: z.record(z.string(), z.string()).optional(),
   designer: z.boolean().optional(),
   taskIntake: z.boolean().optional(),
+  title: z.string().optional(),
   projectId: z.string().optional(),
 });
 
