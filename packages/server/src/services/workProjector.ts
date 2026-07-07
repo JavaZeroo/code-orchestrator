@@ -224,10 +224,12 @@ export async function applyEvent(evt: OrchEvent): Promise<void> {
       });
       break;
     }
-    case 'approval.decided':
-      // 只更新已投影的（gate）审批；tool 审批从未建，updateOnly 跳过
-      await upsert(`approval:${s(p.approvalId)}`, { type: 'approval', status: s(p.status) === 'approved' ? 'done' : 'failed', ended: true, updateOnly: true });
+    case 'approval.decided': {
+      const st = s(p.status);
+      const status: Status = st === 'approved' ? 'done' : st === 'expired' ? 'cancelled' : 'failed';
+      await upsert(`approval:${s(p.approvalId)}`, { type: 'approval', status, ended: true, updateOnly: true });
       break;
+    }
     default:
       break;
   }

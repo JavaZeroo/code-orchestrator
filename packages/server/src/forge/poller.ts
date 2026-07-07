@@ -5,9 +5,10 @@
  * forge 无关：CI/冲突状态由各 adapter 归一化（gitcode 看标签、github 看 checks）。
  */
 
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getDb, schema } from '../db/index';
 import { publish } from '../events';
+import { decideGate } from '../engine/engine';
 import { callRunner } from '../ws/runnerHub';
 import { getForge, isForgeKind } from './registry';
 import { anyForgeToken } from './tokens';
@@ -101,6 +102,29 @@ async function pollRef(ref: ForgeRefRow): Promise<void> {
       .update(schema.forgeRefs)
       .set({ active: 'no', snapshot: next as Record<string, unknown>, ciStatus: next.ciState, updatedAt: new Date() })
       .where(eq(schema.forgeRefs.id, ref.id));
+
+    // 门跟随：PR 终态时自动决议该 run 上仍 pending 的 gate 审批
+    if (ref.runId) {
+      try {
+        const pendingGates = await db
+          .select()
+          .from(schema.approvals)
+          .where(and(
+            eq(schema.approvals.runId, ref.runId),
+            eq(schema.approvals.kind, 'gate'),
+            eq(schema.approvals.status, 'pending'),
+          ));
+        const decidedBy = pr.state === 'merged' ? 'forge:pr-merged' : 'forge:pr-closed';
+        const decision = pr.state === 'merged'
+          ? { behavior: 'allow' as const }
+          : { behavior: 'deny' as const, message: 'PR closed without merge' };
+        for (const ap of pendingGates) {
+          await decideGate(ap, decision, decidedBy);
+        }
+      } catch (err) {
+        console.error(`[forge] gate-follow failed ${ref.repo}#${ref.number}:`, err instanceof Error ? err.message : err);
+      }
+    }
     return;
   }
 
