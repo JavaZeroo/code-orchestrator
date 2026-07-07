@@ -26,6 +26,7 @@ import { bus, publish } from '../events';
 import { parseForgeUrl } from '../forge/registry';
 import { callRunner, listMachines } from '../ws/runnerHub';
 import { spawnSession, SpawnError } from '../services/spawn';
+import { machineForRun } from './runMachine';
 
 type RunContext = {
   vars: Record<string, string>;
@@ -304,10 +305,10 @@ async function execCheck(runId: string, node: CheckNode, context: RunContext): P
     scheduleTick(runId);
   };
 
-  const machineId = pickMachine(undefined);
+  const machineId = await machineForRun(runId);
   const cwd = context.vars.cwd;
   if (!machineId) {
-    return fail('没有在线机器可跑 check');
+    return fail('无法定位该 run 的在线会话机器（check）');
   }
   if (!cwd) {
     return fail('check 需要 vars.cwd（worktree）');
@@ -400,7 +401,7 @@ ${subject}
 
 async function execMeeting(runId: string, node: MeetingNode, context: RunContext): Promise<void> {
   const db = getDb();
-  const machineId = pickMachine(undefined);
+  const machineId = await machineForRun(runId);
   const cwd = context.vars.cwd ?? '/root';
 
   const fail = async (error: string) => {
@@ -413,7 +414,7 @@ async function execMeeting(runId: string, node: MeetingNode, context: RunContext
   };
 
   if (!machineId) {
-    await fail('没有在线机器可用于会议参与者');
+    await fail('无法定位该 run 的在线会话机器（会议参与者）');
     return;
   }
 
@@ -546,9 +547,9 @@ async function concludeMeeting(state: MeetingState): Promise<void> {
   }
 
   // 模型仲裁
-  const machineId = pickMachine(undefined);
+  const machineId = await machineForRun(state.runId);
   if (!machineId) {
-    await finishMeeting(state, 'reject', '仲裁失败：没有在线机器');
+    await finishMeeting(state, 'reject', '仲裁失败：无法定位该 run 的在线会话机器');
     return;
   }
   const opinionsText = state.opinions
@@ -873,7 +874,7 @@ async function triggerRevision(
     sessionId = existing.id;
   } else {
     const cwd = context.vars.cwd;
-    const machineId = pickMachine(implNode.machine);
+    const machineId = await machineForRun(runId);
     if (!machineId || !cwd || !existsSync(cwd)) {
       return false; // 无处重开（worktree 不在/无机器）→ 交人工
     }
