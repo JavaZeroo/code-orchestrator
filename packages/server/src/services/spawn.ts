@@ -113,13 +113,18 @@ export interface SpawnRequest {
   nodeId?: string;
   createdBy?: string;
   projectId?: string;
+  effort?: MessageMeta['effort'];
 }
 
 export async function spawnSession(req: SpawnRequest): Promise<{ sessionId: string }> {
   const sessionId = createId();
   const agent = req.agent ?? 'claude';
   const resolved = await resolveModel(req.model, req.createdBy);
-  const meta: MessageMeta = { ...(req.meta ?? {}), model: resolved.model ?? req.meta?.model ?? null };
+  const meta: MessageMeta = {
+    ...(req.meta ?? {}),
+    model: resolved.model ?? req.meta?.model ?? null,
+    ...(req.effort != null ? { effort: req.effort } : {}),
+  };
 
   const title =
     req.title ??

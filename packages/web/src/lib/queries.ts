@@ -33,4 +33,14 @@ export const useProjects = () =>
 export const useWork = (projectId?: string | null) =>
   useQuery({ queryKey: ['work', projectId], queryFn: () => api.work(projectId), refetchInterval: 8_000 });
 
+export const useLlmEndpoints = () =>
+  useQuery({ queryKey: ['llm-endpoints'], queryFn: api.listEndpoints, refetchInterval: 30_000 });
+
+export const useProjectMaterializations = (projectId?: string | null) =>
+  useQuery({
+    queryKey: ['materializations', projectId],
+    queryFn: () => (projectId ? api.projectMaterializations(projectId) : Promise.resolve([])),
+    enabled: !!projectId,
+  });
+
 export const invalidate = (key: string) => void queryClient.invalidateQueries({ queryKey: [key] });

@@ -6,9 +6,10 @@ import { toast } from 'sonner';
 import { api, type Autonomy, type ForgeKind, type ProjectRow } from './api';
 import type { Me } from './Auth';
 import { Button } from './components/ui/button';
-import { Badge, Card, Input, Label, Textarea } from './components/ui/primitives';
+import { Badge, Card, Input, Label } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { invalidate, useProjects } from './lib/queries';
+import { useCurrentProject } from './lib/project';
 import { cn } from './lib/utils';
 import { ProjectDetail } from './ProjectDetail';
 
@@ -48,56 +49,8 @@ export function AutonomySwitch({ value, onChange }: { value: Autonomy; onChange:
   );
 }
 
-export function LaunchContainer({ p, onOpenSession }: { p: ProjectRow; onOpenSession: (id: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [prompt, setPrompt] = useState('');
-  const [busy, setBusy] = useState(false);
-  const launch = () => {
-    setBusy(true);
-    api
-      .createContainerSession({ projectId: p.id, prompt: prompt.trim() || undefined, model: p.models.dev })
-      .then((r) => {
-        if (r.sessionId) {
-          toast.success('容器会话已启动');
-          onOpenSession(r.sessionId);
-        } else if (r.queued) {
-          toast('无空闲机器，已排队；有资源自动派发');
-        }
-        setOpen(false);
-        setPrompt('');
-      })
-      .catch((e) => toast.error(String(e instanceof Error ? e.message : e)))
-      .finally(() => setBusy(false));
-  };
-  if (!open) {
-    return (
-      <Button variant="secondary" size="sm" onClick={(e) => { e.stopPropagation(); setOpen(true); }}>
-        <Rocket size={13} /> 启动容器会话
-      </Button>
-    );
-  }
-  return (
-    <div className="flex flex-col gap-2 rounded-lg border border-line bg-bg-2/40 p-2.5">
-      <Textarea
-        rows={2}
-        value={prompt}
-        placeholder="给 agent 的首条任务（在训练容器内执行，可空）"
-        onChange={(e) => setPrompt(e.target.value)}
-        className="resize-none"
-      />
-      <div className="flex gap-2">
-        <Button variant="default" size="sm" disabled={busy} onClick={launch}>
-          <Rocket size={13} /> {busy ? '启动中…' : '启动'}
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
-          取消
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 function ProjectCard({ p, onOpenSession, onEnterDetail }: { p: ProjectRow; onOpenSession: (id: string) => void; onEnterDetail: () => void }) {
+  const { setProjectId } = useCurrentProject();
   const setAutonomy = (autonomy: Autonomy) => {
     api
       .patchProject(p.id, { autonomy })
@@ -164,7 +117,11 @@ function ProjectCard({ p, onOpenSession, onEnterDetail }: { p: ProjectRow; onOpe
             <span className="mono-nums truncate" title={p.baseImage}>{p.baseImage}</span>
             {p.accel && <Badge tone="run">{p.accel.kind}</Badge>}
           </span>
-          <span onClick={(e) => e.stopPropagation()}><LaunchContainer p={p} onOpenSession={onOpenSession} /></span>
+          <span onClick={(e) => { e.stopPropagation(); setProjectId(p.id); onOpenSession('new'); }}>
+            <Button variant="secondary" size="sm">
+              <Rocket size={13} /> 启动容器会话
+            </Button>
+          </span>
         </div>
       ) : null}
     </Card>

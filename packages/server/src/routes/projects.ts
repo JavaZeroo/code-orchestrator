@@ -38,6 +38,18 @@ export async function registerProjectRoutes(app: FastifyInstance): Promise<void>
     return { projects: rows };
   });
 
+  app.get<{ Params: { id: string } }>('/api/projects/:id/materializations', async (req) => {
+    const rows = await getDb()
+      .select({
+        machineId: schema.projectMaterializations.machineId,
+        basePath: schema.projectMaterializations.basePath,
+        status: schema.projectMaterializations.status,
+      })
+      .from(schema.projectMaterializations)
+      .where(eq(schema.projectMaterializations.projectId, req.params.id));
+    return { materializations: rows };
+  });
+
   app.patch<{ Params: { id: string } }>('/api/projects/:id', async (req, reply) => {
     const patch = bodySchema.partial().parse(req.body ?? {});
     if (Object.keys(patch).length === 0) {

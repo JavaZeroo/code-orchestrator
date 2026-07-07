@@ -3,7 +3,7 @@
  * 内容从 ProjectsPage（概览）、TriggersPage（自动化）、WorkflowsPage（模板）搬迁。
  */
 
-import { Archive, ArchiveRestore, ChevronDown, ExternalLink, MessageCircle, Play, Plus, RefreshCw, Star, Trash2, Workflow as WorkflowIcon } from 'lucide-react';
+import { Archive, ArchiveRestore, ChevronDown, ExternalLink, MessageCircle, Play, Plus, RefreshCw, Rocket, Star, Trash2, Workflow as WorkflowIcon } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import type { CreateTriggerBody, ForgeKind, ProjectRow, RequirementRow, TriggerRow, WorkflowDefRow } from './api';
@@ -15,7 +15,8 @@ import { Badge, Card, Input, Label, Spinner, Textarea, type BadgeTone } from './
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { invalidate, useRequirements, useTriggers, useWorkflows } from './lib/queries';
 import { cn, relTime } from './lib/utils';
-import { AutonomySwitch, LaunchContainer } from './ProjectsPage';
+import { AutonomySwitch } from './ProjectsPage';
+import { useCurrentProject } from './lib/project';
 
 /* ──────── 自动化：触发器相关子组件（从 TriggersPage 搬迁） ──────── */
 
@@ -358,6 +359,7 @@ export function ProjectDetail({
   onOpenSession: (id: string) => void;
   onOpenRun: (runId: string) => void;
 }) {
+  const { setProjectId } = useCurrentProject();
   const [view, setView] = useState<'detail' | 'designer'>('detail');
   const { data: allDefs = [] } = useWorkflows();
   const { data: allTriggers = [], isLoading: tLoading } = useTriggers();
@@ -435,7 +437,9 @@ export function ProjectDetail({
               <span className="mono-nums truncate" title={project.baseImage}>{project.baseImage}</span>
               {project.accel && <Badge tone="run">{project.accel.kind}</Badge>}
             </span>
-            <LaunchContainer p={project} onOpenSession={onOpenSession} />
+            <Button variant="secondary" size="sm" onClick={(e) => { e.stopPropagation(); setProjectId(project.id); onOpenSession('new'); }}>
+              <Rocket size={13} /> 启动容器会话
+            </Button>
           </div>
         ) : null}
       </Card>
