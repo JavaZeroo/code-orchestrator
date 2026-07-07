@@ -100,6 +100,14 @@ read -r CANN MS HP <<< "$V"
 
 超时给足（RPC + docker exec 均 15min，容忍装包/编包）；activate 非 0 退出 → 会话回滚（不留半吊子）。「列可用版本」的 resolve（供 UI 下拉）留 v2；v1 版本在 `project.components` 手填。
 
+## 4.2 memory 与 AgentBackend（M4 #35）
+
+memory = **agent 后端原生文件**，co 只做持久化+同步（Q5）。`AgentBackend` 适配器声明「记忆目录在容器内哪」（可插拔，opencode 以后加一个）。v1 Claude Code：
+- **`CLAUDE.md`** 在仓内、随 worktree(git) 自带，无需额外处理；
+- **`~/.claude/projects/-workspace/memory/`**（仓外那份持续沉淀）：co 把 `<dataRoot>/co/memory/<projectId>` 挂到该路径 → **跨容器持久**（会话销毁不丢）。
+
+**v1 = per-机持久**（同机复用记忆）；**跨机一致（Q5 的 git 中心仓：会话结束 commit/push、启动 checkout）留 v2**——落地时经 co-server 现有 WS 通道中转 memory blob，避免跨主机 git 网络。
+
 ## 5. 安全与迁移底线
 
 - 容器永远低权；co-server 保持又小又可信（握加密 token、做合并）。领域插件=沙箱脚本、不进 co-server。

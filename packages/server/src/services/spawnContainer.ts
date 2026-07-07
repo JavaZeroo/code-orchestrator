@@ -10,6 +10,7 @@
 
 import { createId } from '@paralleldrive/cuid2';
 import { eq } from 'drizzle-orm';
+import { getAgentBackend } from '../agents/backends';
 import { getDb, hasDb, schema } from '../db/index';
 import { publish } from '../events';
 import type { MessageMeta } from '@co/protocol';
@@ -173,6 +174,11 @@ export async function spawnContainerSession(
     ];
     if (dataRoot) {
       mounts.push({ host: dataRoot, container: dataRoot, ro: false });
+      // memory 持久化（design-v2 Q5）：后端记忆目录挂到数据盘持久卷——跨容器持久（跨机 git 同步留 v2）
+      const backend = getAgentBackend('claude');
+      if (backend) {
+        mounts.push({ host: `${dataRoot}/co/memory/${req.projectId}`, container: backend.memoryContainerPath });
+      }
     }
     const runRes = await callRunner(machineId, 'container.run', {
       image: project.baseImage,
