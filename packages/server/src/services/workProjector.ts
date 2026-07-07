@@ -22,6 +22,8 @@ interface Upsert {
   ended?: boolean;
   /** 只在已存在时更新，不新建（如 approval.decided 不该为从未投影的 tool 审批建根） */
   updateOnly?: boolean;
+  /** 归属项目(任务中心按项目过滤):投影时从事件 payload 或 runs 表回填 */
+  projectId?: string;
 }
 
 const NODE_STATUS: Record<string, Status> = {
@@ -55,6 +57,7 @@ async function upsert(key: string, patch: Upsert): Promise<void> {
         status: patch.status ?? (existing.status as Status),
         owner: patch.owner ?? existing.owner,
         parentId: parentId ?? existing.parentId,
+        projectId: patch.projectId ?? existing.projectId,
         refs: { ...(existing.refs ?? {}), ...(patch.refs ?? {}) },
         meta: { ...(existing.meta ?? {}), ...(patch.meta ?? {}) },
         endedAt: patch.ended ? now : existing.endedAt,
@@ -72,6 +75,7 @@ async function upsert(key: string, patch: Upsert): Promise<void> {
         status: patch.status ?? 'active',
         owner: patch.owner,
         parentId,
+        projectId: patch.projectId,
         refs: patch.refs ?? {},
         meta: patch.meta ?? {},
         endedAt: patch.ended ? now : null,
@@ -92,6 +96,22 @@ async function setParent(childKey: string, parentKey: string): Promise<void> {
 type P = Record<string, unknown>;
 const s = (v: unknown): string => String(v ?? '');
 
+/** 解析某 run 的归属项目:payload 优先 → 已投影的 run 节点 → 回查 runs 表(历史事件 payload 无 projectId 时回填)。 */
+async function projectIdForRun(runId: string | undefined, payloadProjectId?: unknown): Promise<string | undefined> {
+  if (payloadProjectId) {
+    return s(payloadProjectId);
+  }
+  if (!runId) {
+    return undefined;
+  }
+  const wi = (await getDb().select({ projectId: schema.workItems.projectId }).from(schema.workItems).where(eq(schema.workItems.key, `run:${runId}`)).limit(1))[0];
+  if (wi?.projectId) {
+    return wi.projectId;
+  }
+  const run = (await getDb().select({ projectId: schema.workflowRuns.projectId }).from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId)).limit(1))[0];
+  return run?.projectId ?? undefined;
+}
+
 /** 事件 → work_items 投影。纯映射，live 与 replay 共用。 */
 export async function applyEvent(evt: OrchEvent): Promise<void> {
   const p = (evt.payload ?? {}) as P;
@@ -102,7 +122,7 @@ export async function applyEvent(evt: OrchEvent): Promise<void> {
       let projectKey: string | undefined;
       if (p.projectId) {
         projectKey = `project:${s(p.projectId)}`;
-        await upsert(projectKey, { type: 'project', status: 'active', title: s(p.project) || s(p.repo), refs: { projectId: p.projectId, repo: p.repo } });
+        await upsert(projectKey, { type: 'project', status: 'active', title: s(p.project) || s(p.repo), projectId: s(p.projectId), refs: { projectId: p.projectId, repo: p.repo } });
       }
       const reqKey = `req:${s(p.triggerId)}:${s(p.issue)}`;
       await upsert(reqKey, {
@@ -111,6 +131,7 @@ export async function applyEvent(evt: OrchEvent): Promise<void> {
         status: 'active',
         title: `#${s(p.issue)} ${s(p.title)}`,
         parentKey: projectKey,
+        projectId: p.projectId ? s(p.projectId) : undefined,
         refs: { forge: p.forge, repo: p.repo, issue: p.issue, url: p.url, runId: evt.runId },
       });
       if (runKey) {
@@ -130,7 +151,8 @@ export async function applyEvent(evt: OrchEvent): Promise<void> {
       break;
     case 'run.started':
       if (runKey) {
-        await upsert(runKey, { type: 'run', status: 'active', title: s(p.name) || 'run', refs: { runId: evt.runId, defId: p.defId } });
+        const projectId = await projectIdForRun(evt.runId, p.projectId);
+        await upsert(runKey, { type: 'run', status: 'active', title: s(p.name) || 'run', projectId, refs: { runId: evt.runId, defId: p.defId } });
       }
       break;
     case 'run.status':
@@ -150,6 +172,7 @@ export async function applyEvent(evt: OrchEvent): Promise<void> {
           parentKey: runKey,
           title: s(p.nodeId),
           status: NODE_STATUS[s(p.status)] ?? 'active',
+          projectId: await projectIdForRun(evt.runId),
           refs: { runId: evt.runId, nodeId: p.nodeId, sessionId: p.sessionId },
         });
       }
@@ -166,6 +189,7 @@ export async function applyEvent(evt: OrchEvent): Promise<void> {
         parentKey: `node:${evt.runId}:${s(p.nodeId)}`,
         title: `PR ${s(p.repo)}#${s(p.number)}`,
         status: 'active',
+        projectId: await projectIdForRun(evt.runId),
         refs: { forge: p.forge, repo: p.repo, number: p.number, runId: evt.runId, nodeId: p.nodeId },
       });
       break;
@@ -187,7 +211,7 @@ export async function applyEvent(evt: OrchEvent): Promise<void> {
       // 确保父节点 work-item 先存在（审批事件常早于该节点的 run.node.state），再挂审批
       const nodeKey = p.nodeId && evt.runId ? `node:${evt.runId}:${s(p.nodeId)}` : undefined;
       if (nodeKey) {
-        await upsert(nodeKey, { type: 'node', parentKey: runKey, title: s(p.nodeId), refs: { runId: evt.runId, nodeId: p.nodeId } });
+        await upsert(nodeKey, { type: 'node', parentKey: runKey, title: s(p.nodeId), projectId: await projectIdForRun(evt.runId), refs: { runId: evt.runId, nodeId: p.nodeId } });
       }
       await upsert(`approval:${s(p.id)}`, {
         type: 'approval',
@@ -195,6 +219,7 @@ export async function applyEvent(evt: OrchEvent): Promise<void> {
         title: s(p.title) || '待审批',
         owner: 'human',
         status: 'waiting_human',
+        projectId: await projectIdForRun(evt.runId),
         refs: { approvalId: p.id, kind: p.kind, runId: evt.runId, nodeId: p.nodeId },
       });
       break;
