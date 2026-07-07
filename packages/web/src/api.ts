@@ -21,6 +21,7 @@ export interface SessionRow {
   agent: string;
   model: string | null;
   cwd: string;
+  title: string | null;
   state: SessionState | string;
   nativeSessionId: string | null;
   runId: string | null;

@@ -108,6 +108,7 @@ export interface SpawnRequest {
   env?: Record<string, string>;
   designer?: boolean;
   taskIntake?: boolean;
+  title?: string;
   runId?: string;
   nodeId?: string;
   createdBy?: string;
@@ -120,6 +121,13 @@ export async function spawnSession(req: SpawnRequest): Promise<{ sessionId: stri
   const resolved = await resolveModel(req.model, req.createdBy);
   const meta: MessageMeta = { ...(req.meta ?? {}), model: resolved.model ?? req.meta?.model ?? null };
 
+  const title =
+    req.title ??
+    (req.designer ? '对话式搭建工作流'
+     : req.taskIntake ? '新建任务对话'
+     : req.nodeId ? `run节点 · ${req.nodeId}`
+     : null);
+
   const db = getDb();
   await db.insert(schema.sessions).values({
     id: sessionId,
@@ -128,6 +136,7 @@ export async function spawnSession(req: SpawnRequest): Promise<{ sessionId: stri
     model: resolved.model ?? req.model,
     role: req.role,
     cwd: req.cwd,
+    title,
     state: 'starting',
     runId: req.runId,
     nodeId: req.nodeId,

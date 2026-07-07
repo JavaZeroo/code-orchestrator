@@ -12,7 +12,7 @@ import { Spinner, StatusDot } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { useProjects, useRuns, useSessions } from './lib/queries';
 import { ProjectProvider, useCurrentProject, useProjectScope } from './lib/project';
-import { cn } from './lib/utils';
+import { cn, relTime, fmtCost } from './lib/utils';
 
 type Tab = 'dashboard' | 'tasks' | 'projects' | 'sessions';
 
@@ -159,7 +159,7 @@ function Sidebar({
   );
 }
 
-function SessionsScreen({ selected, setSelected }: { selected: string | 'new'; setSelected: (v: string | 'new') => void }) {
+function SessionsScreen({ selected, setSelected, openRun }: { selected: string | 'new'; setSelected: (v: string | 'new') => void; openRun: (runId: string) => void }) {
   const { data: allSessions = [] } = useSessions();
   const { data: runs = [] } = useRuns();
   const { inScope } = useProjectScope();
@@ -167,33 +167,103 @@ function SessionsScreen({ selected, setSelected }: { selected: string | 'new'; s
   // 会话作用域：自身 projectId，否则经其 run 归属（工作流会话）
   const sessions = allSessions.filter((s) => inScope(s.projectId ?? (s.runId ? runProj.get(s.runId) ?? null : null)));
   const current = allSessions.find((s) => s.id === selected);
+
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<'all' | 'manual' | 'workflow'>('all');
+  const [showHistory, setShowHistory] = useState(false);
+
+  const LIVE = new Set(['starting', 'thinking', 'waiting_approval', 'waiting_input']);
+  const q = search.trim().toLowerCase();
+  const visible = sessions.filter((s) => {
+    if (filter === 'manual' && s.runId) return false;
+    if (filter === 'workflow' && !s.runId) return false;
+    return !q || [s.title, s.cwd, s.model, s.id].some((v) => v?.toLowerCase().includes(q));
+  });
+  const live = visible.filter((s) => LIVE.has(s.state));
+  const idle = visible.filter((s) => s.state === 'idle');
+  const dead = visible.filter((s) => s.state === 'dead');
+
+  const renderRow = (s: typeof allSessions[number]) => (
+    <div
+      key={s.id}
+      className={cn('flex items-center gap-2 rounded-lg pr-1', selected === s.id && 'bg-panel-2 shadow-[var(--shadow-panel)]')}
+    >
+      <button
+        className="flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left transition-colors hover:bg-panel-2"
+        onClick={() => setSelected(s.id)}
+      >
+        <StatusDot tone={STATE_DOT[s.state] ?? 'neutral'} live={s.state === 'thinking' || s.state === 'starting'} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-medium text-ink-2">{s.title ?? (s.cwd.split('/').pop() || s.cwd)}</span>
+          <span className="mono-nums block truncate text-[10px] text-faint">
+            {s.model ?? 'claude'} · {relTime(s.createdAt)}{s.usage ? ` · ${fmtCost(s.usage.costUsd)}` : ''}
+          </span>
+        </span>
+      </button>
+      {s.runId && (
+        <button
+          title="跳到 run"
+          onClick={(e) => { e.stopPropagation(); openRun(s.runId!); }}
+          className="shrink-0 rounded px-1.5 py-1 text-[10px] text-faint hover:bg-panel-2 hover:text-ink-2"
+        >
+          跳到 run
+        </button>
+      )}
+    </div>
+  );
+
   return (
     <div className="flex flex-1 overflow-hidden">
       <aside className="flex w-64 shrink-0 flex-col gap-2 border-r border-line bg-bg-2/40 p-3">
         <Button variant="default" className="w-full" onClick={() => setSelected('new')}>
           新建会话
         </Button>
+
+        <input
+          type="text"
+          placeholder="搜索标题/cwd/模型/id…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="w-full rounded-lg border border-line bg-bg-2 px-2.5 py-1.5 text-[12px] text-ink-2 outline-none placeholder:text-faint focus:border-accent"
+        />
+
+        <div className="flex gap-1">
+          <Button variant={filter === 'all' ? 'default' : 'secondary'} size="sm" className="flex-1 text-[11px]" onClick={() => setFilter('all')}>
+            全部
+          </Button>
+          <Button variant={filter === 'manual' ? 'default' : 'secondary'} size="sm" className="flex-1 text-[11px]" onClick={() => setFilter('manual')}>
+            人工会话
+          </Button>
+          <Button variant={filter === 'workflow' ? 'default' : 'secondary'} size="sm" className="flex-1 text-[11px]" onClick={() => setFilter('workflow')}>
+            工作流代跑
+          </Button>
+        </div>
+
         <div className="flex flex-1 flex-col gap-1 overflow-y-auto">
-          {sessions.map((s) => (
-            <button
-              key={s.id}
-              className={cn(
-                'flex items-center gap-2.5 rounded-lg p-2 text-left transition-colors hover:bg-panel-2',
-                selected === s.id && 'bg-panel-2 shadow-[var(--shadow-panel)]',
-              )}
-              onClick={() => setSelected(s.id)}
-            >
-              <StatusDot tone={STATE_DOT[s.state] ?? 'neutral'} live={s.state === 'thinking' || s.state === 'starting'} />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px] font-medium text-ink-2">{s.cwd.split('/').pop() || s.cwd}</span>
-                <span className="mono-nums block truncate text-[10px] text-faint">
-                  {s.model ?? 'claude'}
-                  {s.runId ? ' · 工作流' : ''}
-                </span>
-              </span>
-            </button>
-          ))}
-          {sessions.length === 0 && <p className="px-2 py-6 text-center text-xs text-faint">还没有会话</p>}
+          {live.length > 0 && (
+            <>
+              <div className="px-2 pt-1 pb-0.5 text-[10px] font-semibold tracking-wide text-faint uppercase">进行中</div>
+              {live.map(renderRow)}
+            </>
+          )}
+          {idle.length > 0 && (
+            <>
+              <div className="px-2 pt-2 pb-0.5 text-[10px] font-semibold tracking-wide text-faint uppercase">空闲</div>
+              {idle.map(renderRow)}
+            </>
+          )}
+          {dead.length > 0 && (
+            <>
+              <button
+                className="flex items-center gap-1.5 px-2 py-1.5 text-left text-[10px] font-semibold tracking-wide text-faint uppercase hover:text-ink-2"
+                onClick={() => setShowHistory(!showHistory)}
+              >
+                历史 {dead.length} 条 {showHistory ? '▾' : '▸'}
+              </button>
+              {showHistory && dead.map(renderRow)}
+            </>
+          )}
+          {visible.length === 0 && <p className="px-2 py-6 text-center text-xs text-faint">还没有会话</p>}
         </div>
       </aside>
       <main className="flex flex-1 overflow-hidden">
@@ -251,7 +321,7 @@ export function App() {
               <TasksPage onOpenSession={openSession} openRunId={openRunId} onOpenRunConsumed={() => setOpenRunId(null)} />
             )}
             {tab === 'projects' && <ProjectsPage me={me} onOpenSession={openSession} onOpenRun={openRun} />}
-            {tab === 'sessions' && <SessionsScreen selected={selectedSession} setSelected={setSelectedSession} />}
+            {tab === 'sessions' && <SessionsScreen selected={selectedSession} setSelected={setSelectedSession} openRun={openRun} />}
           </div>
         </main>
       </div>
