@@ -144,6 +144,7 @@ function TaskPlanPane({
   taskPlan,
   workflowDraft,
   defsMap,
+  activeView,
   onStart,
   onSaveAndStart,
   onAdvanced,
@@ -151,6 +152,7 @@ function TaskPlanPane({
   taskPlan: TaskPlan | null;
   workflowDraft: WorkflowDef | null;
   defsMap: Record<string, WorkflowDefRow>;
+  activeView: 'task.plan' | 'workflow.draft' | null;
   onStart: (vars: Record<string, string>) => void;
   onSaveAndStart: (def: WorkflowDef) => void;
   onAdvanced: () => void;
@@ -166,8 +168,8 @@ function TaskPlanPane({
     }
   }, [taskPlan]);
 
-  // 工作流草稿路线
-  if (workflowDraft) {
+  // 按 activeView 决定渲染哪个计划（最新事件优先于类型优先级）
+  if (activeView === 'workflow.draft' && workflowDraft) {
     return (
       <div className="flex w-[46%] flex-col overflow-hidden">
         <header className="flex items-center justify-between border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
@@ -187,7 +189,7 @@ function TaskPlanPane({
   }
 
   // 模板计划路线
-  if (taskPlan) {
+  if (activeView === 'task.plan' && taskPlan) {
     const def = defsMap[taskPlan.defId];
     const varKeys = Object.keys(taskPlan.vars);
     return (
@@ -296,6 +298,15 @@ function TaskIntake({
 
   const events = useSessionEvents(session?.id ?? '');
 
+  // 按事件时序决定优先展示哪个计划（最新的为准）
+  const lastPlanType: 'task.plan' | 'workflow.draft' | null = useMemo(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const t = events[i]?.type;
+      if (t === 'task.plan' || t === 'workflow.draft') return t;
+    }
+    return null;
+  }, [events]);
+
   const taskPlan = useMemo<TaskPlan | null>(() => {
     for (let i = events.length - 1; i >= 0; i--) {
       if (events[i]?.type === 'task.plan') {
@@ -391,6 +402,7 @@ function TaskIntake({
             taskPlan={taskPlan}
             workflowDraft={workflowDraft}
             defsMap={defsMap}
+            activeView={lastPlanType}
             onStart={startPlan}
             onSaveAndStart={saveAndStart}
             onAdvanced={() => setShowAdvanced(true)}

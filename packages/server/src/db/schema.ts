@@ -318,7 +318,7 @@ export const workflowDefs = pgTable('workflow_defs', {
   createdBy: text('created_by'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   /** 归档标记（任务中心③期手加，additive）：'yes' 隐藏于模板选择器；默认 'no' */
-  archived: text('archived').notNull().default('no'),
+  archived: text('archived', { enum: ['yes', 'no'] }).notNull().default('no'),
 });
 
 export const workflowRuns = pgTable('workflow_runs', {
