@@ -33,9 +33,6 @@ export const useProjects = () =>
 export const useWork = (projectId?: string | null) =>
   useQuery({ queryKey: ['work', projectId], queryFn: () => api.work(projectId), refetchInterval: 8_000 });
 
-export const useLlmEndpoints = () =>
-  useQuery({ queryKey: ['llm-endpoints'], queryFn: api.listEndpoints, refetchInterval: 30_000 });
-
 export const useLlmProviders = () =>
   useQuery({ queryKey: ['llm-providers'], queryFn: api.listProviders, refetchInterval: 30_000 });
 

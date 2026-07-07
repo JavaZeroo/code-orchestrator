@@ -257,10 +257,16 @@ function ProviderCard({
 
   const isBuiltin = BUILTIN_PROVIDERS.includes(provider.name);
 
-  const updateProvider = (patch: Parameters<typeof api.saveProvider>[1]) => {
+  const updateProvider = (patch: { base_url?: string | null; api_key?: string; models?: string[]; default_model?: string | null }) => {
     setBusy(true);
+    // 服务端 PUT 对 baseUrl/models/defaultModel 无条件写入，必须传全量
     api
-      .saveProvider(provider.name, patch)
+      .saveProvider(provider.name, {
+        base_url: provider.baseUrl,
+        models: provider.models,
+        default_model: provider.defaultModel,
+        ...patch,
+      })
       .then(() => {
         toast.success(`已更新 ${provider.name}`);
         onChanged();
@@ -417,8 +423,8 @@ function ProviderCard({
           </button>
         )}
 
-        {/* 删除（仅非内置） */}
-        {!isBuiltin && (
+        {/* 删除（仅非内置 + 自己的） */}
+        {!isBuiltin && provider.createdBy === me.user.id && (
           <button
             className="text-danger underline hover:text-danger/80"
             disabled={busy}
