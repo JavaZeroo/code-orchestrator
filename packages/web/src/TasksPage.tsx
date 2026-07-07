@@ -161,10 +161,16 @@ function TaskPlanPane({
   const [saving, setSaving] = useState(false);
   const [starting, setStarting] = useState(false);
 
-  // 同步 taskPlan 变量到编辑状态，保留用户已改的值
+  // 同步 taskPlan 变量到编辑状态：agent 新设的 key 以 agent 为准，只保留用户新增的 key
   useEffect(() => {
     if (taskPlan) {
-      setEditVars((prev) => ({ ...taskPlan.vars, ...prev }));
+      setEditVars((prev) => {
+        const next = { ...taskPlan.vars };
+        for (const k of Object.keys(prev)) {
+          if (!(k in next)) next[k] = prev[k]!;
+        }
+        return next;
+      });
     }
   }, [taskPlan]);
 
