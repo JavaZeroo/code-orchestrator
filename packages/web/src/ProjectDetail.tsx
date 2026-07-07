@@ -42,7 +42,7 @@ function parseVars(text: string): Record<string, string> {
   return out;
 }
 
-function CreateTriggerForm({ me }: { me: Me }) {
+function CreateTriggerForm({ me, projectId }: { me: Me; projectId: string }) {
   const { data: workflows = [] } = useWorkflows();
   const [forge, setForge] = useState<ForgeKind>('github');
   const [repo, setRepo] = useState('');
@@ -57,6 +57,7 @@ function CreateTriggerForm({ me }: { me: Me }) {
 
   const create = () => {
     const body: CreateTriggerBody = {
+      projectId,
       forge,
       repo: repo.trim(),
       defId,
@@ -352,7 +353,7 @@ export function ProjectDetail({
           issue 满足条件 → 自动起工作流。
           <span className="text-ink-2"> seeded/failed 基线在这里查看</span>——它们是配置域诊断日志，不进任务树。
         </p>
-        <CreateTriggerForm me={me} />
+        <CreateTriggerForm me={me} projectId={project.id} />
 
         <h3 className="pt-2 text-xs font-semibold text-dim">
           触发器 {triggers.length > 0 && <span className="text-dim/70">({triggers.length})</span>}
