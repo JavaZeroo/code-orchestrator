@@ -95,11 +95,12 @@ export async function startRun(defId: string, vars: Record<string, string>, proj
 
   const runId = createId();
   const context: RunContext = { vars: { ...(def.vars ?? {}), ...vars }, outputs: {} };
-  await db.insert(schema.workflowRuns).values({ id: runId, defId, projectId: projectId ?? defRow.projectId, status: 'running', context });
+  const effectiveProjectId = projectId ?? defRow.projectId ?? undefined;
+  await db.insert(schema.workflowRuns).values({ id: runId, defId, projectId: effectiveProjectId, status: 'running', context });
   await db
     .insert(schema.nodeStates)
     .values(def.nodes.map((n) => ({ runId, nodeId: n.id, status: 'pending' as const })));
-  await publish({ type: 'run.started', runId, payload: { defId, name: def.name, vars: context.vars } });
+  await publish({ type: 'run.started', runId, payload: { defId, name: def.name, vars: context.vars, projectId: effectiveProjectId } });
   scheduleTick(runId);
   return runId;
 }

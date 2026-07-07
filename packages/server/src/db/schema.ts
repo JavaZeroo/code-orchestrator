@@ -212,13 +212,15 @@ export const workItems = pgTable(
     title: text('title'),
     status: text('status').notNull().default('active'), // pending|active|waiting_human|blocked|done|failed|cancelled
     owner: text('owner'), // pm|dev|se|human…
+    /** 归属项目(任务中心按项目过滤,design-ui-ia ①):投影时从事件 payload 或 runs 表回填 */
+    projectId: text('project_id'),
     refs: jsonb('refs').$type<Record<string, unknown>>().notNull().default({}),
     meta: jsonb('meta').$type<Record<string, unknown>>().notNull().default({}),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     endedAt: timestamp('ended_at', { withTimezone: true }),
   },
-  (t) => [index('work_items_parent_idx').on(t.parentId), index('work_items_type_idx').on(t.type)],
+  (t) => [index('work_items_parent_idx').on(t.parentId), index('work_items_type_idx').on(t.type), index('work_items_project_idx').on(t.projectId)],
 );
 
 /** 用户可自定义的 LLM 端点注册表（会话/工作流选模型时按 label 命中） */
