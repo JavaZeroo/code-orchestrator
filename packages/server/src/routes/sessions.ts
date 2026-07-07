@@ -11,6 +11,7 @@ import { getDb, hasDb, schema } from '../db/index';
 import { decideGate } from '../engine/engine';
 import { publish } from '../events';
 import { spawnSession, SpawnError } from '../services/spawn';
+import { ContainerSpawnQueued, spawnContainerSession } from '../services/spawnContainer';
 import { callRunner } from '../ws/runnerHub';
 
 class HttpError extends Error {
@@ -72,6 +73,30 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     requireDb();
     const body = spawnBodySchema.parse(req.body);
     return spawnSession({ ...body, createdBy: req.user?.id });
+  });
+
+  // 容器化会话（design-v2 #37）：项目须配 baseImage；无空闲机 → 202 排队
+  app.post('/api/container-sessions', async (req, reply) => {
+    requireDb();
+    const body = z
+      .object({
+        projectId: z.string(),
+        prompt: z.string().optional(),
+        model: z.string().optional(),
+        machineId: z.string().optional(),
+        key: z.string().optional(),
+        base: z.string().optional(),
+      })
+      .parse(req.body);
+    try {
+      return await spawnContainerSession({ ...body, createdBy: req.user?.id });
+    } catch (e) {
+      if (e instanceof ContainerSpawnQueued) {
+        void reply.code(202);
+        return { queued: true, taskId: e.taskId };
+      }
+      throw e;
+    }
   });
 
   app.get('/api/sessions', async () => {

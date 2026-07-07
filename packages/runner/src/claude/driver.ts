@@ -280,6 +280,8 @@ export class ClaudeSession {
       env,
       abortController: this.abort,
       canUseTool: this.canUseTool,
+      // 把 claude CLI 的 stderr 透出来（容器内诊断用；平时也有助定位 CLI 层错误）
+      stderr: (data: string) => process.stderr.write(`[claude-cli] ${data}`),
     };
 
     if (p.designer) {

@@ -12,6 +12,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { eq } from 'drizzle-orm';
 import { getDb, hasDb, schema } from '../db/index';
 import { publish } from '../events';
+import type { MessageMeta } from '@co/protocol';
 import { anyForgeToken, userForgeToken } from '../forge/tokens';
 import type { ForgeKind } from '../forge/types';
 import { callRunner } from '../ws/runnerHub';
@@ -37,6 +38,10 @@ export interface ContainerSpawnRequest {
   runId?: string;
   nodeId?: string;
   base?: string;
+  /** 指定机器（覆盖调度，测试/手动放置用） */
+  machineId?: string;
+  /** 透传给 agent 的 meta（permissionMode / effort / allowedTools 等） */
+  meta?: MessageMeta;
 }
 
 /** #37 seam：把 agent 起在容器内（其 bash 见训练环境）。由 agent-in-container driver 实现。 */
@@ -48,6 +53,7 @@ export interface ContainerAgentContext {
   env: Record<string, string>;
   prompt?: string;
   model?: string;
+  meta?: MessageMeta;
 }
 export type StartAgentInContainer = (ctx: ContainerAgentContext) => Promise<void>;
 
@@ -58,7 +64,7 @@ const defaultStartAgent: StartAgentInContainer = async (ctx) => {
     agent: 'claude',
     cwd: ctx.workdir,
     prompt: ctx.prompt,
-    meta: ctx.model ? { model: ctx.model } : undefined,
+    meta: { ...(ctx.meta ?? {}), ...(ctx.model ? { model: ctx.model } : {}) },
     container: { containerId: ctx.containerId, nodePath: `${RUNTIME_MOUNT}/node`, agentMjs: `${RUNTIME_MOUNT}/agent.mjs` },
   });
   if (!res.ok) {
@@ -102,7 +108,7 @@ export async function spawnContainerSession(
   const accelKind = project.accel?.kind ?? null;
 
   // 1) 放置 + 预留（加速器路径原子占机）；无机则入队（已在队列中的重试不重复入队）
-  const placed = await schedule({ accelKind, projectId: req.projectId, sessionId });
+  const placed = await schedule({ accelKind, projectId: req.projectId, sessionId, id: req.machineId });
   if (!placed) {
     if (opts.alreadyQueued) {
       throw new ContainerSpawnQueued('');
@@ -132,6 +138,9 @@ export async function spawnContainerSession(
     // 3) 组装容器环境：模型端点 + forge token（Q10 注入）+ 项目 vars
     const resolved = await resolveModel(req.model, req.createdBy);
     const containerEnv: Record<string, string> = { ...(resolved.env ?? {}), ...(bindFlags?.env ?? {}) };
+    // 容器是一次性沙箱：IS_SANDBOX=1 允许 root 下 --dangerously-skip-permissions（否则 claude 拒绝退出）；HOME 供 CLI 落配置
+    containerEnv.IS_SANDBOX = '1';
+    containerEnv.HOME = '/root';
     if (token) {
       containerEnv.GH_TOKEN = token;
       containerEnv.GIT_ASKPASS = 'true';
@@ -150,6 +159,8 @@ export async function spawnContainerSession(
       devices: bindFlags?.devices ?? [],
       gpus: bindFlags?.gpus,
       extraArgs: [],
+      // 保活：容器需长驻，agent 经 docker exec 进入（否则镜像默认 CMD 退出即容器停）
+      command: ['sleep', 'infinity'],
     });
     if (!runRes.ok || !runRes.containerId) {
       throw new Error(`container.run failed @ ${machineId}: ${runRes.error ?? 'unknown'}`);
@@ -176,7 +187,7 @@ export async function spawnContainerSession(
     }
 
     // 6) 起 agent 于容器内（#37）：默认经 session.spawn 的 container 分支（docker exec 挂载的 node+agent.mjs）
-    await (startAgent ?? defaultStartAgent)({ sessionId, machineId, containerId, workdir: WORKSPACE, env: containerEnv, prompt: req.prompt, model: resolved.model ?? req.model });
+    await (startAgent ?? defaultStartAgent)({ sessionId, machineId, containerId, workdir: WORKSPACE, env: containerEnv, prompt: req.prompt, model: resolved.model ?? req.model, meta: req.meta });
 
     await publish({ type: 'session.created', sessionId, runId: req.runId, payload: { machineId, cwd: WORKSPACE, projectId: req.projectId, containerId } });
     return { sessionId };
