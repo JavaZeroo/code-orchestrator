@@ -107,3 +107,6 @@ if (existsSync(webDist)) {
 // TODO: better-auth 挂载（决策 §12.2）
 
 await app.listen({ port: env.PORT, host: env.HOST });
+
+// 容器/卡预留回收（design-v2 #39）：死会话的容器 rm + 卡释放，防泄漏挡后续调度
+void import('./services/containerGc').then((m) => m.startContainerGc());

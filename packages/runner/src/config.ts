@@ -16,15 +16,19 @@ const envSchema = z.object({
   ACCEL_KIND: z.string().optional(),
   /** 加速器张数（配合 ACCEL_KIND）：生成 resources=[{kind,index:0..count-1}]，M2 换真 detect */
   ACCEL_COUNT: z.coerce.number().int().nonnegative().default(0),
+  /** 显式卡号（逗号分隔，如 "6,7"）；设了就覆盖 ACCEL_COUNT——共享机上只声明空闲卡 */
+  ACCEL_INDICES: z.string().optional(),
 });
 
 const raw = envSchema.parse(process.env);
 
-/** v1 静态加速器清单：从 ACCEL_KIND×ACCEL_COUNT 派生；M2 由 accelerator 适配器 detect 替换 */
-const resources =
-  raw.ACCEL_KIND && raw.ACCEL_COUNT > 0
-    ? Array.from({ length: raw.ACCEL_COUNT }, (_, index) => ({ kind: raw.ACCEL_KIND!, index }))
-    : [];
+/** v1 静态加速器清单：优先 ACCEL_INDICES（显式空闲卡），否则 ACCEL_COUNT（0..count-1）；M2 换真 detect */
+const accelIndices = raw.ACCEL_KIND
+  ? raw.ACCEL_INDICES
+    ? raw.ACCEL_INDICES.split(',').map((s) => Number.parseInt(s.trim(), 10)).filter((n) => Number.isInteger(n))
+    : Array.from({ length: raw.ACCEL_COUNT }, (_, i) => i)
+  : [];
+const resources = raw.ACCEL_KIND ? accelIndices.map((index) => ({ kind: raw.ACCEL_KIND!, index })) : [];
 
 export const config = {
   serverUrl: raw.SERVER_URL,
