@@ -100,6 +100,7 @@ export async function resolveModel(
 export interface SpawnRequest {
   machineId: string;
   cwd: string;
+  sessionId?: string;
   prompt?: string;
   agent?: SessionAgent;
   model?: string;
@@ -117,7 +118,7 @@ export interface SpawnRequest {
 }
 
 export async function spawnSession(req: SpawnRequest): Promise<{ sessionId: string }> {
-  const sessionId = createId();
+  const sessionId = req.sessionId ?? createId();
   const agent = req.agent ?? 'claude';
   const resolved = await resolveModel(req.model, req.createdBy);
   const meta: MessageMeta = {

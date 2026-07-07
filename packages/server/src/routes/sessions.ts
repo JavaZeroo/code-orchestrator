@@ -12,6 +12,7 @@ import { decideGate } from '../engine/engine';
 import { publish } from '../events';
 import { spawnSession, SpawnError } from '../services/spawn';
 import { ContainerSpawnQueued, spawnContainerSession } from '../services/spawnContainer';
+import { resolveAndSpawn } from '../services/spawnAuto';
 import { callRunner } from '../ws/runnerHub';
 
 class HttpError extends Error {
@@ -24,8 +25,8 @@ class HttpError extends Error {
 }
 
 const spawnBodySchema = z.object({
-  machineId: z.string(),
-  cwd: z.string(),
+  machineId: z.string().optional(),
+  cwd: z.string().optional(),
   prompt: z.string().optional(),
   agent: sessionAgentSchema.default('claude'),
   model: z.string().optional(),
@@ -37,6 +38,7 @@ const spawnBodySchema = z.object({
   title: z.string().optional(),
   projectId: z.string().optional(),
   effort: MessageMetaSchema.shape.effort,
+  container: z.boolean().optional(),
 });
 
 const sendBodySchema = z.object({ text: z.string().min(1), meta: MessageMetaSchema.optional() });
@@ -73,7 +75,7 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     void reply.code(500).send({ error: err instanceof Error ? err.message : 'internal error' });
   });
 
-  app.post('/api/sessions', async (req) => {
+  app.post('/api/sessions', async (req, reply) => {
     const db = requireDb();
     const body = spawnBodySchema.parse(req.body);
     // 任务受理会话：注入当前项目可用模板清单 + forge/repo 上下文
@@ -96,7 +98,15 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
         body.meta = { ...body.meta, appendSystemPrompt: contextParts.join('\n') };
       }
     }
-    return spawnSession({ ...body, createdBy: req.user?.id });
+    try {
+      return await resolveAndSpawn({ ...body, createdBy: req.user?.id });
+    } catch (e) {
+      if (e instanceof ContainerSpawnQueued) {
+        void reply.code(202);
+        return { queued: true, taskId: e.taskId };
+      }
+      throw e;
+    }
   });
 
   // 容器化会话（design-v2 #37）：项目须配 baseImage；无空闲机 → 202 排队
