@@ -76,6 +76,30 @@
 - **M4 · memory 同步 + 项目切换**
   AgentBackend 适配器（v1 Claude Code：声明记忆路径）；中心 bare memory 仓 + 容器物化/回写；Web 顶部项目切换器 + 全局 scoping（看板/需求/工作流/会话）。
 
+## 4.1 EnvComponent 契约（M3 #34，依赖按版本激活）
+
+co 核心零领域代码：容器起好后、agent 起来前，co 在容器内执行**项目自带**的 `/workspace/.co/activate.sh`（不存在则跳过），并注入：
+
+- `CO_COMPONENTS`：JSON，选定的组件版本（`project.components`，如 `{"cann":"9.1.0-beta.3","mindspore":"2026-07-05","hyper-parallel":"main"}`）
+- `CO_DATA_ROOT`：该机数据盘根（如 `/data`，已原路径挂进容器）——多版本 CANN、依赖缓存都在其下
+
+脚本自己决定怎么「按版本就位」（Q7 三种模式：挂路径 / 装 wheel / git checkout）。示例（住 mindformers 项目仓 `.co/activate.sh`）：
+
+```bash
+#!/bin/bash
+set -e
+V=$(echo "$CO_COMPONENTS" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d.get("cann",""),d.get("mindspore",""),d.get("hyper-parallel",""))')
+read -r CANN MS HP <<< "$V"
+# CANN：数据盘多版本，source 即用（零拷贝）
+[ -n "$CANN" ] && source "$CO_DATA_ROOT/cann/$CANN/set_env.sh"
+# MindSpore：装当日 wheel 到数据盘缓存 venv，复用
+[ -n "$MS" ] && pip install --no-index -f "$CO_DATA_ROOT/co/cache/mindspore/$MS" mindspore || true
+# hyper-parallel：源码 checkout
+[ -n "$HP" ] && git -C /workspace/hyper-parallel checkout "$HP" || true
+```
+
+超时给足（RPC + docker exec 均 15min，容忍装包/编包）；activate 非 0 退出 → 会话回滚（不留半吊子）。「列可用版本」的 resolve（供 UI 下拉）留 v2；v1 版本在 `project.components` 手填。
+
 ## 5. 安全与迁移底线
 
 - 容器永远低权；co-server 保持又小又可信（握加密 token、做合并）。领域插件=沙箱脚本、不进 co-server。

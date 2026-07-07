@@ -15,7 +15,7 @@ import { publish } from '../events';
 import type { MessageMeta } from '@co/protocol';
 import { anyForgeToken, userForgeToken } from '../forge/tokens';
 import type { ForgeKind } from '../forge/types';
-import { callRunner } from '../ws/runnerHub';
+import { callRunner, listMachines } from '../ws/runnerHub';
 import { materializeWorkspace } from './materialize';
 import { releaseReservationForSession, schedule } from './scheduler';
 import { resolveModel } from './spawn';
@@ -71,6 +71,25 @@ const defaultStartAgent: StartAgentInContainer = async (ctx) => {
     throw new Error(`session.spawn(container) failed: ${res.error ?? 'unknown'}`);
   }
 };
+
+/**
+ * EnvComponent 激活（design-v2 Q7/Q8）：co 只在容器内跑项目自带的 `/workspace/.co/activate.sh`，
+ * 把选定版本（project.components）+ 数据盘根作为 env 注入——co 核心零领域代码（CANN/MindSpore 全在项目脚本里）。
+ * 脚本不存在则跳过（非容器化/简单项目）。可能编包/装 wheel，给足超时（RPC + exec 均 15min）。
+ */
+async function activateComponents(
+  machineId: string,
+  containerId: string,
+  components: Record<string, string>,
+  dataRoot?: string,
+): Promise<void> {
+  const compJson = JSON.stringify(components).replace(/'/g, "'\\''");
+  const cmd = `if [ -f /workspace/.co/activate.sh ]; then CO_COMPONENTS='${compJson}' CO_DATA_ROOT='${dataRoot ?? ''}' bash /workspace/.co/activate.sh; else echo '[co] no /workspace/.co/activate.sh — skip'; fi`;
+  const res = await callRunner(machineId, 'container.exec', { containerId, cmd, timeoutMs: 900_000 }, 920_000);
+  if (res.exitCode !== 0) {
+    throw new Error(`EnvComponent activate 失败 (exit ${res.exitCode}): ${(res.stderr || res.stdout).slice(-400)}`);
+  }
+}
 
 async function loadProject(projectId: string) {
   if (!hasDb()) {
@@ -146,15 +165,20 @@ export async function spawnContainerSession(
       containerEnv.GIT_ASKPASS = 'true';
     }
 
-    // 4) 起容器（绑卡）
+    // 4) 起容器（绑卡）。挂载该机数据盘 → 容器内同路径，供 EnvComponent 取多版本依赖/缓存（CANN 等）
+    const dataRoot = listMachines().find((m) => m.id === machineId)?.dataRoot;
+    const mounts: Array<{ host: string; container: string; ro?: boolean }> = [
+      { host: ws.cwd, container: WORKSPACE },
+      { host: RUNTIME_HOST, container: RUNTIME_MOUNT, ro: true },
+    ];
+    if (dataRoot) {
+      mounts.push({ host: dataRoot, container: dataRoot, ro: false });
+    }
     const runRes = await callRunner(machineId, 'container.run', {
       image: project.baseImage,
       name: `co-${sessionId.slice(0, 12)}`,
       workdir: WORKSPACE,
-      mounts: [
-        { host: ws.cwd, container: WORKSPACE },
-        { host: RUNTIME_HOST, container: RUNTIME_MOUNT, ro: true },
-      ],
+      mounts,
       env: containerEnv,
       devices: bindFlags?.devices ?? [],
       gpus: bindFlags?.gpus,
@@ -185,6 +209,9 @@ export async function spawnContainerSession(
         createdBy: req.createdBy,
       });
     }
+
+    // 5.5) EnvComponent activate（design-v2 Q7）：项目自带 .co/activate.sh，co 只按版本注入并在容器内执行（零领域代码）
+    await activateComponents(machineId, containerId, project.components ?? {}, dataRoot);
 
     // 6) 起 agent 于容器内（#37）：默认经 session.spawn 的 container 分支（docker exec 挂载的 node+agent.mjs）
     await (startAgent ?? defaultStartAgent)({ sessionId, machineId, containerId, workdir: WORKSPACE, env: containerEnv, prompt: req.prompt, model: resolved.model ?? req.model, meta: req.meta });

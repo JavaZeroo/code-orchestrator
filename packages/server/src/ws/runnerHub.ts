@@ -49,6 +49,7 @@ export async function callRunner<M extends RunnerMethodName>(
   machineId: string,
   method: M,
   params: RunnerParams<M>,
+  timeoutMs?: number,
 ): Promise<RunnerResult<M>> {
   const conn = runners.get(machineId);
   if (!conn) {
@@ -60,7 +61,7 @@ export async function callRunner<M extends RunnerMethodName>(
     const timer = setTimeout(() => {
       conn.pending.delete(id);
       reject(new Error(`rpc timeout: ${method} @ ${machineId}`));
-    }, RPC_TIMEOUT_MS);
+    }, timeoutMs ?? RPC_TIMEOUT_MS);
     conn.pending.set(id, { resolve, reject, timer });
     conn.socket.send(JSON.stringify(req));
   });
