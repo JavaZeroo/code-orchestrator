@@ -151,7 +151,7 @@ function TaskPlanPane({
   taskPlan: TaskPlan | null;
   workflowDraft: WorkflowDef | null;
   defsMap: Record<string, WorkflowDefRow>;
-  onStart: () => void;
+  onStart: (vars: Record<string, string>) => void;
   onSaveAndStart: (def: WorkflowDef) => void;
   onAdvanced: () => void;
 }) {
@@ -159,19 +159,10 @@ function TaskPlanPane({
   const [saving, setSaving] = useState(false);
   const [starting, setStarting] = useState(false);
 
-  // 同步 taskPlan 变量到编辑状态
+  // 同步 taskPlan 变量到编辑状态，保留用户已改的值
   useEffect(() => {
     if (taskPlan) {
-      setEditVars((prev) => {
-        const merged = { ...taskPlan.vars };
-        // 保留用户已改过的值
-        for (const k of Object.keys(merged)) {
-          if (prev[k] !== undefined && taskPlan.vars[k] !== undefined) {
-            // 用户改了就不覆盖，但若 agent 改了 value 还是用 agent 的
-          }
-        }
-        return { ...taskPlan.vars, ...prev };
-      });
+      setEditVars((prev) => ({ ...taskPlan.vars, ...prev }));
     }
   }, [taskPlan]);
 
@@ -203,7 +194,7 @@ function TaskPlanPane({
       <div className="flex w-[46%] flex-col overflow-hidden">
         <header className="flex items-center justify-between border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
           <b className="font-display text-[14px] font-semibold text-ink">任务计划</b>
-          <Button variant="default" size="sm" disabled={starting} onClick={() => { setStarting(true); onStart(); }}>
+          <Button variant="default" size="sm" disabled={starting} onClick={() => { setStarting(true); onStart(editVars); }}>
             <Play size={13} /> {starting ? '启动中…' : '启动'}
           </Button>
         </header>
@@ -323,9 +314,9 @@ function TaskIntake({
     return null;
   }, [events]);
 
-  const startPlan = () => {
+  const startPlan = (vars: Record<string, string>) => {
     if (!taskPlan) return;
-    api.startRun(taskPlan.defId, taskPlan.vars, projectId)
+    api.startRun(taskPlan.defId, vars, projectId)
       .then((d) => onStarted(d.runId))
       .catch((e) => toast.error(String(e)));
   };

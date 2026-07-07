@@ -6,6 +6,7 @@ export function useSessionEvents(sessionId: string): EventRow[] {
   const [events, setEvents] = useState<EventRow[]>([]);
 
   useEffect(() => {
+    if (!sessionId) return;
     setEvents([]);
     const add = (rows: EventRow[]) => {
       setEvents((prev) => {

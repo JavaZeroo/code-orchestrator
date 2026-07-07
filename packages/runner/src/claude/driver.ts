@@ -325,7 +325,6 @@ export class ClaudeSession {
       options.allowedTools = [
         ...(options.allowedTools ?? []),
         'mcp__task_intake__emit_task_plan',
-        ...(p.designer ? [] : ['mcp__task_intake__emit_workflow']),
       ];
       // taskIntake 也引入 emit_workflow 工具（通过复用 designer MCP）
       if (!p.designer) {
