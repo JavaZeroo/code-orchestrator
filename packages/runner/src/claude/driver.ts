@@ -45,7 +45,18 @@ export interface DriverEmit {
   approval: (request: ApprovalRequest) => void;
   /** designer 会话：草图上报，返回 server 校验结果（失败信息回给模型自动重试） */
   draft: (graph: unknown) => Promise<{ ok: boolean; error?: string }>;
+  /** taskIntake 会话：任务计划上报，返回 server 校验结果 */
+  taskPlan: (plan: { defId: string; vars: Record<string, string>; summary: string }) => Promise<{ ok: boolean; error?: string }>;
 }
+
+const TASK_INTAKE_SYSTEM_PROMPT = `你是任务受理助手。用户描述要做什么，你负责从可用模板清单中选出合适的一个并填写变量。
+
+规则：
+- 仔细阅读下方「可用模板」清单，根据用户需求选择最匹配的模板
+- 调用 emit_task_plan 工具输出 { defId, vars, summary }——defId 是所选模板的 id，vars 是变量值，summary 是对本次任务的简短描述
+- 每次修改计划（换模板、改变量）都必须重新调用 emit_task_plan
+- 如果清单里没有任何模板能匹配用户需求，调用 emit_workflow 现场编排新图
+- 先理解需求，再选择或编排，不要过早调用工具`;
 
 const DESIGNER_SYSTEM_PROMPT = `你是工作流设计助手。用户会用自然语言描述开发流程，你负责把它落成工作流图。
 
@@ -247,6 +258,27 @@ export class ClaudeSession {
     });
   }
 
+  private buildTaskIntakeMcp() {
+    return createSdkMcpServer({
+      name: 'task_intake',
+      version: '0.1.0',
+      tools: [
+        tool(
+          'emit_task_plan',
+          '当你判断出当前任务适合哪个模板、填好变量后，调用此工具输出计划。每次修改计划必须重新调用。',
+          { defId: z.string(), vars: z.record(z.string(), z.string()), summary: z.string() },
+          async (args) => {
+            const result = await this.emit.taskPlan({ defId: args.defId, vars: args.vars, summary: args.summary });
+            if (!result.ok) {
+              return { content: [{ type: 'text', text: `server 拒绝: ${result.error ?? '未知错误'}` }], isError: true };
+            }
+            return { content: [{ type: 'text', text: '计划已推送到界面。等待用户确认启动，或根据反馈修改计划后重新调用 emit_task_plan。' }] };
+          },
+        ),
+      ],
+    });
+  }
+
   private async run(): Promise<void> {
     const p = this.params;
     const meta = p.meta ?? {};
@@ -261,7 +293,7 @@ export class ClaudeSession {
     // 不落入 --resume picker 的 sdk-* 过滤集，保持会话对 `claude --resume` 可见（happy#1202 的经验）
     env.CLAUDE_CODE_ENTRYPOINT = env.CLAUDE_CODE_ENTRYPOINT ?? 'co-runner';
 
-    const appendParts = [meta.appendSystemPrompt, p.designer ? DESIGNER_SYSTEM_PROMPT : undefined].filter(
+    const appendParts = [meta.appendSystemPrompt, p.designer ? DESIGNER_SYSTEM_PROMPT : undefined, p.taskIntake ? TASK_INTAKE_SYSTEM_PROMPT : undefined].filter(
       (s): s is string => Boolean(s),
     );
     const options: Options = {
@@ -287,6 +319,19 @@ export class ClaudeSession {
     if (p.designer) {
       options.mcpServers = { designer: this.buildDesignerMcp() };
       options.allowedTools = [...(options.allowedTools ?? []), 'mcp__designer__emit_workflow'];
+    }
+    if (p.taskIntake) {
+      options.mcpServers = { ...(options.mcpServers ?? {}), task_intake: this.buildTaskIntakeMcp() };
+      options.allowedTools = [
+        ...(options.allowedTools ?? []),
+        'mcp__task_intake__emit_task_plan',
+        ...(p.designer ? [] : ['mcp__task_intake__emit_workflow']),
+      ];
+      // taskIntake 也引入 emit_workflow 工具（通过复用 designer MCP）
+      if (!p.designer) {
+        options.mcpServers = { ...options.mcpServers, designer: this.buildDesignerMcp() };
+        options.allowedTools = [...(options.allowedTools ?? []), 'mcp__designer__emit_workflow'];
+      }
     }
 
     if (p.prompt) {

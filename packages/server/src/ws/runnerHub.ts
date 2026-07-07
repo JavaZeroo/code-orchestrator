@@ -186,6 +186,11 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
       await publish({ type: 'workflow.draft', sessionId: p.sessionId, payload: parsed.data });
       return { ok: true };
     }
+    case 'task.plan': {
+      const p = serverMethods['task.plan'].params.parse(params);
+      await publish({ type: 'task.plan', sessionId: p.sessionId, payload: p.plan });
+      return { ok: true };
+    }
     default:
       throw new Error(`unknown method: ${method}`);
   }

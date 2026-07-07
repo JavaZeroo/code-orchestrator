@@ -4,7 +4,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
-import { asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import * as z from 'zod';
 import { approvalDecisionSchema, MessageMetaSchema, sessionAgentSchema } from '@co/protocol';
 import { getDb, hasDb, schema } from '../db/index';
@@ -33,6 +33,7 @@ const spawnBodySchema = z.object({
   meta: MessageMetaSchema.optional(),
   env: z.record(z.string(), z.string()).optional(),
   designer: z.boolean().optional(),
+  taskIntake: z.boolean().optional(),
   projectId: z.string().optional(),
 });
 
@@ -71,8 +72,28 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
   });
 
   app.post('/api/sessions', async (req) => {
-    requireDb();
+    const db = requireDb();
     const body = spawnBodySchema.parse(req.body);
+    // 任务受理会话：注入当前项目可用模板清单 + forge/repo 上下文
+    if (body.taskIntake && body.projectId) {
+      const [project] = await db.select().from(schema.projects).where(eq(schema.projects.id, body.projectId)).limit(1);
+      if (project) {
+        const defs = await db
+          .select()
+          .from(schema.workflowDefs)
+          .where(and(eq(schema.workflowDefs.projectId, body.projectId), eq(schema.workflowDefs.archived, 'no')))
+          .limit(50);
+        const contextParts = [`项目: ${project.name} (forge=${project.forge}, repo=${project.repo})`, '', '可用模板:'];
+        for (const d of defs) {
+          const g = d.graph as Record<string, unknown>;
+          const nodes = (g.nodes as Array<Record<string, unknown>>) ?? [];
+          const varKeys = Object.keys((g.vars as Record<string, string>) ?? {});
+          const needsCwd = nodes.some((n) => n.type === 'agent' && !n.cwd);
+          contextParts.push(`  - id="${d.id}" name="${d.name}" vars=[${varKeys.join(',')}] needsCwd=${needsCwd}`);
+        }
+        body.meta = { ...body.meta, appendSystemPrompt: contextParts.join('\n') };
+      }
+    }
     return spawnSession({ ...body, createdBy: req.user?.id });
   });
 

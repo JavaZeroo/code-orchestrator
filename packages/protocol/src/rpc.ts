@@ -54,6 +54,8 @@ export const runnerMethods = {
       env: z.record(z.string(), z.string()).optional(),
       /** 工作流设计器会话：注入 emit_workflow 工具（in-process MCP） */
       designer: z.boolean().optional(),
+      /** 任务受理会话：注入 emit_task_plan + emit_workflow 工具（in-process MCP） */
+      taskIntake: z.boolean().optional(),
       /** 容器化会话（design-v2 #37）：非空则 agent 跑在该容器内（docker exec 挂载的 node+agent.mjs），
        *  而非宿主进程内起 SDK。容器由 container.run 预先创建。 */
       container: z
@@ -219,6 +221,11 @@ export const serverMethods = {
   /** designer 会话的 emit_workflow 工具产出（server 校验后广播草图事件） */
   'workflow.draft': {
     params: z.object({ sessionId: z.string(), graph: z.unknown() }),
+    result: z.object({ ok: z.boolean(), error: z.string().optional() }),
+  },
+  /** taskIntake 会话的 emit_task_plan 工具产出（server 校验后广播任务计划事件） */
+  'task.plan': {
+    params: z.object({ sessionId: z.string(), plan: z.object({ defId: z.string(), vars: z.record(z.string(), z.string()), summary: z.string() }) }),
     result: z.object({ ok: z.boolean(), error: z.string().optional() }),
   },
 } as const;

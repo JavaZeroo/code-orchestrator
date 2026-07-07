@@ -34,6 +34,7 @@ const emit: DriverEmit = {
   state: (state, nativeSessionId, usage) => out({ t: 'state', state, nativeSessionId, usage }),
   approval: (request) => out({ t: 'approval', request }),
   draft: async () => ({ ok: false, error: 'designer 不在容器内运行' }),
+  taskPlan: async () => ({ ok: false, error: 'taskIntake 不在容器内运行' }),
 };
 
 const session = new ClaudeSession(params, emit);

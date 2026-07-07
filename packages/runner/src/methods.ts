@@ -64,6 +64,17 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
       },
+      taskPlan: async (plan) => {
+        const conn = ctx.conn;
+        if (!conn) {
+          return { ok: false, error: 'server connection not ready' };
+        }
+        try {
+          return await conn.call('task.plan', { sessionId, plan });
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      },
     };
   }
 

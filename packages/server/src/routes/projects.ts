@@ -13,6 +13,8 @@ const bodySchema = z.object({
   autonomy: z.enum(['manual', 'agent', 'auto']).default('manual'),
   guardrails: z.array(z.string()).default([]),
   defaultDefId: z.string().nullable().optional(),
+  /** 默认流程定义（任务受理器预选此模板） */
+  defaultWorkflow: z.string().nullable().optional(),
   models: z.record(z.string(), z.string()).default({}),
   vars: z.record(z.string(), z.string()).default({}),
   // design-v2：容器化执行配置
