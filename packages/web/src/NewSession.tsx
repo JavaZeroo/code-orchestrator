@@ -176,15 +176,15 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
   const canSubmit = prompt.trim().length > 0 && !busy && !!projectId;
 
   return (
-    <div className="flex min-h-full items-center justify-center">
-      <div className="w-full max-w-xl px-4 -mt-12">
+    <div className="flex min-h-full flex-1 items-center justify-center">
+      <div className="w-full max-w-2xl px-6 -mt-12">
         {/* 项目名（浅色小字） */}
-        <p className="mb-1 text-center text-[11px] text-faint">
+        <p className="mb-1.5 text-center text-[11px] text-faint">
           {project?.name ?? '未选择项目'}
         </p>
 
         {/* 问候标题 */}
-        <h1 className="mb-6 text-center text-lg font-semibold tracking-tight text-ink">
+        <h1 className="mb-7 text-center font-display text-2xl font-semibold tracking-tight text-ink">
           要做什么？
         </h1>
 
@@ -199,16 +199,16 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
                 value={prompt}
                 onChange={handleTextareaInput}
                 onKeyDown={handleKeyDown}
-                rows={1}
-                placeholder="在这里输入，Enter 发送，Shift+Enter 换行"
+                rows={2}
+                placeholder="描述任务，Enter 发送"
                 disabled={busy}
-                className="resize-none overflow-hidden pr-12 text-sm leading-relaxed"
+                className="min-h-[64px] resize-none overflow-hidden rounded-xl py-3.5 pl-4 pr-14 text-sm leading-relaxed shadow-[var(--shadow-panel)]"
               />
               <button
                 type="button"
                 onClick={submit}
                 disabled={!canSubmit}
-                className="absolute right-2 bottom-2 flex size-7 items-center justify-center rounded-md bg-accent text-accent-ink transition-all hover:bg-accent-2 disabled:opacity-30"
+                className="absolute right-3 bottom-3 flex size-8 items-center justify-center rounded-lg bg-accent text-accent-ink transition-all hover:bg-accent-2 disabled:opacity-30"
               >
                 <SendHorizonal size={14} />
               </button>
