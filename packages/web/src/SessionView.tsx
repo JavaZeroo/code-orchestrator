@@ -8,7 +8,7 @@ import { Button } from './components/ui/button';
 import { Badge, StatusDot, Textarea, type BadgeTone } from './components/ui/primitives';
 import { useSessionEvents } from './useEvents';
 import { Timeline, type ApprovalItem } from './Timeline';
-import { fmtCost, fmtTokens } from './lib/utils';
+import { fmtCost, fmtTokens, shortModel } from './lib/utils';
 
 const STATE_META: Record<string, { label: string; tone: BadgeTone; live?: boolean }> = {
   starting: { label: '启动中', tone: 'run', live: true },
@@ -140,7 +140,7 @@ export function SessionView({ session }: { session: SessionRow }) {
           <div className="min-w-0">
             <div className="truncate text-[13px] font-medium text-ink">{session.cwd}</div>
             <div className="mono-nums truncate text-[11px] text-faint">
-              {session.machineId} · <span className="text-accent/70">{session.model ?? 'claude'}</span> · {session.id.slice(0, 8)}
+              {session.machineId} · <span className="text-accent/70" title={shortModel(session.model).full}>{shortModel(session.model).display}</span> · {session.id.slice(0, 8)}
             </div>
           </div>
         </div>

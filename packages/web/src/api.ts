@@ -199,6 +199,19 @@ export interface LlmEndpointRow {
   createdAt: string;
 }
 
+export interface LlmProviderRow {
+  id: string;
+  name: string;
+  baseUrl: string | null;
+  models: string[];
+  defaultModel: string | null;
+  hasKey: boolean;
+  builtin: boolean;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export const api = {
   machines: () => fetch('/api/machines').then((r) => j<{ machines: MachineRow[] }>(r)).then((d) => d.machines),
   sessions: () => fetch('/api/sessions').then((r) => j<{ sessions: SessionRow[] }>(r)).then((d) => d.sessions),
@@ -246,6 +259,15 @@ export const api = {
     }).then((r) => j<{ ok: boolean; label: string }>(r)),
   deleteEndpoint: (label: string) =>
     fetch(`/api/llm/endpoints/${encodeURIComponent(label)}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
+  listProviders: () => fetch('/api/llm/providers').then((r) => j<{ providers: LlmProviderRow[] }>(r)).then((d) => d.providers),
+  saveProvider: (name: string, body: { base_url?: string | null; api_key?: string; models?: string[]; default_model?: string | null }) =>
+    fetch(`/api/llm/providers/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then((r) => j<{ ok: boolean; name: string }>(r)),
+  deleteProvider: (name: string) =>
+    fetch(`/api/llm/providers/${encodeURIComponent(name)}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
   projects: () => fetch('/api/projects').then((r) => j<{ projects: ProjectRow[] }>(r)).then((d) => d.projects),
   createProject: (body: Partial<ProjectRow>) => post('/api/projects', body).then((r) => j<{ id: string }>(r)),
   patchProject: (id: string, patch: Partial<ProjectRow>) =>
