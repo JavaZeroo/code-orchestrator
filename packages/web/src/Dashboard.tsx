@@ -6,6 +6,7 @@
 import { Activity, ArrowRight, CheckCircle2, type LucideIcon, GitPullRequest, Workflow as WorkflowIcon } from 'lucide-react';
 import { Badge, Card, Spinner, StatusDot } from './components/ui/primitives';
 import { useApprovals, useRuns, useSessions, useWorkflows } from './lib/queries';
+import { useProjectScope } from './lib/project';
 import { cn, relTime } from './lib/utils';
 
 const RUN_TONE: Record<string, 'accent' | 'run' | 'ok' | 'danger' | 'neutral' | 'human'> = {
@@ -80,13 +81,20 @@ function RowCard({ onClick, dot, live, title, meta, right }: { onClick?: () => v
 }
 
 export function Dashboard({ onOpenSession, onOpenRun }: { onOpenSession: (id: string) => void; onOpenRun: (runId: string) => void }) {
-  const { data: sessions = [], isLoading: sl } = useSessions();
-  const { data: runs = [], isLoading: rl } = useRuns();
-  const { data: approvals = [], isLoading: al } = useApprovals();
+  const { data: allSessions = [], isLoading: sl } = useSessions();
+  const { data: allRuns = [], isLoading: rl } = useRuns();
+  const { data: allApprovals = [], isLoading: al } = useApprovals();
   const { data: defs = [] } = useWorkflows();
+  const { inScope } = useProjectScope();
 
-  const runMap = new Map(runs.map((r) => [r.id, r]));
+  const runMap = new Map(allRuns.map((r) => [r.id, r]));
   const defMap = new Map(defs.map((d) => [d.id, d]));
+  // 全部 scoped 到当前项目：run 看自身，session 看自身或经 run，approval 看其 run/session 归属
+  const runs = allRuns.filter((r) => inScope(r.projectId));
+  const sessions = allSessions.filter((s) => inScope(s.projectId ?? (s.runId ? runMap.get(s.runId)?.projectId ?? null : null)));
+  const approvals = allApprovals.filter((a) =>
+    inScope(a.runId ? runMap.get(a.runId)?.projectId ?? null : allSessions.find((s) => s.id === a.sessionId)?.projectId ?? null),
+  );
   const runName = (runId: string | null) => (runId ? defMap.get(runMap.get(runId)?.defId ?? '')?.name ?? null : null);
 
   const activeSessions = sessions.filter((s) => s.state === 'thinking' || s.state === 'starting');

@@ -96,6 +96,7 @@ async function pollTrigger(trigger: TriggerRow): Promise<void> {
       .values({
         id: createId(),
         triggerId: trigger.id,
+        projectId: trigger.projectId ?? null,
         forge: forgeKind,
         repo: trigger.repo,
         issueNumber: issue.number,
@@ -118,7 +119,7 @@ async function pollTrigger(trigger: TriggerRow): Promise<void> {
         vars.cwd = ws.cwd;
         vars.branch = ws.branch;
       }
-      const runId = await startRun(trigger.defId, vars);
+      const runId = await startRun(trigger.defId, vars, trigger.projectId ?? undefined);
       await db.update(schema.requirementIntakes).set({ runId }).where(eq(schema.requirementIntakes.id, intakeId));
       await publish({
         type: 'requirement.triggered',

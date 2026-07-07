@@ -13,6 +13,7 @@ import { Button } from './components/ui/button';
 import { Badge, Card, Input, Label, Spinner, Textarea } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { invalidate, useRequirements, useTriggers, useWorkflows } from './lib/queries';
+import { useProjectScope } from './lib/project';
 import { cn, relTime } from './lib/utils';
 
 const FORGE_LABEL: Record<ForgeKind, string> = { gitcode: 'GitCode', github: 'GitHub' };
@@ -241,8 +242,11 @@ function RequirementRowItem({ r, onOpenRun }: { r: RequirementRow; onOpenRun: (r
 }
 
 export function TriggersPage({ me, onOpenRun }: { me: Me; onOpenRun: (runId: string) => void }) {
-  const { data: triggers = [], isLoading: tLoading } = useTriggers();
-  const { data: requirements = [], isLoading: rLoading } = useRequirements();
+  const { data: allTriggers = [], isLoading: tLoading } = useTriggers();
+  const { data: allRequirements = [], isLoading: rLoading } = useRequirements();
+  const { inScope } = useProjectScope();
+  const triggers = allTriggers.filter((t) => inScope(t.projectId));
+  const requirements = allRequirements.filter((r) => inScope(r.projectId));
   const [polling, setPolling] = useState(false);
 
   const pollNow = () => {

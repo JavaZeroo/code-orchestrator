@@ -1,5 +1,5 @@
 import { FolderGit2, type LucideIcon, LayoutDashboard, LogOut, MessageSquareText, Settings, Workflow, Zap } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { authApi, LoginPage, SettingsModal, useMe, type Me } from './Auth';
 import { Dashboard } from './Dashboard';
 import { NewSession } from './NewSession';
@@ -11,8 +11,8 @@ import { WorkflowsPage } from './WorkflowsPage';
 import { Button } from './components/ui/button';
 import { Spinner, StatusDot } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
-import { useProjects, useSessions } from './lib/queries';
-import { ProjectProvider, useCurrentProject } from './lib/project';
+import { useProjects, useRuns, useSessions } from './lib/queries';
+import { ProjectProvider, useCurrentProject, useProjectScope } from './lib/project';
 import { cn } from './lib/utils';
 
 type Tab = 'dashboard' | 'projects' | 'triggers' | 'workflows' | 'sessions';
@@ -51,17 +51,25 @@ function BrandMark() {
 function ProjectSwitcher() {
   const { data: projects = [] } = useProjects();
   const { projectId, setProjectId } = useCurrentProject();
+  // 项目总是被选中：无选择或选中的已删除 → 落到第一个（去掉了"全部项目"视图）
+  useEffect(() => {
+    if (projects.length > 0 && (!projectId || !projects.some((p) => p.id === projectId))) {
+      setProjectId(projects[0]!.id);
+    }
+  }, [projectId, projects, setProjectId]);
+  if (projects.length === 0) {
+    return null;
+  }
   return (
     <div className="px-2.5 pb-1">
-      <Select value={projectId ?? '__all__'} onValueChange={(v) => setProjectId(v === '__all__' ? null : v)}>
+      <Select value={projectId ?? ''} onValueChange={(v) => setProjectId(v)}>
         <SelectTrigger className="w-full">
           <span className="flex min-w-0 items-center gap-2">
             <FolderGit2 size={13} className="shrink-0 text-accent" />
-            <SelectValue placeholder="全部项目" />
+            <SelectValue placeholder="选择项目" />
           </span>
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="__all__">全部项目</SelectItem>
           {projects.map((p) => (
             <SelectItem key={p.id} value={p.id}>
               {p.name}
@@ -154,8 +162,13 @@ function Sidebar({
 }
 
 function SessionsScreen({ selected, setSelected }: { selected: string | 'new'; setSelected: (v: string | 'new') => void }) {
-  const { data: sessions = [] } = useSessions();
-  const current = sessions.find((s) => s.id === selected);
+  const { data: allSessions = [] } = useSessions();
+  const { data: runs = [] } = useRuns();
+  const { inScope } = useProjectScope();
+  const runProj = new Map(runs.map((r) => [r.id, r.projectId]));
+  // 会话作用域：自身 projectId，否则经其 run 归属（工作流会话）
+  const sessions = allSessions.filter((s) => inScope(s.projectId ?? (s.runId ? runProj.get(s.runId) ?? null : null)));
+  const current = allSessions.find((s) => s.id === selected);
   return (
     <div className="flex flex-1 overflow-hidden">
       <aside className="flex w-64 shrink-0 flex-col gap-2 border-r border-line bg-bg-2/40 p-3">

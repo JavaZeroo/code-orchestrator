@@ -25,3 +25,12 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
 }
 
 export const useCurrentProject = () => useContext(ProjectCtx);
+
+/** 作用域助手：当前项目 + 判断某实体是否属于它（projectId 为空/未选时放行，兼容加载中） */
+export function useProjectScope() {
+  const { projectId } = useCurrentProject();
+  return {
+    projectId,
+    inScope: (pid: string | null | undefined) => !projectId || pid === projectId,
+  };
+}

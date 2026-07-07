@@ -6,11 +6,13 @@ import { FlowGraph } from './FlowGraph';
 import { SessionView } from './SessionView';
 import { Button } from './components/ui/button';
 import { Spinner } from './components/ui/primitives';
+import { useProjectScope } from './lib/project';
 import { useSessionEvents } from './useEvents';
 
 function DraftPane({ sessionId, onSaved }: { sessionId: string; onSaved: (id: string) => void }) {
   const events = useSessionEvents(sessionId);
   const [saving, setSaving] = useState(false);
+  const { projectId } = useProjectScope();
 
   const draft = useMemo(() => {
     for (let i = events.length - 1; i >= 0; i--) {
@@ -26,7 +28,7 @@ function DraftPane({ sessionId, onSaved }: { sessionId: string; onSaved: (id: st
       return;
     }
     setSaving(true);
-    api.createWorkflow(draft, 'chat').then((d) => {
+    api.createWorkflow(draft, 'chat', projectId).then((d) => {
       toast.success('工作流已保存');
       onSaved(d.id);
     }).catch((e) => toast.error(String(e))).finally(() => setSaving(false));

@@ -128,6 +128,7 @@ export async function registerTriggerRoutes(app: FastifyInstance): Promise<void>
       .select({
         id: schema.requirementIntakes.id,
         triggerId: schema.requirementIntakes.triggerId,
+        projectId: schema.requirementIntakes.projectId,
         forge: schema.requirementIntakes.forge,
         repo: schema.requirementIntakes.repo,
         issueNumber: schema.requirementIntakes.issueNumber,

@@ -80,7 +80,7 @@ async function publishNodeState(runId: string, nodeId: string, status: string, e
 
 // ---------- 启动 ----------
 
-export async function startRun(defId: string, vars: Record<string, string>): Promise<string> {
+export async function startRun(defId: string, vars: Record<string, string>, projectId?: string): Promise<string> {
   const db = getDb();
   const defRows = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, defId)).limit(1);
   const defRow = defRows[0];
@@ -95,7 +95,7 @@ export async function startRun(defId: string, vars: Record<string, string>): Pro
 
   const runId = createId();
   const context: RunContext = { vars: { ...(def.vars ?? {}), ...vars }, outputs: {} };
-  await db.insert(schema.workflowRuns).values({ id: runId, defId, status: 'running', context });
+  await db.insert(schema.workflowRuns).values({ id: runId, defId, projectId: projectId ?? defRow.projectId, status: 'running', context });
   await db
     .insert(schema.nodeStates)
     .values(def.nodes.map((n) => ({ runId, nodeId: n.id, status: 'pending' as const })));

@@ -110,6 +110,7 @@ export interface SpawnRequest {
   runId?: string;
   nodeId?: string;
   createdBy?: string;
+  projectId?: string;
 }
 
 export async function spawnSession(req: SpawnRequest): Promise<{ sessionId: string }> {
@@ -129,6 +130,7 @@ export async function spawnSession(req: SpawnRequest): Promise<{ sessionId: stri
     state: 'starting',
     runId: req.runId,
     nodeId: req.nodeId,
+    projectId: req.projectId,
     createdBy: req.createdBy,
   });
 

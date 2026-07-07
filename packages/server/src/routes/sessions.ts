@@ -33,6 +33,7 @@ const spawnBodySchema = z.object({
   meta: MessageMetaSchema.optional(),
   env: z.record(z.string(), z.string()).optional(),
   designer: z.boolean().optional(),
+  projectId: z.string().optional(),
 });
 
 const sendBodySchema = z.object({ text: z.string().min(1), meta: MessageMetaSchema.optional() });

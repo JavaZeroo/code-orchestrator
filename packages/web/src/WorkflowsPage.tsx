@@ -7,6 +7,7 @@ import { RunView } from './RunView';
 import { Button } from './components/ui/button';
 import { Badge, Card, Input, Label, StatusDot } from './components/ui/primitives';
 import { useRuns, useWorkflows } from './lib/queries';
+import { useProjectScope } from './lib/project';
 import { cn, relTime } from './lib/utils';
 
 const RUN_TONE: Record<string, 'accent' | 'run' | 'warn' | 'ok' | 'danger' | 'neutral' | 'human'> = {
@@ -24,10 +25,11 @@ function StartForm({ def, onStarted }: { def: WorkflowDefRow; onStarted: (runId:
   const keys = needsCwd && !varKeys.includes('cwd') ? ['cwd', ...varKeys] : varKeys;
   const [vars, setVars] = useState<Record<string, string>>({ ...(def.graph.vars ?? {}) });
   const [busy, setBusy] = useState(false);
+  const { projectId } = useProjectScope();
 
   const start = () => {
     setBusy(true);
-    api.startRun(def.id, vars).then((d) => onStarted(d.runId)).catch((e) => toast.error(String(e))).finally(() => setBusy(false));
+    api.startRun(def.id, vars, projectId).then((d) => onStarted(d.runId)).catch((e) => toast.error(String(e))).finally(() => setBusy(false));
   };
 
   return (
@@ -60,8 +62,11 @@ export function WorkflowsPage({
   onOpenRunConsumed?: () => void;
 }) {
   const [view, setView] = useState<'list' | 'designer' | { run: string }>(openRunId ? { run: openRunId } : 'list');
-  const { data: defs = [] } = useWorkflows();
-  const { data: runs = [] } = useRuns();
+  const { data: allDefs = [] } = useWorkflows();
+  const { data: allRuns = [] } = useRuns();
+  const { inScope } = useProjectScope();
+  const defs = allDefs.filter((d) => inScope(d.projectId));
+  const runs = allRuns.filter((r) => inScope(r.projectId));
   const [expanded, setExpanded] = useState<string | null>(null);
 
   useEffect(() => {

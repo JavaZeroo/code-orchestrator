@@ -9,10 +9,12 @@ import { EngineError, startRun } from '../engine/engine';
 const createBodySchema = z.object({
   graph: z.unknown(),
   createdVia: z.enum(['chat', 'manual']).default('manual'),
+  projectId: z.string().nullable().optional(),
 });
 
 const startBodySchema = z.object({
   vars: z.record(z.string(), z.string()).default({}),
+  projectId: z.string().nullable().optional(),
 });
 
 export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void> {
@@ -25,6 +27,7 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       name: graph.name,
       graph,
       createdVia: body.createdVia,
+      projectId: body.projectId ?? null,
     });
     void reply.code(201);
     return { id, name: graph.name };
@@ -56,7 +59,7 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
   app.post<{ Params: { id: string } }>('/api/workflows/:id/runs', async (req, reply) => {
     const body = startBodySchema.parse(req.body ?? {});
     try {
-      const runId = await startRun(req.params.id, body.vars);
+      const runId = await startRun(req.params.id, body.vars, body.projectId ?? undefined);
       void reply.code(201);
       return { runId };
     } catch (err) {
@@ -74,6 +77,7 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
         id: schema.workflowRuns.id,
         defId: schema.workflowRuns.defId,
         defName: schema.workflowDefs.name,
+        projectId: schema.workflowRuns.projectId,
         status: schema.workflowRuns.status,
         context: schema.workflowRuns.context,
         startedAt: schema.workflowRuns.startedAt,

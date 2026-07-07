@@ -6,6 +6,7 @@ import { Button } from './components/ui/button';
 import { Card, Input, Label, Textarea } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { useMachines } from './lib/queries';
+import { useProjectScope } from './lib/project';
 
 export function NewSession({ onCreated }: { onCreated: (sessionId: string) => void }) {
   const { data: machines = [] } = useMachines();
@@ -14,6 +15,7 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
   const [model, setModel] = useState('claude');
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
+  const { projectId } = useProjectScope();
 
   useEffect(() => {
     if (machines.length > 0 && !machineId) {
@@ -27,7 +29,7 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
     }
     setBusy(true);
     api
-      .spawn({ machineId, cwd, model, prompt: prompt.trim() || undefined })
+      .spawn({ machineId, cwd, model, prompt: prompt.trim() || undefined, projectId })
       .then((d) => onCreated(d.sessionId))
       .catch((e) => toast.error(`创建失败：${e}`))
       .finally(() => setBusy(false));

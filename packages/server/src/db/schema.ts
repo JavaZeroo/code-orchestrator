@@ -309,6 +309,8 @@ export const workflowDefs = pgTable('workflow_defs', {
   version: integer('version').notNull().default(1),
   graph: jsonb('graph').notNull(),
   createdVia: text('created_via', { enum: ['chat', 'manual'] }).notNull().default('manual'),
+  /** 归属项目（design-v2 #36 scoping）：空=未归属（老数据/全局） */
+  projectId: text('project_id'),
   createdBy: text('created_by'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -318,6 +320,8 @@ export const workflowRuns = pgTable('workflow_runs', {
   defId: text('def_id')
     .notNull()
     .references(() => workflowDefs.id),
+  /** 归属项目（design-v2 #36 scoping）：从 trigger/def 继承 */
+  projectId: text('project_id'),
   status: text('status', { enum: ['running', 'waiting_human', 'done', 'failed', 'cancelled'] })
     .notNull()
     .default('running'),
@@ -412,6 +416,8 @@ export const requirementIntakes = pgTable(
     triggerId: text('trigger_id')
       .notNull()
       .references(() => requirementTriggers.id, { onDelete: 'cascade' }),
+    /** 归属项目（design-v2 #36 scoping）：从 trigger 继承 */
+    projectId: text('project_id'),
     forge: text('forge', { enum: ['gitcode', 'github'] }).notNull(),
     repo: text('repo').notNull(),
     issueNumber: text('issue_number').notNull(),
