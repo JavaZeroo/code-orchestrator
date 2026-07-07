@@ -4,11 +4,13 @@ import { Container, Cpu, FolderGit2, Plus, Rocket, ShieldCheck, Trash2 } from 'l
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { api, type Autonomy, type ForgeKind, type ProjectRow } from './api';
+import type { Me } from './Auth';
 import { Button } from './components/ui/button';
 import { Badge, Card, Input, Label, Textarea } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { invalidate, useProjects } from './lib/queries';
 import { cn } from './lib/utils';
+import { ProjectDetail } from './ProjectDetail';
 
 const FORGE_LABEL: Record<ForgeKind, string> = { gitcode: 'GitCode', github: 'GitHub' };
 
@@ -18,7 +20,7 @@ const AUTONOMY: { id: Autonomy; label: string; tone: string; desc: string }[] = 
   { id: 'auto', label: '全自动', tone: 'accent', desc: 'CI 绿 + 评审 LGTM + 未碰护栏 → 自动合并 + 健康门部署 + 失败自动回滚。' },
 ];
 
-function AutonomySwitch({ value, onChange }: { value: Autonomy; onChange: (a: Autonomy) => void }) {
+export function AutonomySwitch({ value, onChange }: { value: Autonomy; onChange: (a: Autonomy) => void }) {
   return (
     <div className="inline-flex rounded-lg border border-line bg-bg-2/60 p-0.5">
       {AUTONOMY.map((a) => {
@@ -46,7 +48,7 @@ function AutonomySwitch({ value, onChange }: { value: Autonomy; onChange: (a: Au
   );
 }
 
-function LaunchContainer({ p, onOpenSession }: { p: ProjectRow; onOpenSession: (id: string) => void }) {
+export function LaunchContainer({ p, onOpenSession }: { p: ProjectRow; onOpenSession: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
@@ -69,7 +71,7 @@ function LaunchContainer({ p, onOpenSession }: { p: ProjectRow; onOpenSession: (
   };
   if (!open) {
     return (
-      <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
+      <Button variant="secondary" size="sm" onClick={(e) => { e.stopPropagation(); setOpen(true); }}>
         <Rocket size={13} /> 启动容器会话
       </Button>
     );
@@ -95,7 +97,7 @@ function LaunchContainer({ p, onOpenSession }: { p: ProjectRow; onOpenSession: (
   );
 }
 
-function ProjectCard({ p, onOpenSession }: { p: ProjectRow; onOpenSession: (id: string) => void }) {
+function ProjectCard({ p, onOpenSession, onEnterDetail }: { p: ProjectRow; onOpenSession: (id: string) => void; onEnterDetail: () => void }) {
   const setAutonomy = (autonomy: Autonomy) => {
     api
       .patchProject(p.id, { autonomy })
@@ -105,14 +107,15 @@ function ProjectCard({ p, onOpenSession }: { p: ProjectRow; onOpenSession: (id: 
       })
       .catch((e) => toast.error(String(e)));
   };
-  const remove = () => {
+  const remove = (e: React.MouseEvent) => {
+    e.stopPropagation();
     if (!confirm(`删除项目 ${p.name}？（其触发器会解绑，不删）`)) return;
     api.deleteProject(p.id).then(() => invalidate('projects')).catch((e) => toast.error(String(e)));
   };
   const mode = AUTONOMY.find((a) => a.id === p.autonomy)!;
 
   return (
-    <Card className="flex flex-col gap-3.5 p-4 transition-colors hover:border-line-2">
+    <Card className="flex cursor-pointer flex-col gap-3.5 p-4 transition-colors hover:border-line-2" onClick={onEnterDetail}>
       <div className="flex items-start gap-3">
         <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-line bg-panel-2 text-accent">
           <FolderGit2 size={17} />
@@ -132,7 +135,7 @@ function ProjectCard({ p, onOpenSession }: { p: ProjectRow; onOpenSession: (id: 
       <div className="rounded-lg border border-line bg-bg-2/40 p-3">
         <div className="mb-2 flex items-center justify-between">
           <span className="text-[11px] font-semibold tracking-wide text-dim uppercase">自治开关</span>
-          <AutonomySwitch value={p.autonomy} onChange={setAutonomy} />
+          <span onClick={(e) => e.stopPropagation()}><AutonomySwitch value={p.autonomy} onChange={setAutonomy} /></span>
         </div>
         <p className={cn('text-[12px] leading-relaxed', p.autonomy === 'auto' ? 'text-accent/90' : 'text-dim')}>{mode.desc}</p>
       </div>
@@ -161,7 +164,7 @@ function ProjectCard({ p, onOpenSession }: { p: ProjectRow; onOpenSession: (id: 
             <span className="mono-nums truncate" title={p.baseImage}>{p.baseImage}</span>
             {p.accel && <Badge tone="run">{p.accel.kind}</Badge>}
           </span>
-          <LaunchContainer p={p} onOpenSession={onOpenSession} />
+          <span onClick={(e) => e.stopPropagation()}><LaunchContainer p={p} onOpenSession={onOpenSession} /></span>
         </div>
       ) : null}
     </Card>
@@ -240,8 +243,40 @@ function CreateProject({ onDone }: { onDone: () => void }) {
   );
 }
 
-export function ProjectsPage({ onOpenSession }: { onOpenSession: (id: string) => void }) {
+export function ProjectsPage({
+  me,
+  onOpenSession,
+  onOpenRun,
+}: {
+  me: Me;
+  onOpenSession: (id: string) => void;
+  onOpenRun: (runId: string) => void;
+}) {
   const { data: projects = [], isLoading } = useProjects();
+  const [detailId, setDetailId] = useState<string | null>(null);
+
+  // 详情视图
+  if (detailId) {
+    const p = projects.find((pr) => pr.id === detailId);
+    if (!p) {
+      return (
+        <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-5 overflow-y-auto p-6">
+          <Button variant="ghost" size="sm" className="self-start" onClick={() => setDetailId(null)}>← 返回</Button>
+          <p className="text-sm text-dim">项目不存在或已被删除。</p>
+        </div>
+      );
+    }
+    return (
+      <ProjectDetail
+        project={p}
+        me={me}
+        onBack={() => setDetailId(null)}
+        onOpenSession={onOpenSession}
+        onOpenRun={onOpenRun}
+      />
+    );
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 overflow-y-auto p-6">
       <div className="flex items-center justify-between">
@@ -263,7 +298,7 @@ export function ProjectsPage({ onOpenSession }: { onOpenSession: (id: string) =>
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {projects.map((p) => (
-            <ProjectCard key={p.id} p={p} onOpenSession={onOpenSession} />
+            <ProjectCard key={p.id} p={p} onOpenSession={onOpenSession} onEnterDetail={() => setDetailId(p.id)} />
           ))}
         </div>
       )}
