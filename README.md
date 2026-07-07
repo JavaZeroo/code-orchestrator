@@ -27,6 +27,10 @@ code-orchestrator is a self-hosted control plane for coding agents. It lets you:
   session to fix them (semantics borrowed from agent-orchestrator's reaction model).
 - **Cross-check with multiple models** — a meeting node fans out independent reviewers
   (e.g. two different models) and arbitrates by vote / model / human.
+- **Track work as a lineage tree** — work_items form a requirement → run → node →
+  PR → approval bloodline as the primary view; create new tasks conversationally
+  (describe intent → agent picks a template or arranges on the fly → plan card
+  confirms).
 
 Decoupled along two axes: **CLI** (the executor — Claude Code, Codex, …) and **model**
 (the brain — Claude, DeepSeek, GLM, … via Anthropic-compatible endpoints). The
@@ -119,8 +123,12 @@ the server environment. Any CLI × any model.
 
 Working end-to-end: sessions, tool approvals, conversational workflow authoring, the
 workflow engine (agent / gate / meeting nodes), multi-model review meetings, requirement
-intake triggers (issue → workflow run), and forge gate feedback (verified against real
-pull requests). The web UI, auth, and pluggable forge are actively evolving. Not yet
+intake triggers (issue → workflow run), forge gate feedback (verified against real pull
+requests), the task center IA (看板 / 任务 / 项目 / 会话 4-tab navigation),
+conversational task creation with work item lineage trees, and the autonomy=auto
+full-closure loop: merge gate auto-follows PR status → autoMerge (CI green + review
+LGTM + guardrail check) → detached deploy.sh with health verification → automatic
+rollback on failure. The web UI, auth, and pluggable forge are actively evolving. Not yet
 production-hardened — no automated test suite yet, single forge implementation
 (gitcode), and remote execution assumes trusted machines.
 
@@ -143,9 +151,11 @@ Licensed under Apache-2.0 — see [`LICENSE`](LICENSE).
 「需求 → 开发 → 测试」全流程,代码托管后端可插拔。
 
 核心能力:网页开会话/远程审批工具调用/看 markdown 与 diff/成本追踪;对话式生成工作流图
-(agent/gate/meeting 节点);需求录入触发器(issue 命中过滤条件自动起工作流);agent 提 PR
-后自动轮询门禁并把评审意见/失败回流给负责会话;多模型交叉评审会议。CLI(执行器)与模型
-(大脑)两轴解耦,forge(代码托管)可插拔。
+(agent/gate/meeting 节点);任务中心——工作项血缘树(需求→run→节点→PR→审批)作为
+主视图,对话式新建任务;需求录入触发器(issue 命中过滤条件自动起工作流);全自动闭环——
+合并门跟随 PR 状态,CI 绿+评审 LGTM 自动合并,健康门自动部署与回滚;agent 提 PR 后自动
+轮询门禁并把评审意见/失败回流给负责会话;多模型交叉评审会议。CLI(执行器)与模型(大脑)
+两轴解耦,forge(代码托管)可插拔。
 
 ### 需求录入触发器
 
