@@ -4,7 +4,7 @@
  */
 
 import { ArrowLeft, ChevronDown, ExternalLink, FileText, GitPullRequest, ListTree, MessageSquareText, Play, Plus, Save, UserCheck, Workflow as WorkflowIcon } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { SessionRow, WorkItem, WorkflowDef, WorkflowDefRow } from './api';
 import { api } from './api';
@@ -14,7 +14,6 @@ import { SessionView } from './SessionView';
 import { StartForm } from './components/StartForm';
 import { Button } from './components/ui/button';
 import { Badge, Card, type BadgeTone, Spinner, StatusDot } from './components/ui/primitives';
-import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { invalidate, useProjects, useWork, useWorkflows } from './lib/queries';
 import { useProjectScope } from './lib/project';
@@ -158,20 +157,33 @@ function TaskPlanPane({
   onAdvanced: () => void;
 }) {
   const [editVars, setEditVars] = useState<Record<string, string>>({});
+  // 变量同步语义（touched + 前后计划 diff）：agent 明确改动的 key 以新计划为准；
+  // agent 未改的 key 保留用户手动编辑；用户新增的 key（不在新计划里）保留。
+  const touchedKeys = useRef(new Set<string>());
+  const prevPlanVars = useRef<Record<string, string> | null>(null);
   const [saving, setSaving] = useState(false);
   const [starting, setStarting] = useState(false);
 
-  // 同步 taskPlan 变量到编辑状态：agent 新设的 key 以 agent 为准，只保留用户新增的 key
   useEffect(() => {
-    if (taskPlan) {
-      setEditVars((prev) => {
-        const next = { ...taskPlan.vars };
-        for (const k of Object.keys(prev)) {
-          if (!(k in next)) next[k] = prev[k]!;
-        }
-        return next;
-      });
+    if (!taskPlan) {
+      return;
     }
+    const last = prevPlanVars.current;
+    prevPlanVars.current = { ...taskPlan.vars };
+    setEditVars((prev) => {
+      const next = { ...taskPlan.vars };
+      for (const k of Object.keys(next)) {
+        if (last && last[k] === next[k] && touchedKeys.current.has(k) && k in prev) {
+          next[k] = prev[k]!;
+        }
+      }
+      for (const k of Object.keys(prev)) {
+        if (!(k in next)) {
+          next[k] = prev[k]!;
+        }
+      }
+      return next;
+    });
   }, [taskPlan]);
 
   // 按 activeView 决定渲染哪个计划（最新事件优先于类型优先级）
@@ -223,7 +235,10 @@ function TaskPlanPane({
                   <input
                     className="rounded-md border border-line bg-bg px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent"
                     value={editVars[k] ?? ''}
-                    onChange={(e) => setEditVars({ ...editVars, [k]: e.target.value })}
+                    onChange={(e) => {
+                      touchedKeys.current.add(k);
+                      setEditVars({ ...editVars, [k]: e.target.value });
+                    }}
                   />
                 </label>
               ))}
@@ -269,7 +284,13 @@ function TaskIntake({
   const { data: allDefs = [] } = useWorkflows();
   const { data: projects = [] } = useProjects();
   const currentProject = projectId ? projects.find((p) => p.id === projectId) : null;
-  const [advDefId, setAdvDefId] = useState(currentProject?.defaultWorkflow ?? '');
+  const [advDefId, setAdvDefId] = useState('');
+  // projects 数据可能晚于首渲染到位，默认模板用 effect 同步（用户已选过则不覆盖）
+  useEffect(() => {
+    if (currentProject?.defaultWorkflow) {
+      setAdvDefId((prev) => prev || currentProject.defaultWorkflow!);
+    }
+  }, [currentProject?.defaultWorkflow]);
 
   // 按项目过滤非 archived 的模板
   const projectDefs = useMemo(
