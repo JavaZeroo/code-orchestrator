@@ -36,6 +36,7 @@ const spawnBodySchema = z.object({
   taskIntake: z.boolean().optional(),
   title: z.string().optional(),
   projectId: z.string().optional(),
+  effort: MessageMetaSchema.shape.effort,
 });
 
 const sendBodySchema = z.object({ text: z.string().min(1), meta: MessageMetaSchema.optional() });
@@ -109,10 +110,16 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
         machineId: z.string().optional(),
         key: z.string().optional(),
         base: z.string().optional(),
+        effort: MessageMetaSchema.shape.effort,
       })
       .parse(req.body);
     try {
-      return await spawnContainerSession({ ...body, createdBy: req.user?.id });
+      const { effort, ...rest } = body;
+      return await spawnContainerSession({
+        ...rest,
+        meta: effort ? { effort } : undefined,
+        createdBy: req.user?.id,
+      });
     } catch (e) {
       if (e instanceof ContainerSpawnQueued) {
         void reply.code(202);

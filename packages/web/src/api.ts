@@ -38,6 +38,10 @@ export interface MachineRow {
   codeServerUrl?: string;
 }
 
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export interface MaterializationRow { machineId: string; basePath: string; status: 'materializing' | 'ready' | 'failed'; }
+
 export type { ApprovalRequest, SessionEnvelope, SessionState, WorkflowDef };
 
 export interface WorkflowDefRow {
@@ -200,7 +204,7 @@ export const api = {
   sessions: () => fetch('/api/sessions').then((r) => j<{ sessions: SessionRow[] }>(r)).then((d) => d.sessions),
   events: (sessionId: string) =>
     fetch(`/api/sessions/${sessionId}/events`).then((r) => j<{ events: EventRow[] }>(r)).then((d) => d.events),
-  spawn: (body: { machineId: string; cwd: string; prompt?: string; model?: string; designer?: boolean; taskIntake?: boolean; projectId?: string | null }) =>
+  spawn: (body: { machineId: string; cwd: string; prompt?: string; model?: string; effort?: Effort; designer?: boolean; taskIntake?: boolean; projectId?: string | null }) =>
     post('/api/sessions', body).then((r) => j<{ sessionId: string }>(r)),
   workflows: () => fetch('/api/workflows').then((r) => j<{ workflows: WorkflowDefRow[] }>(r)).then((d) => d.workflows),
   createWorkflow: (graph: WorkflowDef, createdVia: 'chat' | 'manual', projectId?: string | null) =>
@@ -244,8 +248,10 @@ export const api = {
   patchProject: (id: string, patch: Partial<ProjectRow>) =>
     fetch(`/api/projects/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
   deleteProject: (id: string) => fetch(`/api/projects/${id}`, { method: 'DELETE' }).then((r) => j(r)),
+  projectMaterializations: (projectId: string) =>
+    fetch(`/api/projects/${projectId}/materializations`).then((r) => j<{ materializations: MaterializationRow[] }>(r)).then((d) => d.materializations),
   /** 容器化会话（design-v2 #37）：项目须配 baseImage；无空闲机返回 {queued} */
-  createContainerSession: (body: { projectId: string; prompt?: string; model?: string; machineId?: string }) =>
+  createContainerSession: (body: { projectId: string; prompt?: string; model?: string; machineId?: string; effort?: Effort }) =>
     post('/api/container-sessions', body).then((r) => j<{ sessionId?: string; queued?: boolean; taskId?: string }>(r)),
   work: (projectId?: string | null) =>
     fetch(`/api/work?limit=400${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ''}`)
