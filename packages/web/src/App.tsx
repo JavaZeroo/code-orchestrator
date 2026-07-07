@@ -195,8 +195,8 @@ function SessionsScreen({ selected, setSelected, openRun }: { selected: string |
         <StatusDot tone={STATE_DOT[s.state] ?? 'neutral'} live={s.state === 'thinking' || s.state === 'starting'} />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-medium text-ink-2">{s.title ?? (s.cwd.split('/').pop() || s.cwd)}</span>
-          <span className="mono-nums block truncate text-[10px] text-faint" title={shortModel(s.model).full}>
-            {shortModel(s.model).display} · {relTime(s.createdAt)}{s.usage ? ` · ${fmtCost(s.usage.costUsd)}` : ''}
+          <span className="mono-nums block truncate text-[10px] text-faint">
+            <span title={shortModel(s.model).full}>{shortModel(s.model).display}</span> · {relTime(s.createdAt)}{s.usage ? ` · ${fmtCost(s.usage.costUsd)}` : ''}
           </span>
         </span>
       </button>

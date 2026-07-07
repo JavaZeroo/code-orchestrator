@@ -24,8 +24,6 @@ export const FORGES: Array<{ key: string; label: string; tokenUrl: string; hint:
   { key: 'github', label: 'GitHub', tokenUrl: 'https://github.com/settings/tokens', hint: 'Settings → Developer settings → PAT（勾 repo）' },
 ];
 
-export const BUILTIN_PROVIDERS = ['anthropic', 'deepseek', 'glm'];
-
 function extractDomain(url: string): string {
   try { return new URL(url).hostname; } catch { return url; }
 }
@@ -255,7 +253,7 @@ function ProviderCard({
   const [userKey, setUserKey] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const isBuiltin = BUILTIN_PROVIDERS.includes(provider.name);
+  const isBuiltin = provider.builtin;
 
   const updateProvider = (patch: { base_url?: string | null; api_key?: string; models?: string[]; default_model?: string | null }) => {
     setBusy(true);
@@ -278,6 +276,7 @@ function ProviderCard({
   const addModel = () => {
     const m = newModel.trim();
     if (!m) return;
+    if (provider.models.includes(m)) return; // 去重
     updateProvider({ models: [...provider.models, m], default_model: provider.defaultModel });
     setNewModel('');
   };
@@ -405,13 +404,15 @@ function ProviderCard({
 
       {/* 操作行 */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-        {/* 更换 key（provider 级） */}
-        <button
-          className="text-accent underline hover:text-accent-2"
-          onClick={() => setShowKeyInput(!showKeyInput)}
-        >
-          {showKeyInput ? '收起' : '更换密钥'}
-        </button>
+        {/* 更换 key（provider 级，仅内置或自己的） */}
+        {(isBuiltin || provider.createdBy === me.user.id) && (
+          <button
+            className="text-accent underline hover:text-accent-2"
+            onClick={() => setShowKeyInput(!showKeyInput)}
+          >
+            {showKeyInput ? '收起' : '更换密钥'}
+          </button>
+        )}
 
         {/* 我的 key（仅 deepseek/glm 显示 per-user） */}
         {isBuiltin && provider.name !== 'anthropic' && (
