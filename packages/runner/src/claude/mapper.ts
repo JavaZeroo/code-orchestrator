@@ -16,6 +16,20 @@ function blocksOf(message: unknown): ContentBlockLike[] {
   return Array.isArray(content) ? (content as ContentBlockLike[]) : [];
 }
 
+const OUTPUT_MAX = 4096; // ~4KB，mapper 侧截断
+
+/** tool_result 的 content：string，或 content-block 数组（取 type==='text' 拼接） */
+function textFromToolResult(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return (content as ContentBlockLike[])
+      .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text as string)
+      .join('\n');
+  }
+  return '';
+}
+
 /** 单条 SDK 消息可能展开为多个 envelope（一条 assistant 消息含 text + 多个 tool_use） */
 export function mapSdkMessage(m: SDKMessage): SessionEnvelope[] {
   const out: SessionEnvelope[] = [];
@@ -47,7 +61,17 @@ export function mapSdkMessage(m: SDKMessage): SessionEnvelope[] {
       // SDK 回灌的 user 消息里的 tool_result = 工具执行结束
       for (const block of blocksOf((m as { message?: unknown }).message)) {
         if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
-          out.push(createEnvelope('agent', { t: 'tool-call-end', call: block.tool_use_id }));
+          let output = textFromToolResult(block.content);
+          if (output.length > OUTPUT_MAX) output = output.slice(0, OUTPUT_MAX) + '…[截断]';
+          const isError = block.is_error === true;
+          out.push(
+            createEnvelope('agent', {
+              t: 'tool-call-end',
+              call: block.tool_use_id,
+              ...(output ? { output } : {}),
+              ...(isError ? { isError: true } : {}),
+            }),
+          );
         }
       }
       break;

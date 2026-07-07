@@ -9,7 +9,7 @@
 
 | 文件 | 说明 | 修改 |
 |---|---|---|
-| `sessionProtocol.ts` | 会话消息 envelope（text / tool-call-start / tool-call-end / turn-start / turn-end …判别联合） | 仅替换文件头注释；正文与上游一致 |
+| `sessionProtocol.ts` | 会话消息 envelope（text / tool-call-start / tool-call-end / turn-start / turn-end …判别联合） | 文件头注释替换；加 `tool-call-end` 的 `output?`/`isError?` 两 optional 字段 |
 | `messageMeta.ts` | 发送侧元数据（permissionMode / model / allowedTools…） | 仅加出处注释 |
 
 ## 明确不取的文件及原因

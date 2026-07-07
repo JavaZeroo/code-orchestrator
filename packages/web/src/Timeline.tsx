@@ -17,6 +17,8 @@ interface ToolCall {
   name: string;
   args: Record<string, unknown>;
   done: boolean;
+  output?: string;
+  isError?: boolean;
 }
 
 function ToolCard({ tool }: { tool: ToolCall }) {
@@ -41,14 +43,12 @@ function ToolCard({ tool }: { tool: ToolCall }) {
         <span className="font-medium">{tool.name}</span>
         {subtitle && <span className="truncate font-mono text-xs text-dim">{subtitle}</span>}
         <span className="ml-auto shrink-0">
-          {tool.done ? (
-            <Badge tone="ok" className="!py-0">
-              完成
-            </Badge>
+          {!tool.done ? (
+            <Badge tone="run" className="!py-0">运行中</Badge>
+          ) : tool.isError ? (
+            <Badge tone="danger" className="!py-0">失败</Badge>
           ) : (
-            <Badge tone="run" className="!py-0">
-              运行中
-            </Badge>
+            <Badge tone="ok" className="!py-0">完成</Badge>
           )}
         </span>
       </button>
@@ -65,6 +65,16 @@ function ToolCard({ tool }: { tool: ToolCall }) {
               {JSON.stringify(tool.args, null, 2)}
             </pre>
           )}
+          {tool.output && (
+            <pre
+              className={cn(
+                'mt-2 max-h-72 overflow-auto rounded-md border border-line bg-bg p-2 font-mono text-xs',
+                tool.isError ? 'text-danger' : 'text-ink-2',
+              )}
+            >
+              {tool.output}
+            </pre>
+          )}
         </div>
       )}
     </div>
@@ -73,7 +83,14 @@ function ToolCard({ tool }: { tool: ToolCall }) {
 
 function ApprovalCard({ item, onDecide }: { item: ApprovalItem; onDecide: (id: string, b: 'allow' | 'deny') => void }) {
   const { request, status } = item;
-  const input = (request.payload.input ?? request.payload) as Record<string, unknown>;
+  const payload = request.payload as Record<string, unknown>;
+  const input = (payload.input ?? payload) as Record<string, unknown>;
+  const toolName =
+    typeof payload.toolName === 'string'
+      ? payload.toolName
+      : typeof payload.name === 'string'
+        ? payload.name
+        : undefined;
   return (
     <div
       className={cn(
@@ -89,9 +106,23 @@ function ApprovalCard({ item, onDecide }: { item: ApprovalItem; onDecide: (id: s
         {status === 'approved' && <Badge tone="ok">已批准</Badge>}
         {status === 'denied' && <Badge tone="danger">已拒绝</Badge>}
       </div>
-      <pre className="mb-2 max-h-52 overflow-auto rounded-md border border-line bg-bg p-2 font-mono text-xs text-dim">
-        {JSON.stringify(input, null, 2)}
-      </pre>
+      {toolName === 'Bash' || typeof input.command === 'string' ? (
+        <pre className="mb-2 max-h-52 overflow-auto rounded-md border border-line bg-bg p-2 font-mono text-xs text-ink-2">
+          {String(input.command ?? '')}
+        </pre>
+      ) : (toolName === 'Edit' || toolName === 'MultiEdit') &&
+        typeof input.old_string === 'string' &&
+        typeof input.new_string === 'string' ? (
+        <div className="mb-2"><TextDiff oldText={input.old_string} newText={input.new_string} /></div>
+      ) : toolName === 'Write' && typeof input.content === 'string' ? (
+        <pre className="mb-2 max-h-52 overflow-auto rounded-md border border-line bg-bg p-2 font-mono text-xs text-ink-2">
+          {input.content}
+        </pre>
+      ) : (
+        <pre className="mb-2 max-h-52 overflow-auto rounded-md border border-line bg-bg p-2 font-mono text-xs text-dim">
+          {JSON.stringify(input, null, 2)}
+        </pre>
+      )}
       {status === 'pending' && (
         <div className="flex gap-2">
           <Button variant="success" size="sm" onClick={() => onDecide(request.id, 'allow')}>
@@ -148,6 +179,8 @@ export function Timeline({
           const t = tools.get(ev.call);
           if (t) {
             t.done = true;
+            t.output = ev.output;
+            t.isError = ev.isError;
           }
         } else if (ev.t === 'service') {
           out.push({
