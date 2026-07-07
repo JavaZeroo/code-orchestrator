@@ -9,6 +9,14 @@ export function fmtCost(usd: number): string {
   return usd >= 0.995 ? `$${usd.toFixed(2)}` : `$${usd.toFixed(3)}`;
 }
 
+/** 显示模型名：`provider/model` 格式过长时只显示 model 段，title 属性给全名 */
+export function shortModel(m: string | null): { display: string; full: string } {
+  const full = m ?? 'claude';
+  const idx = full.indexOf('/');
+  const display = idx >= 0 ? full.slice(idx + 1) : full;
+  return { display, full };
+}
+
 export function fmtTokens(n: number): string {
   if (n >= 1_000_000) {
     return `${(n / 1_000_000).toFixed(1)}M`;

@@ -7,7 +7,7 @@ import { Activity, ArrowRight, CheckCircle2, type LucideIcon, GitPullRequest, Wo
 import { Badge, Card, Spinner, StatusDot } from './components/ui/primitives';
 import { useApprovals, useRuns, useSessions, useWorkflows } from './lib/queries';
 import { useProjectScope } from './lib/project';
-import { cn } from './lib/utils';
+import { cn, shortModel } from './lib/utils';
 
 const RUN_TONE: Record<string, 'accent' | 'run' | 'ok' | 'danger' | 'neutral' | 'human'> = {
   running: 'run',
@@ -134,7 +134,7 @@ export function Dashboard({ onOpenSession, onOpenRun }: { onOpenSession: (id: st
               title={s.cwd.split('/').pop() || s.cwd}
               meta={
                 <>
-                  <span className="text-accent/80">{s.model ?? 'claude'}</span>
+                  <span className="text-accent/80" title={shortModel(s.model).full}>{shortModel(s.model).display}</span>
                   {runName(s.runId) && <span>· {runName(s.runId)}</span>}
                   {s.nodeId && <span>· {s.nodeId}</span>}
                   <span>· {elapsed(s.createdAt)}</span>
@@ -167,7 +167,7 @@ export function Dashboard({ onOpenSession, onOpenRun }: { onOpenSession: (id: st
               onClick={() => onOpenSession(s.id)}
               dot="human"
               title={s.cwd.split('/').pop() || s.cwd}
-              meta={<span>{s.model ?? 'claude'} · {elapsed(s.createdAt)}</span>}
+              meta={<span title={shortModel(s.model).full}>{shortModel(s.model).display} · {elapsed(s.createdAt)}</span>}
               right={<Badge tone="warn">工具审批</Badge>}
             />
           ))}

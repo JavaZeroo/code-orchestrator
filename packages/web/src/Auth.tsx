@@ -1,10 +1,11 @@
 import { ExternalLink, GitPullRequest, ShieldCheck, Workflow } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { api, type LlmEndpointRow } from './api';
+import { api, type LlmProviderRow } from './api';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
 import { Button } from './components/ui/button';
 import { Badge, Input } from './components/ui/primitives';
+import { useLlmProviders } from './lib/queries';
 import { cn } from './lib/utils';
 
 export interface ForgeBinding {
@@ -23,10 +24,11 @@ export const FORGES: Array<{ key: string; label: string; tokenUrl: string; hint:
   { key: 'github', label: 'GitHub', tokenUrl: 'https://github.com/settings/tokens', hint: 'Settings → Developer settings → PAT（勾 repo）' },
 ];
 
-export const LLM_PROVIDERS: Array<{ key: string; label: string; keyUrl: string; hint: string }> = [
-  { key: 'deepseek', label: 'DeepSeek', keyUrl: 'https://platform.deepseek.com/api_keys', hint: '开放平台 → API keys' },
-  { key: 'glm', label: 'GLM', keyUrl: 'https://open.bigmodel.cn/usercenter/apikeys', hint: '智谱开放平台 → API Keys' },
-];
+export const BUILTIN_PROVIDERS = ['anthropic', 'deepseek', 'glm'];
+
+function extractDomain(url: string): string {
+  try { return new URL(url).hostname; } catch { return url; }
+}
 
 async function jauth<T>(r: Response): Promise<T> {
   if (!r.ok) {
@@ -84,7 +86,7 @@ function AuthMark() {
       <circle cx="22" cy="22" r="12.5" stroke="var(--color-accent)" strokeWidth="1.7" strokeDasharray="3.5 3.5" opacity="0.8" />
       <circle cx="22" cy="22" r="4.4" fill="var(--color-accent)" />
       <circle cx="22" cy="9.5" r="2.6" fill="var(--color-accent)" />
-      <circle cx="33" cy="28" r="2.2" fill="var(--color-ink)" opacity="0.55" />
+      <circle cx="33" cy="28" r="2.2" fill="var(--color-accent)" />
       <circle cx="11" cy="28" r="2.2" fill="var(--color-ink)" opacity="0.55" />
     </svg>
   );
@@ -237,25 +239,282 @@ function ForgeTokenRow({ forge, binding, onChanged }: { forge: (typeof FORGES)[n
   );
 }
 
-function LlmKeyRow({
+function ProviderCard({
   provider,
-  binding,
+  me,
   onChanged,
 }: {
-  provider: (typeof LLM_PROVIDERS)[number];
-  binding: { bound: boolean };
+  provider: LlmProviderRow;
+  me: Me;
   onChanged: () => void;
 }) {
-  const [key, setKey] = useState('');
+  const [newModel, setNewModel] = useState('');
+  const [showKeyInput, setShowKeyInput] = useState(false);
+  const [apiKey, setApiKey] = useState('');
+  const [showUserKey, setShowUserKey] = useState(false);
+  const [userKey, setUserKey] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const bind = () => {
+  const isBuiltin = BUILTIN_PROVIDERS.includes(provider.name);
+
+  const updateProvider = (patch: { base_url?: string | null; api_key?: string; models?: string[]; default_model?: string | null }) => {
+    setBusy(true);
+    // 服务端 PUT 对 baseUrl/models/defaultModel 无条件写入，必须传全量
+    api
+      .saveProvider(provider.name, {
+        base_url: provider.baseUrl,
+        models: provider.models,
+        default_model: provider.defaultModel,
+        ...patch,
+      })
+      .then(() => {
+        toast.success(`已更新 ${provider.name}`);
+        onChanged();
+      })
+      .catch((e) => toast.error(`${e instanceof Error ? e.message : e}`))
+      .finally(() => setBusy(false));
+  };
+
+  const addModel = () => {
+    const m = newModel.trim();
+    if (!m) return;
+    updateProvider({ models: [...provider.models, m], default_model: provider.defaultModel });
+    setNewModel('');
+  };
+
+  const deleteModel = (m: string) => {
+    updateProvider({
+      models: provider.models.filter((x) => x !== m),
+      default_model: provider.defaultModel === m ? null : provider.defaultModel,
+    });
+  };
+
+  const setDefaultModel = (m: string) => {
+    updateProvider({ default_model: m });
+  };
+
+  const saveProviderKey = () => {
+    if (apiKey.trim().length < 10) return;
+    updateProvider({ api_key: apiKey.trim() });
+    setApiKey('');
+    setShowKeyInput(false);
+  };
+
+  const saveUserKey = () => {
+    if (userKey.trim().length < 10) return;
     setBusy(true);
     authApi
-      .bindLlmKey(provider.key, key.trim())
+      .bindLlmKey(provider.name, userKey.trim())
       .then(() => {
-        toast.success(`已配置 ${provider.label} API key`);
-        setKey('');
+        toast.success(`已配置个人 key`);
+        setUserKey('');
+        setShowUserKey(false);
+        onChanged();
+      })
+      .catch((e) => toast.error(`${e instanceof Error ? e.message : e}`))
+      .finally(() => setBusy(false));
+  };
+
+  const deleteUserKey = () => {
+    setBusy(true);
+    authApi
+      .unbindLlmKey(provider.name)
+      .then(() => {
+        toast.success(`已删除个人 key`);
+        onChanged();
+      })
+      .catch((e) => toast.error(`${e instanceof Error ? e.message : e}`))
+      .finally(() => setBusy(false));
+  };
+
+  const deleteProvider = () => {
+    if (!confirm(`确定删除服务商「${provider.name}」？`)) return;
+    setBusy(true);
+    api
+      .deleteProvider(provider.name)
+      .then(() => {
+        toast.success(`已删除 ${provider.name}`);
+        onChanged();
+      })
+      .catch((e) => toast.error(`${e instanceof Error ? e.message : e}`))
+      .finally(() => setBusy(false));
+  };
+
+  const baseUrlLabel = provider.baseUrl ? extractDomain(provider.baseUrl) : '官方直连';
+  const userKeyBound = me.llm?.[provider.name]?.bound;
+
+  return (
+    <div className="rounded-lg border border-line p-3">
+      {/* 卡片头 */}
+      <div className="mb-2 flex items-center gap-2">
+        <h4 className="text-sm font-medium capitalize">{provider.name}</h4>
+        <Badge>{baseUrlLabel}</Badge>
+        {provider.hasKey ? (
+          <Badge tone="ok">已配置</Badge>
+        ) : (
+          <Badge tone="warn">未配置</Badge>
+        )}
+      </div>
+
+      {/* 模型 chips + 添加 */}
+      <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+        {provider.models.map((m) => (
+          <span
+            key={m}
+            className={cn(
+              'group inline-flex cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-[11px] transition-colors',
+              m === provider.defaultModel
+                ? 'bg-accent/20 text-accent'
+                : 'bg-bg-2/60 text-ink-2 hover:bg-accent/10',
+            )}
+            onClick={() => setDefaultModel(m)}
+            title={m === provider.defaultModel ? '默认模型（点击取消）' : '设为默认'}
+          >
+            {m === provider.defaultModel && (
+              <svg viewBox="0 0 12 12" className="size-2.5 fill-accent" aria-hidden>
+                <path d="M5.5.5 7 4l3.5.5L8 7.5l.5 4L5.5 9.5 2 11.5l.5-4L0 4.5 4 4Z" />
+              </svg>
+            )}
+            {m}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                deleteModel(m);
+              }}
+              className="ml-0.5 rounded-full p-0.5 text-faint opacity-0 transition-opacity group-hover:opacity-100 hover:text-danger"
+            >
+              <svg viewBox="0 0 12 12" className="size-2.5" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M3 3l6 6M9 3l-6 6" />
+              </svg>
+            </button>
+          </span>
+        ))}
+        {/* 内联添加模型 */}
+        <div className="inline-flex items-center">
+          <input
+            value={newModel}
+            onChange={(e) => setNewModel(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') addModel();
+            }}
+            placeholder="+ 添加模型"
+            className="h-5 w-22 rounded border border-line/50 bg-transparent px-1.5 text-[11px] text-ink outline-none placeholder:text-faint focus:border-accent/60"
+          />
+        </div>
+      </div>
+
+      {/* 操作行 */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+        {/* 更换 key（provider 级） */}
+        <button
+          className="text-accent underline hover:text-accent-2"
+          onClick={() => setShowKeyInput(!showKeyInput)}
+        >
+          {showKeyInput ? '收起' : '更换密钥'}
+        </button>
+
+        {/* 我的 key（仅 deepseek/glm 显示 per-user） */}
+        {isBuiltin && provider.name !== 'anthropic' && (
+          <button
+            className="text-accent underline hover:text-accent-2"
+            onClick={() => setShowUserKey(!showUserKey)}
+          >
+            {userKeyBound ? '我的 key ✓' : '我的 key'}
+          </button>
+        )}
+
+        {/* 删除（仅非内置 + 自己的） */}
+        {!isBuiltin && provider.createdBy === me.user.id && (
+          <button
+            className="text-danger underline hover:text-danger/80"
+            disabled={busy}
+            onClick={deleteProvider}
+          >
+            删除服务商
+          </button>
+        )}
+      </div>
+
+      {/* 更换 key 输入 */}
+      {showKeyInput && (
+        <div className="mt-2 flex gap-2">
+          <Input
+            type="password"
+            placeholder="新 API Key"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            className="h-7 text-[12px]"
+          />
+          <Button
+            variant="default"
+            size="sm"
+            disabled={apiKey.trim().length < 10 || busy}
+            onClick={saveProviderKey}
+          >
+            保存
+          </Button>
+        </div>
+      )}
+
+      {/* 我的 key（per-user）输入 */}
+      {showUserKey && (
+        <div className="mt-2">
+          <div className="flex gap-2">
+            <Input
+              type="password"
+              placeholder={userKeyBound ? '输入新 key 以更换' : '粘贴 API key'}
+              value={userKey}
+              onChange={(e) => setUserKey(e.target.value)}
+              className="h-7 text-[12px]"
+            />
+            <Button
+              variant="default"
+              size="sm"
+              disabled={userKey.trim().length < 10 || busy}
+              onClick={saveUserKey}
+            >
+              保存
+            </Button>
+          </div>
+          {userKeyBound && (
+            <button
+              className="mt-1 text-xs text-danger underline"
+              disabled={busy}
+              onClick={deleteUserKey}
+            >
+              删除个人 key
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NewProviderForm({ onChanged }: { onChanged: () => void }) {
+  const [name, setName] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [firstModel, setFirstModel] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const canSave = name.trim().length > 0 && apiKey.trim().length >= 10;
+
+  const save = () => {
+    if (!canSave) return;
+    setBusy(true);
+    api
+      .saveProvider(name.trim(), {
+        base_url: baseUrl.trim() || null,
+        api_key: apiKey.trim(),
+        models: firstModel.trim() ? [firstModel.trim()] : [],
+      })
+      .then((r) => {
+        toast.success(`服务商 ${r.name} 已创建`);
+        setName('');
+        setBaseUrl('');
+        setApiKey('');
+        setFirstModel('');
         onChanged();
       })
       .catch((e) => toast.error(`${e instanceof Error ? e.message : e}`))
@@ -264,40 +523,34 @@ function LlmKeyRow({
 
   return (
     <div className="rounded-lg border border-line p-3">
-      <div className="mb-2 flex items-center gap-2">
-        <h4 className="text-sm font-medium">{provider.label} API Key</h4>
-        {binding.bound && <Badge tone="ok">已配置</Badge>}
-        <a
-          className="ml-auto inline-flex items-center gap-0.5 text-xs text-accent underline"
-          href={provider.keyUrl}
-          target="_blank"
-          rel="noreferrer"
-        >
-          创建 <ExternalLink size={10} />
-        </a>
-      </div>
-      <p className="mb-2 text-xs text-dim">{provider.hint}。会话选 {provider.key} 模型时优先用你的 key；密钥加密存储。</p>
-      <div className="flex gap-2">
+      <h4 className="mb-2 text-sm font-medium">新增服务商</h4>
+      <div className="flex flex-col gap-2">
+        <Input
+          placeholder="名称（如 my-provider）"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <Input
+          placeholder="Base URL（Anthropic 兼容，可选留空=官方直连）"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+        />
         <Input
           type="password"
-          placeholder={binding.bound ? '输入新 key 以更换' : `粘贴 ${provider.label} API key`}
-          value={key}
-          onChange={(e) => setKey(e.target.value)}
+          placeholder="API Key（至少 10 位）"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
         />
-        <Button variant="default" disabled={busy || key.trim().length < 10} onClick={bind}>
-          {busy ? '保存中…' : '保存'}
+        <Input
+          placeholder="首个模型名（可选）"
+          value={firstModel}
+          onChange={(e) => setFirstModel(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && canSave && save()}
+        />
+        <Button variant="default" disabled={busy || !canSave} onClick={save}>
+          {busy ? '创建中…' : '添加服务商'}
         </Button>
       </div>
-      {binding.bound && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mt-2 self-start text-danger"
-          onClick={() => void authApi.unbindLlmKey(provider.key).then(onChanged)}
-        >
-          删除
-        </Button>
-      )}
     </div>
   );
 }
@@ -401,121 +654,12 @@ function LarkWebhookRow({
   );
 }
 
-function LlmEndpointRow({
-  endpoint,
-  onChanged,
-}: {
-  endpoint: LlmEndpointRow;
-  onChanged: () => void;
-}) {
-  const [deleting, setDeleting] = useState(false);
-
-  const remove = () => {
-    setDeleting(true);
-    api
-      .deleteEndpoint(endpoint.label)
-      .then(() => {
-        toast.success(`已删除端点 ${endpoint.label}`);
-        onChanged();
-      })
-      .catch((e) => toast.error(`${e instanceof Error ? e.message : e}`))
-      .finally(() => setDeleting(false));
-  };
-
-  return (
-    <div className="rounded-lg border border-line p-3">
-      <div className="mb-1 flex items-center gap-2">
-        <h4 className="text-sm font-medium">{endpoint.label}</h4>
-        <Badge tone="ok">已配置</Badge>
-      </div>
-      <p className="text-xs text-dim">
-        {endpoint.model} · {endpoint.baseUrl}
-      </p>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="mt-2 self-start text-danger"
-        disabled={deleting}
-        onClick={remove}
-      >
-        {deleting ? '删除中…' : '删除'}
-      </Button>
-    </div>
-  );
-}
-
-function NewEndpointForm({ onChanged }: { onChanged: () => void }) {
-  const [label, setLabel] = useState('');
-  const [model, setModel] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const canSave = label.trim() && model.trim() && baseUrl.trim() && apiKey.trim().length >= 10;
-
-  const save = () => {
-    setBusy(true);
-    api
-      .upsertEndpoint(label.trim(), model.trim(), baseUrl.trim(), apiKey.trim())
-      .then(() => {
-        toast.success(`端点 ${label} 已保存`);
-        setLabel('');
-        setModel('');
-        setBaseUrl('');
-        setApiKey('');
-        onChanged();
-      })
-      .catch((e) => toast.error(`${e instanceof Error ? e.message : e}`))
-      .finally(() => setBusy(false));
-  };
-
-  return (
-    <div className="rounded-lg border border-line p-3">
-      <h4 className="mb-2 text-sm font-medium">新增自定义端点</h4>
-      <div className="flex flex-col gap-2">
-        <Input
-          placeholder="label（如 my-deepseek）"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-        />
-        <Input
-          placeholder="模型名（如 deepseek-chat）"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-        />
-        <Input
-          placeholder="Base URL（Anthropic 兼容，如 https://api.example.com/anthropic）"
-          value={baseUrl}
-          onChange={(e) => setBaseUrl(e.target.value)}
-        />
-        <Input
-          type="password"
-          placeholder="API Key（至少 10 位）"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && canSave && save()}
-        />
-        <Button variant="default" disabled={busy || !canSave} onClick={save}>
-          {busy ? '保存中…' : '添加端点'}
-        </Button>
-      </div>    </div>
-  );
-}
-
 export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () => void; onChanged: () => void }) {
-  const [endpoints, setEndpoints] = useState<LlmEndpointRow[]>([]);
-
-  const refreshEndpoints = useCallback(() => {
-    api.listEndpoints().then(setEndpoints).catch(() => setEndpoints([]));
-  }, []);
-
-  useEffect(() => {
-    refreshEndpoints();
-  }, [refreshEndpoints]);
+  const { data: providers = [], refetch: refreshProviders } = useLlmProviders();
 
   const onAnyChanged = () => {
     onChanged();
-    refreshEndpoints();
+    refreshProviders();
   };
 
   return (
@@ -527,17 +671,13 @@ export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () 
           {FORGES.map((f) => (
             <ForgeTokenRow key={f.key} forge={f} binding={me.forges[f.key] ?? { bound: false }} onChanged={onAnyChanged} />
           ))}
-          <h4 className="mt-2 text-xs font-medium text-dim">LLM API Key</h4>
-          {LLM_PROVIDERS.map((p) => (
-            <LlmKeyRow key={p.key} provider={p} binding={me.llm?.[p.key] ?? { bound: false }} onChanged={onAnyChanged} />
+          <h4 className="mt-2 text-xs font-medium text-dim">模型服务商</h4>
+          {providers.map((p) => (
+            <ProviderCard key={p.name} provider={p} me={me} onChanged={onAnyChanged} />
           ))}
+          <NewProviderForm onChanged={refreshProviders} />
           <h4 className="mt-2 text-xs font-medium text-dim">飞书通知</h4>
           <LarkWebhookRow binding={me.lark ?? { bound: false, enabled: false }} onChanged={onChanged} />
-          <h4 className="mt-2 text-xs font-medium text-dim">LLM 端点注册表</h4>
-          {endpoints.map((ep) => (
-            <LlmEndpointRow key={ep.id} endpoint={ep} onChanged={refreshEndpoints} />
-          ))}
-          <NewEndpointForm onChanged={refreshEndpoints} />
         </div>
       </DialogContent>
     </Dialog>

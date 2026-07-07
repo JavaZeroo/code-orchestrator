@@ -4,8 +4,8 @@ import { toast } from 'sonner';
 import { api, type Effort } from './api';
 import { Input, Textarea } from './components/ui/primitives';
 import * as SelectPrimitive from '@radix-ui/react-select';
-import { SelectContent, SelectItem } from './components/ui/select';
-import { useLlmEndpoints, useMachines, useProjects } from './lib/queries';
+import { SelectContent, SelectGroup, SelectItem, SelectLabel } from './components/ui/select';
+import { useLlmProviders, useMachines, useProjects } from './lib/queries';
 import { useProjectScope } from './lib/project';
 import { cn } from './lib/utils';
 
@@ -15,11 +15,13 @@ function ChipSelect({
   value,
   onValueChange,
   options,
+  groups,
   className,
 }: {
   value: string;
   onValueChange: (v: string) => void;
-  options: { value: string; label: string }[];
+  options?: { value: string; label: string }[];
+  groups?: { label: string; items: { value: string; label: string }[] }[];
   className?: string;
 }) {
   return (
@@ -36,11 +38,24 @@ function ChipSelect({
         </SelectPrimitive.Icon>
       </SelectPrimitive.Trigger>
       <SelectContent>
-        {options.map((opt) => (
-          <SelectItem key={opt.value} value={opt.value}>
-            {opt.label}
-          </SelectItem>
-        ))}
+        {options
+          ? options.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))
+          : groups?.map((g) => (
+              <SelectGroup key={g.label}>
+                <SelectLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-faint">
+                  {g.label}
+                </SelectLabel>
+                {g.items.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ))}
       </SelectContent>
     </SelectPrimitive.Root>
   );
@@ -79,7 +94,7 @@ function ChipToggle({
 export function NewSession({ onCreated }: { onCreated: (sessionId: string) => void }) {
   const { data: machines = [] } = useMachines();
   const { data: projects = [] } = useProjects();
-  const { data: endpoints = [] } = useLlmEndpoints();
+  const { data: providers = [] } = useLlmProviders();
   const { projectId } = useProjectScope();
 
   const project = projects.find((p) => p.id === projectId);
@@ -108,12 +123,15 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
     return () => document.removeEventListener('mousedown', handler);
   }, [showAdvanced]);
 
-  // 模型选项：内建别名 + 自定义 LLM 端点
-  const modelOptions = [
-    { value: 'claude', label: 'claude' },
-    { value: 'deepseek', label: 'deepseek' },
-    { value: 'glm', label: 'glm' },
-    ...endpoints.map((e) => ({ value: e.label, label: `${e.label}（${e.model}）` })),
+  // 模型选项：先"claude（默认）"快捷项，再按 provider 分组
+  const modelGroups = [
+    { label: '默认', items: [{ value: 'claude', label: 'claude（默认）' }] },
+    ...providers
+      .filter((p) => p.models.length > 0)
+      .map((p) => ({
+        label: p.name,
+        items: p.models.map((m) => ({ value: `${p.name}/${m}`, label: m })),
+      })),
   ];
 
   const effortOptions = [
@@ -217,7 +235,7 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
             {/* Chips 行 */}
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {/* 模型 ▾ */}
-              <ChipSelect value={model} onValueChange={setModel} options={modelOptions} />
+              <ChipSelect value={model} onValueChange={setModel} groups={modelGroups} />
               {/* effort ▾ */}
               <ChipSelect value={effort} onValueChange={setEffort} options={effortOptions} />
               {/* 容器 toggle：仅 baseImage 项目显示 */}
