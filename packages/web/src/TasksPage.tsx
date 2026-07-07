@@ -103,10 +103,8 @@ function WorkNode({
   return (
     <div>
       <div
-        className={cn(
-          'flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] transition-colors hover:bg-panel-2',
-          depth > 0 && 'ml-5',
-        )}
+        className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] transition-colors hover:bg-panel-2"
+        style={{ marginLeft: depth * 20 }}
         onClick={handleClick}
       >
         {hasChildren ? (

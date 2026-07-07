@@ -102,6 +102,8 @@ export interface TriggerRow {
 }
 
 export interface CreateTriggerBody {
+  /** 归属项目（详情页创建时必带；服务端 createSchema 已支持，无需改 server） */
+  projectId?: string;
   forge: ForgeKind;
   repo: string;
   defId: string;
