@@ -134,6 +134,8 @@ export const projects = pgTable('projects', {
   guardrails: jsonb('guardrails').$type<string[]>().notNull().default([]),
   /** 默认预设工作流（需求进来起哪条流水线） */
   defaultDefId: text('default_def_id'),
+  /** 默认流程定义（任务受理器预选此模板，任务中心③期手加，additive） */
+  defaultWorkflow: text('default_workflow'),
   /** 模型花名册：{pm, dev, se} → 预设按角色取，同一预设换项目换模型 */
   models: jsonb('models').$type<Record<string, string>>().notNull().default({}),
   /** 项目级默认 vars（如 base 分支），与 issue 变量合并注入 run */
@@ -315,6 +317,8 @@ export const workflowDefs = pgTable('workflow_defs', {
   projectId: text('project_id'),
   createdBy: text('created_by'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  /** 归档标记（任务中心③期手加，additive）：'yes' 隐藏于模板选择器；默认 'no' */
+  archived: text('archived', { enum: ['yes', 'no'] }).notNull().default('no'),
 });
 
 export const workflowRuns = pgTable('workflow_runs', {

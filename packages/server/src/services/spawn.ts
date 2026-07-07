@@ -107,6 +107,7 @@ export interface SpawnRequest {
   meta?: MessageMeta;
   env?: Record<string, string>;
   designer?: boolean;
+  taskIntake?: boolean;
   runId?: string;
   nodeId?: string;
   createdBy?: string;
@@ -142,6 +143,7 @@ export async function spawnSession(req: SpawnRequest): Promise<{ sessionId: stri
     meta,
     env: { ...(resolved.env ?? {}), ...(req.env ?? {}) },
     designer: req.designer,
+    taskIntake: req.taskIntake,
   });
   if (!result.ok) {
     await db.update(schema.sessions).set({ state: 'dead' }).where(eq(schema.sessions.id, sessionId));

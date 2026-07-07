@@ -46,6 +46,7 @@ export interface WorkflowDefRow {
   graph: WorkflowDef;
   createdVia: string;
   projectId: string | null;
+  archived: string; // 'yes' | 'no'
   createdAt: string;
 }
 
@@ -138,6 +139,8 @@ export interface ProjectRow {
   autonomy: Autonomy;
   guardrails: string[];
   defaultDefId: string | null;
+  /** 默认流程定义（任务受理器预选此模板） */
+  defaultWorkflow: string | null;
   models: Record<string, string>;
   vars: Record<string, string>;
   /** design-v2 容器化：薄 base 镜像（空=非容器化项目） */
@@ -196,11 +199,13 @@ export const api = {
   sessions: () => fetch('/api/sessions').then((r) => j<{ sessions: SessionRow[] }>(r)).then((d) => d.sessions),
   events: (sessionId: string) =>
     fetch(`/api/sessions/${sessionId}/events`).then((r) => j<{ events: EventRow[] }>(r)).then((d) => d.events),
-  spawn: (body: { machineId: string; cwd: string; prompt?: string; model?: string; designer?: boolean; projectId?: string | null }) =>
+  spawn: (body: { machineId: string; cwd: string; prompt?: string; model?: string; designer?: boolean; taskIntake?: boolean; projectId?: string | null }) =>
     post('/api/sessions', body).then((r) => j<{ sessionId: string }>(r)),
   workflows: () => fetch('/api/workflows').then((r) => j<{ workflows: WorkflowDefRow[] }>(r)).then((d) => d.workflows),
   createWorkflow: (graph: WorkflowDef, createdVia: 'chat' | 'manual', projectId?: string | null) =>
     post('/api/workflows', { graph, createdVia, projectId }).then((r) => j<{ id: string }>(r)),
+  patchWorkflow: (id: string, patch: { archived?: 'yes' | 'no' }) =>
+    fetch(`/api/workflows/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
   startRun: (workflowId: string, vars: Record<string, string>, projectId?: string | null) =>
     post(`/api/workflows/${workflowId}/runs`, { vars, projectId }).then((r) => j<{ runId: string }>(r)),
   runs: () => fetch('/api/runs').then((r) => j<{ runs: RunRow[] }>(r)).then((d) => d.runs),

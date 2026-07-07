@@ -17,6 +17,10 @@ const startBodySchema = z.object({
   projectId: z.string().nullable().optional(),
 });
 
+const patchDefSchema = z.object({
+  archived: z.enum(['yes', 'no']).optional(),
+});
+
 export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/workflows', async (req, reply) => {
     const body = createBodySchema.parse(req.body);
@@ -54,6 +58,16 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       return { error: 'workflow not found' };
     }
     return rows[0];
+  });
+
+  app.patch<{ Params: { id: string } }>('/api/workflows/:id', async (req, reply) => {
+    const patch = patchDefSchema.parse(req.body ?? {});
+    if (Object.keys(patch).length === 0) {
+      void reply.code(400);
+      return { error: '无更新字段' };
+    }
+    await getDb().update(schema.workflowDefs).set(patch).where(eq(schema.workflowDefs.id, req.params.id));
+    return { ok: true };
   });
 
   app.post<{ Params: { id: string } }>('/api/workflows/:id/runs', async (req, reply) => {

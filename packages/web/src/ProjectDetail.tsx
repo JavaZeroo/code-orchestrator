@@ -3,10 +3,10 @@
  * 内容从 ProjectsPage（概览）、TriggersPage（自动化）、WorkflowsPage（模板）搬迁。
  */
 
-import { ExternalLink, MessageCircle, Play, Plus, RefreshCw, Trash2, Workflow as WorkflowIcon } from 'lucide-react';
+import { Archive, ArchiveRestore, ChevronDown, ExternalLink, MessageCircle, Play, Plus, RefreshCw, Star, Trash2, Workflow as WorkflowIcon } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import type { CreateTriggerBody, ForgeKind, ProjectRow, RequirementRow, TriggerRow } from './api';
+import type { CreateTriggerBody, ForgeKind, ProjectRow, RequirementRow, TriggerRow, WorkflowDefRow } from './api';
 import { api } from './api';
 import type { Me } from './Auth';
 import { Designer } from './Designer';
@@ -245,6 +245,104 @@ function RequirementRowItem({ r, onOpenRun }: { r: RequirementRow; onOpenRun: (r
   );
 }
 
+/* ──────── 流程模板卡片 ──────── */
+
+function WorkflowDefCard({ def, project }: { def: WorkflowDefRow; project: ProjectRow }) {
+  const [archiving, setArchiving] = useState(false);
+  const [settingDefault, setSettingDefault] = useState(false);
+  const isDefault = project.defaultWorkflow === def.id;
+
+  const doArchive = () => {
+    setArchiving(true);
+    api.patchWorkflow(def.id, { archived: 'yes' })
+      .then(() => { toast.success('已归档'); invalidate('workflows'); })
+      .catch((e) => toast.error(String(e)))
+      .finally(() => setArchiving(false));
+  };
+
+  const doSetDefault = () => {
+    setSettingDefault(true);
+    api.patchProject(project.id, { defaultWorkflow: def.id })
+      .then(() => { toast.success('已设为默认模板'); invalidate('projects'); })
+      .catch((e) => toast.error(String(e)))
+      .finally(() => setSettingDefault(false));
+  };
+
+  return (
+    <Card key={def.id} className="p-3.5 transition-colors hover:border-line-2">
+      <div className="flex items-center gap-2.5">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-panel-2 text-accent">
+          <WorkflowIcon size={15} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5 truncate font-display text-[14px] font-semibold text-ink">
+            {def.name}
+            {isDefault && <span className="mono-nums rounded bg-ok/15 px-1.5 py-0.5 text-[10px] text-ok">默认</span>}
+          </span>
+          <span className="mono-nums block text-[11px] text-faint">
+            {def.graph.nodes.length} 节点 · v{def.version} · {def.createdVia === 'chat' ? '对话生成' : '手工'}
+          </span>
+        </div>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" disabled={settingDefault || isDefault} onClick={doSetDefault} title="设为默认">
+            <Star size={13} className={isDefault ? 'fill-ok text-ok' : ''} />
+          </Button>
+          <Button variant="ghost" size="icon" disabled={archiving} onClick={doArchive} title="归档">
+            <Archive size={13} />
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function ArchivedDefsSection({ defs, project }: { defs: WorkflowDefRow[]; project: ProjectRow }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        className="flex items-center gap-1.5 self-start px-1 text-xs text-faint hover:text-accent"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <ChevronDown size={12} className={cn('transition-transform', open && 'rotate-0', !open && '-rotate-90')} />
+        已归档模板（{defs.length}）
+      </button>
+      {open && defs.map((d) => (
+        <ArchivedDefCard key={d.id} def={d} />
+      ))}
+    </div>
+  );
+}
+
+function ArchivedDefCard({ def }: { def: WorkflowDefRow }) {
+  const [restoring, setRestoring] = useState(false);
+  const doRestore = () => {
+    setRestoring(true);
+    api.patchWorkflow(def.id, { archived: 'no' })
+      .then(() => { toast.success('已恢复'); invalidate('workflows'); })
+      .catch((e) => toast.error(String(e)))
+      .finally(() => setRestoring(false));
+  };
+  return (
+    <Card className="p-3 opacity-60 transition-opacity hover:opacity-100">
+      <div className="flex items-center gap-2.5">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-panel-2 text-faint">
+          <Archive size={15} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <span className="block truncate text-[14px] font-semibold text-ink line-through decoration-faint/40">{def.name}</span>
+          <span className="mono-nums block text-[11px] text-faint">
+            {def.graph.nodes.length} 节点 · v{def.version}
+          </span>
+        </div>
+        <Button variant="ghost" size="sm" disabled={restoring} onClick={doRestore}>
+          <ArchiveRestore size={13} /> 恢复
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 /* ──────── ProjectDetail ──────── */
 
 export function ProjectDetail({
@@ -391,35 +489,32 @@ export function ProjectDetail({
       <section className="flex flex-col gap-3">
         <h2 className="text-sm font-semibold text-ink-2">流程模板</h2>
         <div className="flex items-center justify-between">
-          <p className="text-xs text-dim">当前项目的流程定义，只读展示。启动改由「任务」tab 操作。</p>
+          <p className="text-xs text-dim">当前项目的流程定义。启动改由「任务」tab 操作。</p>
           <Button variant="default" size="sm" className="shrink-0" onClick={() => setView('designer')}>
             <MessageCircle size={14} /> 对话式新建
           </Button>
         </div>
-        {defs.length === 0 ? (
-          <Card className="flex flex-col items-center gap-2 py-8 text-center">
-            <WorkflowIcon size={24} className="text-faint" />
-            <p className="text-sm text-dim">还没有工作流 —— 点「对话式新建」，跟 agent 说你要什么流程。</p>
-          </Card>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {defs.map((d) => (
-              <Card key={d.id} className="p-3.5 transition-colors hover:border-line-2">
-                <div className="flex items-center gap-2.5">
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-line bg-panel-2 text-accent">
-                    <WorkflowIcon size={15} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <span className="block truncate font-display text-[14px] font-semibold text-ink">{d.name}</span>
-                    <span className="mono-nums block text-[11px] text-faint">
-                      {d.graph.nodes.length} 节点 · v{d.version} · {d.createdVia === 'chat' ? '对话生成' : '手工'}
-                    </span>
-                  </div>
-                </div>
-              </Card>
-            ))}
-          </div>
-        )}
+        {(() => {
+          const activeDefs = defs.filter((d) => d.archived !== 'yes');
+          const archivedDefs = defs.filter((d) => d.archived === 'yes');
+          return (
+            <div className="flex flex-col gap-2">
+              {activeDefs.length === 0 && archivedDefs.length === 0 ? (
+                <Card className="flex flex-col items-center gap-2 py-8 text-center">
+                  <WorkflowIcon size={24} className="text-faint" />
+                  <p className="text-sm text-dim">还没有工作流 —— 点「对话式新建」，跟 agent 说你要什么流程。</p>
+                </Card>
+              ) : (
+                <>
+                  {activeDefs.map((d) => (
+                    <WorkflowDefCard key={d.id} def={d} project={project} />
+                  ))}
+                  {archivedDefs.length > 0 && <ArchivedDefsSection defs={archivedDefs} project={project} />}
+                </>
+              )}
+            </div>
+          );
+        })()}
       </section>
     </div>
   );
