@@ -1,4 +1,4 @@
-import { ChevronRight, FileEdit, Terminal, Wrench } from 'lucide-react';
+import { ChevronRight, FileEdit, Paperclip, Terminal, Wrench } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { ApprovalRequest, EventRow, SessionEnvelope } from './api';
 import { Markdown } from './components/Markdown';
@@ -6,6 +6,21 @@ import { TextDiff } from './components/DiffView';
 import { Button } from './components/ui/button';
 import { Badge } from './components/ui/primitives';
 import { cn } from './lib/utils';
+
+const fmtHm = (ms: number) => {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+const fmtBytes = (n: number) => {
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n < 1024) return `${n} B`;
+  const u = ['KB', 'MB', 'GB', 'TB'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(1)} ${u[i]}`;
+};
 
 export interface ApprovalItem {
   request: ApprovalRequest;
@@ -19,6 +34,19 @@ interface ToolCall {
   done: boolean;
   output?: string;
   isError?: boolean;
+}
+
+function ThinkingBubble({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="self-start max-w-[85%] border-l-2 border-line/40 pl-2">
+      <button className="flex items-center gap-1 text-[11px] text-dim" onClick={() => setOpen(v => !v)}>
+        <ChevronRight size={11} className={cn('transition-transform', open && 'rotate-90')} />
+        思考 · {text.length} 字
+      </button>
+      {open && <div className="mt-1 opacity-60 italic"><Markdown text={text} /></div>}
+    </div>
+  );
 }
 
 function ToolCard({ tool }: { tool: ToolCall }) {
@@ -155,22 +183,25 @@ export function Timeline({
         const env = row.payload as SessionEnvelope;
         const ev = env.ev;
         if (ev.t === 'text') {
-          out.push({
-            key: String(row.seq),
-            el: (
-              <div
-                className={cn(
-                  'max-w-[85%] rounded-xl border px-3.5 py-2.5',
-                  env.role === 'user'
-                    ? 'self-end border-accent/30 bg-accent/10'
-                    : cn('self-start border-line bg-panel', ev.thinking && 'opacity-60 italic'),
-                )}
-              >
-                {ev.thinking && <div className="mb-1 text-[11px] text-dim">思考</div>}
-                {env.role === 'user' ? <div className="whitespace-pre-wrap">{ev.text}</div> : <Markdown text={ev.text} />}
-              </div>
-            ),
-          });
+          if (ev.thinking) {
+            out.push({ key: String(row.seq), el: <ThinkingBubble text={ev.text} /> });
+          } else {
+            out.push({
+              key: String(row.seq),
+              el: (
+                <div
+                  className={cn(
+                    'max-w-[85%] rounded-xl border px-3.5 py-2.5',
+                    env.role === 'user'
+                      ? 'self-end border-accent/30 bg-accent/10'
+                      : 'self-start border-line bg-panel',
+                  )}
+                >
+                  {env.role === 'user' ? <div className="whitespace-pre-wrap">{ev.text}</div> : <Markdown text={ev.text} />}
+                </div>
+              ),
+            });
+          }
         } else if (ev.t === 'tool-call-start') {
           const tool: ToolCall = { call: ev.call, name: ev.name, args: ev.args, done: false };
           tools.set(ev.call, tool);
@@ -188,7 +219,21 @@ export function Timeline({
             el: <div className="self-center text-xs text-warn">{ev.text}</div>,
           });
         } else if (ev.t === 'turn-start') {
-          out.push({ key: String(row.seq), el: <div className="my-1 self-stretch border-t border-dashed border-line/60" /> });
+          out.push({ key: String(row.seq), el: (
+            <div className="my-1 flex items-center gap-2 self-stretch text-[10px] text-faint">
+              <div className="h-px flex-1 border-t border-dashed border-line/60" />
+              {env.time ? <span className="mono-nums">{fmtHm(env.time)}</span> : null}
+              <div className="h-px flex-1 border-t border-dashed border-line/60" />
+            </div>
+          )});
+        } else if (ev.t === 'file') {
+          out.push({ key: String(row.seq), el: (
+            <div className="self-start inline-flex items-center gap-2 rounded-lg border border-line bg-panel/60 px-3 py-2 text-sm">
+              <Paperclip size={13} className="shrink-0 text-dim" />
+              <span className="font-medium">{ev.name}</span>
+              <span className="text-xs text-dim">{fmtBytes(ev.size)}</span>
+            </div>
+          )});
         }
       } else if (row.type === 'approval.requested') {
         const req = row.payload as ApprovalRequest;

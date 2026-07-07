@@ -1,4 +1,4 @@
-import { Code2, GitCompare, Send, Square, X } from 'lucide-react';
+import { ArrowDown, Code2, GitCompare, Send, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type ApprovalRequest, type MachineRow, type SessionRow, type SessionUsage } from './api';
@@ -60,6 +60,18 @@ export function SessionView({ session }: { session: SessionRow }) {
   const [machine, setMachine] = useState<MachineRow | null>(null);
   const [showDiff, setShowDiff] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const [showJump, setShowJump] = useState(false);
+  const NEAR_BOTTOM = 80;
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM;
+    atBottomRef.current = near;
+    if (near) setShowJump(false);
+  };
 
   useEffect(() => {
     api.machines().then((ms) => setMachine(ms.find((m) => m.id === session.machineId) ?? null)).catch(() => {});
@@ -98,7 +110,13 @@ export function SessionView({ session }: { session: SessionRow }) {
   }, [events]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = scrollRef.current;
+    if (!el) return;
+    if (atBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    } else {
+      setShowJump(true);
+    }
   }, [events.length]);
 
   const dead = state === 'dead';
@@ -158,9 +176,19 @@ export function SessionView({ session }: { session: SessionRow }) {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto">
-        <Timeline events={events} approvals={approvals} onDecide={(id, b) => api.decide(id, b).catch((e) => toast.error(String(e)))} />
-        <div ref={bottomRef} />
+      <div className="relative flex-1 min-h-0 overflow-hidden">
+        <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">
+          <Timeline events={events} approvals={approvals} onDecide={(id, b) => api.decide(id, b).catch((e) => toast.error(String(e)))} />
+          <div ref={bottomRef} />
+        </div>
+        {showJump && (
+          <button
+            onClick={() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); atBottomRef.current = true; setShowJump(false); }}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full border border-line bg-panel px-3 py-1.5 text-xs text-ink shadow-lg hover:bg-bg-2"
+          >
+            <ArrowDown size={12} /> 新消息
+          </button>
+        )}
       </div>
 
       <footer className="flex gap-2 border-t border-line bg-bg-2/40 px-4 py-3 backdrop-blur-sm">
