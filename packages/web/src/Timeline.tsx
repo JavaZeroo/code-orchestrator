@@ -25,6 +25,7 @@ const fmtBytes = (n: number) => {
 export interface ApprovalItem {
   request: ApprovalRequest;
   status: 'pending' | 'approved' | 'denied';
+  decidedBy?: string;
 }
 
 interface ToolCall {
@@ -36,7 +37,7 @@ interface ToolCall {
   isError?: boolean;
 }
 
-function ThinkingBubble({ text }: { text: string }) {
+export function ThinkingBubble({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="self-start max-w-[85%] border-l-2 border-line/40 pl-2">
@@ -49,7 +50,7 @@ function ThinkingBubble({ text }: { text: string }) {
   );
 }
 
-function ToolCard({ tool }: { tool: ToolCall }) {
+export function ToolCard({ tool }: { tool: ToolCall }) {
   const [open, setOpen] = useState(false);
   const isEdit = tool.name === 'Edit' || tool.name === 'MultiEdit';
   const isWrite = tool.name === 'Write';
@@ -109,7 +110,7 @@ function ToolCard({ tool }: { tool: ToolCall }) {
   );
 }
 
-function ApprovalCard({ item, onDecide }: { item: ApprovalItem; onDecide: (id: string, b: 'allow' | 'deny') => void }) {
+export function ApprovalCard({ item, onDecide }: { item: ApprovalItem; onDecide: (id: string, b: 'allow' | 'deny') => void }) {
   const { request, status } = item;
   const payload = request.payload as Record<string, unknown>;
   const input = (payload.input ?? payload) as Record<string, unknown>;
@@ -165,6 +166,94 @@ function ApprovalCard({ item, onDecide }: { item: ApprovalItem; onDecide: (id: s
   );
 }
 
+export interface RenderItem {
+  key: string;
+  el: React.ReactNode;
+  /** 来源事件 seq，用于与审批卡等非消息事件合并排序 */
+  seq: number;
+}
+
+/** 把 session.message 事件折叠成渲染项：文本气泡、合并工具卡、thinking、file/service/turn 分隔。
+ *  不处理 approval.requested —— 由调用方自行合并。 */
+export function foldSessionEvents(events: EventRow[]): RenderItem[] {
+  const tools = new Map<string, ToolCall>();
+  const out: RenderItem[] = [];
+  for (const row of events) {
+    if (row.type !== 'session.message') continue;
+    const env = row.payload as SessionEnvelope;
+    const ev = env.ev;
+    if (ev.t === 'text') {
+      if (ev.thinking) {
+        out.push({ key: String(row.seq), seq: row.seq, el: <ThinkingBubble text={ev.text} /> });
+      } else {
+        out.push({
+          key: String(row.seq),
+          seq: row.seq,
+          el: (
+            <div
+              className={cn(
+                'max-w-[85%] rounded-xl border px-3.5 py-2.5',
+                env.role === 'user'
+                  ? 'self-end border-accent/30 bg-accent/10'
+                  : 'self-start border-line bg-panel',
+              )}
+            >
+              {env.role === 'user' ? <div className="whitespace-pre-wrap">{ev.text}</div> : <Markdown text={ev.text} />}
+            </div>
+          ),
+        });
+      }
+    } else if (ev.t === 'tool-call-start') {
+      const tool: ToolCall = { call: ev.call, name: ev.name, args: ev.args, done: false };
+      tools.set(ev.call, tool);
+      out.push({ key: `tool-${ev.call}`, seq: row.seq, el: null as unknown as React.ReactNode });
+    } else if (ev.t === 'tool-call-end') {
+      const t = tools.get(ev.call);
+      if (t) {
+        t.done = true;
+        t.output = ev.output;
+        t.isError = ev.isError;
+      }
+    } else if (ev.t === 'service') {
+      out.push({
+        key: String(row.seq),
+        seq: row.seq,
+        el: <div className="self-center text-xs text-warn">{ev.text}</div>,
+      });
+    } else if (ev.t === 'turn-start') {
+      out.push({
+        key: String(row.seq),
+        seq: row.seq,
+        el: (
+          <div className="my-1 flex items-center gap-2 self-stretch text-[10px] text-faint">
+            <div className="h-px flex-1 border-t border-dashed border-line/60" />
+            {env.time ? <span className="mono-nums">{fmtHm(env.time)}</span> : null}
+            <div className="h-px flex-1 border-t border-dashed border-line/60" />
+          </div>
+        ),
+      });
+    } else if (ev.t === 'file') {
+      out.push({
+        key: String(row.seq),
+        seq: row.seq,
+        el: (
+          <div className="self-start inline-flex items-center gap-2 rounded-lg border border-line bg-panel/60 px-3 py-2 text-sm">
+            <Paperclip size={13} className="shrink-0 text-dim" />
+            <span className="font-medium">{ev.name}</span>
+            <span className="text-xs text-dim">{fmtBytes(ev.size)}</span>
+          </div>
+        ),
+      });
+    }
+  }
+  // 回填工具卡（合并了 start/end 状态）
+  return out.map((it) =>
+    it.el === null && it.key.startsWith('tool-')
+      ? { ...it, el: <ToolCard tool={tools.get(it.key.slice(5))!} /> }
+      : it,
+  );
+}
+
 /** 把事件流折叠成渲染项：文本气泡、合并的工具卡、审批卡、系统行、回合分隔 */
 export function Timeline({
   events,
@@ -176,77 +265,19 @@ export function Timeline({
   onDecide: (id: string, b: 'allow' | 'deny') => void;
 }) {
   const items = useMemo(() => {
-    const tools = new Map<string, ToolCall>();
-    const out: Array<{ key: string; el: React.ReactNode }> = [];
+    // ① session.message → 折叠的渲染项
+    const rendered = foldSessionEvents(events);
+    // ② 审批卡
+    const approvalsItems: RenderItem[] = [];
     for (const row of events) {
-      if (row.type === 'session.message') {
-        const env = row.payload as SessionEnvelope;
-        const ev = env.ev;
-        if (ev.t === 'text') {
-          if (ev.thinking) {
-            out.push({ key: String(row.seq), el: <ThinkingBubble text={ev.text} /> });
-          } else {
-            out.push({
-              key: String(row.seq),
-              el: (
-                <div
-                  className={cn(
-                    'max-w-[85%] rounded-xl border px-3.5 py-2.5',
-                    env.role === 'user'
-                      ? 'self-end border-accent/30 bg-accent/10'
-                      : 'self-start border-line bg-panel',
-                  )}
-                >
-                  {env.role === 'user' ? <div className="whitespace-pre-wrap">{ev.text}</div> : <Markdown text={ev.text} />}
-                </div>
-              ),
-            });
-          }
-        } else if (ev.t === 'tool-call-start') {
-          const tool: ToolCall = { call: ev.call, name: ev.name, args: ev.args, done: false };
-          tools.set(ev.call, tool);
-          out.push({ key: `tool-${ev.call}`, el: null });
-        } else if (ev.t === 'tool-call-end') {
-          const t = tools.get(ev.call);
-          if (t) {
-            t.done = true;
-            t.output = ev.output;
-            t.isError = ev.isError;
-          }
-        } else if (ev.t === 'service') {
-          out.push({
-            key: String(row.seq),
-            el: <div className="self-center text-xs text-warn">{ev.text}</div>,
-          });
-        } else if (ev.t === 'turn-start') {
-          out.push({ key: String(row.seq), el: (
-            <div className="my-1 flex items-center gap-2 self-stretch text-[10px] text-faint">
-              <div className="h-px flex-1 border-t border-dashed border-line/60" />
-              {env.time ? <span className="mono-nums">{fmtHm(env.time)}</span> : null}
-              <div className="h-px flex-1 border-t border-dashed border-line/60" />
-            </div>
-          )});
-        } else if (ev.t === 'file') {
-          out.push({ key: String(row.seq), el: (
-            <div className="self-start inline-flex items-center gap-2 rounded-lg border border-line bg-panel/60 px-3 py-2 text-sm">
-              <Paperclip size={13} className="shrink-0 text-dim" />
-              <span className="font-medium">{ev.name}</span>
-              <span className="text-xs text-dim">{fmtBytes(ev.size)}</span>
-            </div>
-          )});
-        }
-      } else if (row.type === 'approval.requested') {
+      if (row.type === 'approval.requested') {
         const req = row.payload as ApprovalRequest;
         const item = approvals.get(req.id) ?? { request: req, status: 'pending' as const };
-        out.push({ key: `ap-${req.id}`, el: <ApprovalCard item={item} onDecide={onDecide} /> });
+        approvalsItems.push({ key: `ap-${req.id}`, seq: row.seq, el: <ApprovalCard item={item} onDecide={onDecide} /> });
       }
     }
-    // 回填工具卡（合并了 start/end 状态）
-    return out.map((it) =>
-      it.el === null && it.key.startsWith('tool-')
-        ? { ...it, el: <ToolCard tool={tools.get(it.key.slice(5))!} /> }
-        : it,
-    );
+    // ③ 合并后按 seq 排序
+    return [...rendered, ...approvalsItems].sort((a, b) => a.seq - b.seq);
   }, [events, approvals, onDecide]);
 
   return <div className="flex flex-col gap-2.5 px-4 py-4">{items.map((it) => it.el && <div key={it.key} className="flex flex-col">{it.el}</div>)}</div>;

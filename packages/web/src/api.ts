@@ -75,6 +75,7 @@ export interface NodeStateRow {
   output: { summary?: string; error?: string; verdict?: string; minutes?: string } | null;
   /** 该节点执行时使用的模型（来自 sessions 表） */
   model?: string | null;
+  updatedAt: string;
 }
 
 export interface ApprovalRow {
@@ -88,6 +89,20 @@ export interface ApprovalRow {
 }
 
 export type ForgeKind = 'gitcode' | 'github';
+
+export interface ForgeRefRow {
+  id: string;
+  forge: ForgeKind;
+  kind: 'pr' | 'issue';
+  repo: string;
+  number: number;
+  runId: string | null;
+  nodeId: string | null;
+  sessionId: string | null;
+  ciStatus: string | null;
+  snapshot: Record<string, unknown> | null;
+  active: 'yes' | 'no';
+}
 
 export interface TriggerRow {
   id: string;
@@ -224,6 +239,9 @@ export const api = {
   runs: () => fetch('/api/runs').then((r) => j<{ runs: RunRow[] }>(r)).then((d) => d.runs),
   run: (runId: string) =>
     fetch(`/api/runs/${runId}`).then((r) => j<{ run: RunRow; def: WorkflowDefRow; nodes: NodeStateRow[] }>(r)),
+  runThread: (runId: string, since?: number) =>
+    fetch(`/api/runs/${runId}/thread${since ? `?since=${since}` : ''}`)
+      .then((r) => j<{ run: RunRow; def: WorkflowDefRow; nodes: NodeStateRow[]; events: EventRow[]; forgeRefs: ForgeRefRow[] }>(r)),
   pendingApprovals: () =>
     fetch('/api/approvals?status=pending').then((r) => j<{ approvals: ApprovalRow[] }>(r)).then((d) => d.approvals),
   send: (sessionId: string, text: string) => post(`/api/sessions/${sessionId}/send`, { text }).then((r) => j(r)),
