@@ -137,7 +137,10 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
         if (mode === 'graph') refreshGraph();
         else refreshThread();
       })
-      .catch((e) => toast.error(String(e)));
+      .catch((e) => {
+        if (String(e).includes('already')) toast.info('该审批已被处理，状态稍后同步');
+        else toast.error(String(e));
+      });
   }, [mode, refreshGraph, refreshThread]);
 
   // 共享的 send 处理

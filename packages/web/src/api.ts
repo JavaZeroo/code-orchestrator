@@ -233,8 +233,9 @@ export const api = {
   machines: () => fetch('/api/machines').then((r) => j<{ machines: MachineRow[] }>(r)).then((d) => d.machines),
   allMachines: () => fetch('/api/machines/all').then((r) => j<{ machines: AllMachineRow[] }>(r)).then((d) => d.machines),
   sessions: () => fetch('/api/sessions').then((r) => j<{ sessions: SessionRow[] }>(r)).then((d) => d.sessions),
-  events: (sessionId: string) =>
-    fetch(`/api/sessions/${sessionId}/events`).then((r) => j<{ events: EventRow[] }>(r)).then((d) => d.events),
+  events: (sessionId: string, since?: number) =>
+    fetch(`/api/sessions/${sessionId}/events${since ? `?since=${since}` : ''}`)
+      .then((r) => j<{ events: EventRow[] }>(r)).then((d) => d.events),
   spawn: (body: { projectId?: string | null; prompt?: string; model?: string; effort?: Effort;
                   machineId?: string; cwd?: string; container?: boolean;
                   designer?: boolean; taskIntake?: boolean }) =>
