@@ -117,6 +117,7 @@ export async function resolveAndSpawn(req: AutoSpawnRequest): Promise<{
     const r = await spawnContainerSession({
       projectId: project.id,
       prompt: req.prompt,
+      agent: req.agent,
       model: req.model,
       meta: req.effort ? { ...req.meta, effort: req.effort } : req.meta,
       createdBy: req.createdBy,
@@ -142,6 +143,7 @@ export async function resolveAndSpawn(req: AutoSpawnRequest): Promise<{
     const r = await spawnContainerSession({
       projectId: project.id,
       prompt: req.prompt,
+      agent: req.agent,
       model: req.model,
       meta: req.effort ? { ...req.meta, effort: req.effort } : req.meta,
       createdBy: req.createdBy,

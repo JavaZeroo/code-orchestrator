@@ -1,4 +1,4 @@
-import type { ApprovalRequest, SessionEnvelope, SessionState, WorkflowDef } from '@co/protocol';
+import type { ApprovalRequest, SessionAgent, SessionEnvelope, SessionState, WorkflowDef } from '@co/protocol';
 
 export interface EventRow {
   seq: number;
@@ -43,6 +43,7 @@ export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export interface MaterializationRow { machineId: string; basePath: string; status: 'materializing' | 'ready' | 'failed'; }
 
 export type { ApprovalRequest, SessionEnvelope, SessionState, WorkflowDef };
+export type { SessionAgent };
 
 export interface WorkflowDefRow {
   id: string;
@@ -209,7 +210,7 @@ export const api = {
   sessions: () => fetch('/api/sessions').then((r) => j<{ sessions: SessionRow[] }>(r)).then((d) => d.sessions),
   events: (sessionId: string) =>
     fetch(`/api/sessions/${sessionId}/events`).then((r) => j<{ events: EventRow[] }>(r)).then((d) => d.events),
-  spawn: (body: { projectId?: string | null; prompt?: string; model?: string; effort?: Effort;
+  spawn: (body: { projectId?: string | null; prompt?: string; agent?: SessionAgent; model?: string; effort?: Effort;
                   machineId?: string; cwd?: string; container?: boolean;
                   designer?: boolean; taskIntake?: boolean }) =>
     post('/api/sessions', body).then((r) =>
@@ -259,7 +260,7 @@ export const api = {
   projectMaterializations: (projectId: string) =>
     fetch(`/api/projects/${projectId}/materializations`).then((r) => j<{ materializations: MaterializationRow[] }>(r)).then((d) => d.materializations),
   /** 容器化会话（design-v2 #37）：项目须配 baseImage；无空闲机返回 {queued} */
-  createContainerSession: (body: { projectId: string; prompt?: string; model?: string; machineId?: string; effort?: Effort }) =>
+  createContainerSession: (body: { projectId: string; prompt?: string; agent?: SessionAgent; model?: string; machineId?: string; effort?: Effort }) =>
     post('/api/container-sessions', body).then((r) => j<{ sessionId?: string; queued?: boolean; taskId?: string }>(r)),
   work: (projectId?: string | null) =>
     fetch(`/api/work?limit=400${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ''}`)

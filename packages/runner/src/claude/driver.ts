@@ -62,7 +62,7 @@ const DESIGNER_SYSTEM_PROMPT = `你是工作流设计助手。用户会用自然
 
 规则：
 - 每当你给出或修改方案，必须调用 emit_workflow 工具输出完整工作流 JSON（用户界面会实时渲染成图）；纯文字描述不算数
-- 当前引擎只支持两种节点：type="agent"（字段：id, title, role, model, prompt, cwd?, machine?{labels[]}, outputs?）和 type="gate"（字段：id, title, approvers[]）
+- 当前引擎只支持两种节点：type="agent"（字段：id, title, role, cli?, model, prompt, cwd?, machine?{labels[]}, outputs?；cli 可用 "claude" 或 "codex"，缺省 "claude"）和 type="gate"（字段：id, title, approvers[]）
 - prompt 里可用 {{vars.xxx}} 引用启动变量、{{outputs.节点id}} 引用上游 agent 节点的产出摘要
 - edges 是 [from, to] 数组；图必须无环；节点 id 用短英文
 - 工作目录通常留给运行时变量（写 {{vars.cwd}} 或不填 cwd 让引擎用 vars.cwd）

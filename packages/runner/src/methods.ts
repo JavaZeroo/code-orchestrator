@@ -1,6 +1,7 @@
 import { exec } from 'node:child_process';
 import { runnerMethods, type RunnerMethodName, type RunnerParams } from '@co/protocol';
 import { ClaudeSession, type DriverEmit } from './claude/driver';
+import { CodexSession } from './codex/driver';
 import type { ServerConnection } from './connection';
 import { addSession, getSession, listSessionStates, removeSession, type RunnerSession } from './sessions';
 import { provisionWorkspace } from './workspace';
@@ -38,6 +39,17 @@ export interface RunnerContext {
 export { listSessionStates };
 
 export function createRunnerMethodHandler(ctx: RunnerContext) {
+  function createHostSession(p: RunnerParams<'session.spawn'>, emit: DriverEmit): RunnerSession {
+    switch (p.agent) {
+      case 'claude':
+        return new ClaudeSession(p, emit);
+      case 'codex':
+        return new CodexSession(p, emit);
+      default:
+        throw new Error(`agent "${p.agent}" not supported yet`);
+    }
+  }
+
   function makeEmit(sessionId: string): DriverEmit {
     const call = <T>(fn: (conn: ServerConnection) => Promise<T>) => {
       const conn = ctx.conn;
@@ -99,8 +111,11 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
       }
       case 'session.spawn': {
         const p = runnerMethods['session.spawn'].params.parse(params);
-        if (p.agent !== 'claude') {
-          return { ok: false, error: `agent "${p.agent}" not supported yet (M2)` };
+        if (p.agent === 'opencode') {
+          return { ok: false, error: 'agent "opencode" not supported yet' };
+        }
+        if (p.agent !== 'claude' && (p.designer || p.taskIntake)) {
+          return { ok: false, error: `agent "${p.agent}" does not support designer/taskIntake MCP tools yet` };
         }
         if (getSession(p.sessionId)) {
           return { ok: false, error: `session already exists: ${p.sessionId}` };
@@ -114,11 +129,11 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
                 containerId: p.container.containerId,
                 nodePath: p.container.nodePath,
                 agentMjs: p.container.agentMjs,
-                agentParams: { sessionId: p.sessionId, agent: 'claude', cwd: p.cwd, prompt: p.prompt, meta: p.meta, env: p.env },
+                agentParams: { sessionId: p.sessionId, agent: p.agent, cwd: p.cwd, prompt: p.prompt, meta: p.meta, env: p.env },
               },
               emit,
             )
-          : new ClaudeSession(p, emit);
+          : createHostSession(p, emit);
         addSession(session);
         session.start();
         return { ok: true };

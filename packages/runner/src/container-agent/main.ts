@@ -1,13 +1,15 @@
 /**
  * 容器内 agent 入口（design-v2 #37）：在训练容器里跑 SDK 循环，其 bash/msrun/npu-smi/读日志都在训练环境内。
- * 复用 runner 的 ClaudeSession，只把「WS uplink」换成「stdio 传输」——
+ * 复用 runner 的会话驱动，只把「WS uplink」换成「stdio 传输」——
  *   stdin  ← host-runner 下发的命令（send/interrupt/decide/kill），每行一个 JSON
  *   stdout → 事件/状态/审批上报（每行一个 JSON），host-runner 桥回现有 uplink
  * 打包成自包含 agent.mjs（esbuild，SDK external），挂进容器用挂载的 node 执行。
  */
 
 import { ClaudeSession, type DriverEmit } from '../claude/driver';
-import type { RunnerParams } from '@co/protocol';
+import { CodexSession } from '../codex/driver';
+import type { ApprovalDecision, RunnerParams } from '@co/protocol';
+import type { RunnerSession } from '../sessions';
 
 function out(msg: unknown): void {
   process.stdout.write(`${JSON.stringify(msg)}\n`);
@@ -37,7 +39,18 @@ const emit: DriverEmit = {
   taskPlan: async () => ({ ok: false, error: 'taskIntake 不在容器内运行' }),
 };
 
-const session = new ClaudeSession(params, emit);
+function createSession(p: RunnerParams<'session.spawn'>): RunnerSession {
+  switch (p.agent) {
+    case 'claude':
+      return new ClaudeSession(p, emit);
+    case 'codex':
+      return new CodexSession(p, emit);
+    default:
+      fail(`agent "${p.agent}" not supported in container agent`);
+  }
+}
+
+const session = createSession(params);
 session.start();
 out({ t: 'ready', sessionId: params.sessionId });
 
@@ -66,7 +79,7 @@ interface Command {
   text?: string;
   meta?: RunnerParams<'session.spawn'>['meta'];
   approvalId?: string;
-  decision?: Parameters<typeof session.decideApproval>[1];
+  decision?: ApprovalDecision;
 }
 
 function handle(cmd: Command): void {

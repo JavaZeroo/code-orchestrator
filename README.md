@@ -115,9 +115,11 @@ constrained hosts (old Docker, no compose). See [`deploy/README.md`](deploy/READ
 
 ## Model access
 
-`claude` runs via the Anthropic Agent SDK directly. Aliases `deepseek` / `glm` inject
-their Anthropic-compatible endpoints (`ANTHROPIC_BASE_URL` + key) — configure keys in
-the server environment. Any CLI × any model.
+`claude` runs via the Anthropic Agent SDK directly. `codex` runs via `codex
+app-server --stdio`, so runners that use it need the Codex CLI on `PATH` plus
+Codex auth (`~/.codex` or `CODEX_API_KEY`). Aliases `deepseek` / `glm` inject
+their Anthropic-compatible endpoints (`ANTHROPIC_BASE_URL` + key) for Claude
+Code; OpenAI model names are passed through to Codex. Any CLI × any model.
 
 ## Status
 

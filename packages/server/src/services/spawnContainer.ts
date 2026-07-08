@@ -13,7 +13,7 @@ import { eq } from 'drizzle-orm';
 import { getAgentBackend } from '../agents/backends';
 import { getDb, hasDb, schema } from '../db/index';
 import { publish } from '../events';
-import type { MessageMeta } from '@co/protocol';
+import type { MessageMeta, SessionAgent } from '@co/protocol';
 import { anyForgeToken, userForgeToken } from '../forge/tokens';
 import type { ForgeKind } from '../forge/types';
 import { callRunner, listMachines } from '../ws/runnerHub';
@@ -33,6 +33,7 @@ export interface ContainerSpawnRequest {
   /** 唯一稳定键（issue number / runId / 自生成） */
   key?: string;
   prompt?: string;
+  agent?: SessionAgent;
   model?: string;
   role?: string;
   createdBy?: string;
@@ -52,6 +53,7 @@ export interface ContainerAgentContext {
   containerId: string;
   workdir: string;
   env: Record<string, string>;
+  agent: SessionAgent;
   prompt?: string;
   model?: string;
   meta?: MessageMeta;
@@ -62,7 +64,7 @@ export type StartAgentInContainer = (ctx: ContainerAgentContext) => Promise<void
 const defaultStartAgent: StartAgentInContainer = async (ctx) => {
   const res = await callRunner(ctx.machineId, 'session.spawn', {
     sessionId: ctx.sessionId,
-    agent: 'claude',
+    agent: ctx.agent,
     cwd: ctx.workdir,
     prompt: ctx.prompt,
     meta: { ...(ctx.meta ?? {}), ...(ctx.model ? { model: ctx.model } : {}) },
@@ -126,6 +128,7 @@ export async function spawnContainerSession(
   const sessionId = createId();
   const key = req.key ?? sessionId;
   const accelKind = project.accel?.kind ?? null;
+  const agent = req.agent ?? 'claude';
 
   // 1) 放置 + 预留（加速器路径原子占机）；无机则入队（已在队列中的重试不重复入队）
   const placed = await schedule({ accelKind, projectId: req.projectId, sessionId, id: req.machineId });
@@ -175,9 +178,10 @@ export async function spawnContainerSession(
     if (dataRoot) {
       mounts.push({ host: dataRoot, container: dataRoot, ro: false });
       // memory 持久化（design-v2 Q5）：后端记忆目录挂到数据盘持久卷——跨容器持久（跨机 git 同步留 v2）
-      const backend = getAgentBackend('claude');
+      const backend = getAgentBackend(agent);
       if (backend) {
-        mounts.push({ host: `${dataRoot}/co/memory/${req.projectId}`, container: backend.memoryContainerPath });
+        const hostMemoryPath = agent === 'claude' ? `${dataRoot}/co/memory/${req.projectId}` : `${dataRoot}/co/memory/${req.projectId}/${agent}`;
+        mounts.push({ host: hostMemoryPath, container: backend.memoryContainerPath });
       }
     }
     const runRes = await callRunner(machineId, 'container.run', {
@@ -202,7 +206,7 @@ export async function spawnContainerSession(
       await getDb().insert(schema.sessions).values({
         id: sessionId,
         machineId,
-        agent: 'claude',
+        agent,
         model: resolved.model ?? req.model,
         role: req.role,
         cwd: WORKSPACE,
@@ -220,7 +224,17 @@ export async function spawnContainerSession(
     await activateComponents(machineId, containerId, project.components ?? {}, dataRoot);
 
     // 6) 起 agent 于容器内（#37）：默认经 session.spawn 的 container 分支（docker exec 挂载的 node+agent.mjs）
-    await (startAgent ?? defaultStartAgent)({ sessionId, machineId, containerId, workdir: WORKSPACE, env: containerEnv, prompt: req.prompt, model: resolved.model ?? req.model, meta: req.meta });
+    await (startAgent ?? defaultStartAgent)({
+      sessionId,
+      machineId,
+      containerId,
+      workdir: WORKSPACE,
+      env: containerEnv,
+      agent,
+      prompt: req.prompt,
+      model: resolved.model ?? req.model,
+      meta: req.meta,
+    });
 
     await publish({ type: 'session.created', sessionId, runId: req.runId, payload: { machineId, cwd: WORKSPACE, projectId: req.projectId, containerId } });
     return { sessionId, machineId, cwd: WORKSPACE };

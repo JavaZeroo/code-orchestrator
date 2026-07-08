@@ -1,13 +1,15 @@
 import { ChevronDown, SendHorizonal } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, type Effort } from './api';
+import { api, type Effort, type SessionAgent } from './api';
 import { Input, Textarea } from './components/ui/primitives';
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { SelectContent, SelectGroup, SelectItem, SelectLabel } from './components/ui/select';
 import { useLlmProviders, useMachines, useProjects } from './lib/queries';
 import { useProjectScope } from './lib/project';
 import { cn } from './lib/utils';
+
+const DEFAULT_MODEL_VALUE = '__default__';
 
 // ─── ChipSelect ───────────────────────────────────────────────────────────────
 /** 小圆角 chip 样式的下拉选择器，基于现有 Radix Select Primitive */
@@ -100,7 +102,8 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
   const project = projects.find((p) => p.id === projectId);
 
   const [prompt, setPrompt] = useState('');
-  const [model, setModel] = useState('claude');
+  const [agent, setAgent] = useState<SessionAgent>('claude');
+  const [model, setModel] = useState(DEFAULT_MODEL_VALUE);
   const [effort, setEffort] = useState('default');
   const [container, setContainer] = useState(true);
   const [advancedMachine, setAdvancedMachine] = useState('');
@@ -123,9 +126,14 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
     return () => document.removeEventListener('mousedown', handler);
   }, [showAdvanced]);
 
-  // 模型选项：先"claude（默认）"快捷项，再按 provider 分组
+  const agentOptions = [
+    { value: 'claude', label: 'Claude Code' },
+    { value: 'codex', label: 'Codex' },
+  ];
+
+  // 模型选项：先“默认模型”快捷项，再按 provider 分组
   const modelGroups = [
-    { label: '默认', items: [{ value: 'claude', label: 'claude（默认）' }] },
+    { label: '默认', items: [{ value: DEFAULT_MODEL_VALUE, label: '默认模型' }] },
     ...providers
       .filter((p) => p.models.length > 0)
       .map((p) => ({
@@ -160,7 +168,8 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
     const body: Parameters<typeof api.spawn>[0] = {
       projectId,
       prompt: text || undefined,
-      model,
+      agent,
+      ...(model !== DEFAULT_MODEL_VALUE ? { model } : {}),
       effort: eff,
       ...(project?.baseImage && !container ? { container: false as const } : {}),
       ...(advancedMachine ? { machineId: advancedMachine } : {}),
@@ -234,6 +243,8 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
 
             {/* Chips 行 */}
             <div className="mt-3 flex flex-wrap items-center gap-2">
+              {/* CLI ▾ */}
+              <ChipSelect value={agent} onValueChange={(v) => setAgent(v as SessionAgent)} options={agentOptions} />
               {/* 模型 ▾ */}
               <ChipSelect value={model} onValueChange={setModel} groups={modelGroups} />
               {/* effort ▾ */}

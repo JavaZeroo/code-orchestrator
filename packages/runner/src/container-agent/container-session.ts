@@ -7,7 +7,7 @@
 
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { createEnvelope } from '@co/protocol';
-import type { ApprovalDecision, ApprovalRequest, MessageMeta, SessionEnvelope, SessionState } from '@co/protocol';
+import type { ApprovalDecision, ApprovalRequest, MessageMeta, SessionAgent, SessionEnvelope, SessionState } from '@co/protocol';
 import type { DriverEmit, SessionUsage } from '../claude/driver';
 import type { RunnerSession } from '../sessions';
 
@@ -21,7 +21,7 @@ export interface ContainerSpawnParams {
   /** 传给 agent.mjs 的会话参数（cwd=/workspace、prompt、meta 等） */
   agentParams: {
     sessionId: string;
-    agent: 'claude';
+    agent: SessionAgent;
     cwd: string;
     prompt?: string;
     meta?: MessageMeta;
