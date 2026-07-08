@@ -406,6 +406,10 @@ export const forgeRefs = pgTable('forge_refs', {
  *  最初愿景的入口：需求（issue）进来 → 分析 → 拆解 → 设计 → 实现 → PR → 门禁回流。 */
 export const requirementTriggers = pgTable('requirement_triggers', {
   id: text('id').primaryKey(),
+  /** 触发方式：issue 轮询（默认）或 cron 定时（schedule 字段生效，如每日冒烟） */
+  kind: text('kind', { enum: ['issue', 'schedule'] }).notNull().default('issue'),
+  /** cron 表达式（kind=schedule 时必填），5 段标准格式，按 server 本地时区 */
+  schedule: text('schedule'),
   /** 归属项目（可空兼容存量）：起 run 时继承项目的 vars/模型/自治等策略 */
   projectId: text('project_id').references(() => projects.id),
   forge: text('forge', { enum: ['gitcode', 'github'] }).notNull(),

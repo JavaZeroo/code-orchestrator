@@ -7,6 +7,7 @@
  * forge 无关：issue 列表由各 adapter 归一化（NormalizedIssue）。
  */
 
+import { Cron } from 'croner';
 import { createId } from '@paralleldrive/cuid2';
 import { eq } from 'drizzle-orm';
 import { getDb, schema } from '../db/index';
@@ -63,7 +64,67 @@ function issueVars(
   };
 }
 
+/** kind=schedule：cron 到点起 run。首轮只立水位不触发；错过多个周期只补一发。 */
+async function pollScheduleTrigger(trigger: TriggerRow): Promise<void> {
+  const db = getDb();
+  const now = new Date();
+  const stamp = () =>
+    db.update(schema.requirementTriggers).set({ lastPolledAt: now }).where(eq(schema.requirementTriggers.id, trigger.id));
+  if (!trigger.schedule) {
+    return;
+  }
+  if (!trigger.lastPolledAt) {
+    await stamp(); // 基线：启用后从现在起算，不补历史
+    return;
+  }
+  let due: Date | null;
+  try {
+    due = new Cron(trigger.schedule).nextRun(trigger.lastPolledAt);
+  } catch (err) {
+    console.error(`[intake] bad cron "${trigger.schedule}" (trigger ${trigger.id}):`, err instanceof Error ? err.message : err);
+    return;
+  }
+  if (!due || due > now) {
+    await stamp();
+    return;
+  }
+  const forgeKind = isForgeKind(trigger.forge) ? trigger.forge : 'gitcode';
+  const project = trigger.projectId
+    ? (await getDb().select().from(schema.projects).where(eq(schema.projects.id, trigger.projectId)).limit(1))[0]
+    : undefined;
+  const vars: Record<string, string> = {
+    ...(project?.vars ?? {}),
+    ...trigger.vars,
+    forge: trigger.forge,
+    repo: trigger.repo,
+    fired_at: due.toISOString(),
+  };
+  try {
+    const ws = await provisionWorkspace(forgeKind, trigger.repo, `sched-${Date.now()}`, vars.base ?? 'main');
+    if (ws) {
+      vars.cwd = ws.cwd;
+      vars.branch = ws.branch;
+    }
+    const runId = await startRun(trigger.defId, vars, trigger.projectId ?? undefined);
+    await publish({
+      type: 'requirement.triggered',
+      runId,
+      payload: { triggerId: trigger.id, projectId: trigger.projectId ?? undefined, project: project?.name, forge: forgeKind, repo: trigger.repo, schedule: trigger.schedule, firedAt: due.toISOString(), via: 'schedule' },
+    });
+    console.log(`[intake] schedule ${trigger.schedule} @ ${trigger.repo} → run ${runId}`);
+  } catch (err) {
+    const msg = err instanceof EngineError ? err.message : err instanceof Error ? err.message : String(err);
+    await publish({ type: 'requirement.failed', payload: { triggerId: trigger.id, forge: forgeKind, repo: trigger.repo, schedule: trigger.schedule, error: msg } });
+    console.error(`[intake] schedule startRun failed (${trigger.id}):`, msg);
+  } finally {
+    await stamp();
+  }
+}
+
 async function pollTrigger(trigger: TriggerRow): Promise<void> {
+  if (trigger.kind === 'schedule') {
+    return pollScheduleTrigger(trigger);
+  }
   const db = getDb();
   const forgeKind = isForgeKind(trigger.forge) ? trigger.forge : 'gitcode';
   const forge = getForge(forgeKind);

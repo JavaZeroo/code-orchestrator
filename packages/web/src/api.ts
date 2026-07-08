@@ -144,6 +144,8 @@ export interface CreateTriggerBody {
   titlePattern?: string;
   vars?: Record<string, string>;
   backfill?: 'yes' | 'no';
+  kind?: 'issue' | 'schedule';
+  schedule?: string;
 }
 
 export interface RequirementRow {
@@ -283,6 +285,9 @@ export const api = {
     fetch(`/api/llm/providers/${encodeURIComponent(name)}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
   projects: () => fetch('/api/projects').then((r) => j<{ projects: ProjectRow[] }>(r)).then((d) => d.projects),
   createProject: (body: Partial<ProjectRow>) => post('/api/projects', body).then((r) => j<{ id: string }>(r)),
+  resources: () =>
+    fetch('/api/resources').then((r) =>
+      j<{ machines: { id: string; labels: string[]; accels: { kind: string; total: number }[]; used: number }[]; queued: number }>(r)),
   dispatchPipeline: (projectId: string, body: { text: string; defId?: string }) =>
     post(`/api/projects/${projectId}/dispatch`, body).then((r) =>
       j<{ runId: string; issueNumber: string; issueUrl?: string }>(r)),

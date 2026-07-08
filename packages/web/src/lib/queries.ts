@@ -46,4 +46,7 @@ export const useProjectMaterializations = (projectId?: string | null) =>
     enabled: !!projectId,
   });
 
+export const useResources = () =>
+  useQuery({ queryKey: ['resources'], queryFn: api.resources, refetchInterval: 15_000 });
+
 export const invalidate = (key: string) => void queryClient.invalidateQueries({ queryKey: [key] });

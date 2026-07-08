@@ -63,6 +63,40 @@ app.get('/health', async () => ({
 
 app.get('/api/machines', async () => ({ machines: listMachines() }));
 
+// 资源面板：在线机加速器占用（总数 vs 活跃预留）+ 排队任务数——「哪台机有空闲 NPU」一眼可见
+app.get('/api/resources', async (req, reply) => {
+  if (!hasDb()) return reply.code(503).send({ error: 'database not available' });
+  const { getDb, schema } = await import('./db/index');
+  const { inArray, eq: eqOp } = await import('drizzle-orm');
+  const online = listMachines();
+  const db = getDb();
+  const reservations = online.length
+    ? await db
+        .select({ machineId: schema.resourceReservations.machineId })
+        .from(schema.resourceReservations)
+        .where(inArray(schema.resourceReservations.status, ['reserved', 'active']))
+    : [];
+  const usedBy = new Map<string, number>();
+  for (const r of reservations) usedBy.set(r.machineId, (usedBy.get(r.machineId) ?? 0) + 1);
+  const queued = await db
+    .select({ id: schema.taskQueue.id })
+    .from(schema.taskQueue)
+    .where(eqOp(schema.taskQueue.status, 'pending'));
+  return {
+    machines: online.map((m) => {
+      const byKind = new Map<string, number>();
+      for (const r of m.resources ?? []) byKind.set(r.kind, (byKind.get(r.kind) ?? 0) + 1);
+      return {
+        id: m.id,
+        labels: m.labels,
+        accels: [...byKind.entries()].map(([kind, total]) => ({ kind, total })),
+        used: usedBy.get(m.id) ?? 0,
+      };
+    }),
+    queued: queued.length,
+  };
+});
+
 // 全量机器列表（含离线机）—— 供设置页机器管理。与 /api/machines 并存，语义不同。
 app.get('/api/machines/all', async (req, reply) => {
   if (!hasDb()) return reply.code(503).send({ error: 'database not available' });

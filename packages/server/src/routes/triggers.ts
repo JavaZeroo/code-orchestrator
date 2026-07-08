@@ -5,6 +5,7 @@
  * - 手动轮询：调试用，立即跑一轮
  */
 
+import { Cron } from 'croner';
 import type { FastifyInstance } from 'fastify';
 import { createId } from '@paralleldrive/cuid2';
 import { count, desc, eq, max, sql } from 'drizzle-orm';
@@ -21,6 +22,9 @@ const createSchema = z.object({
   titlePattern: z.string().optional(),
   vars: z.record(z.string(), z.string()).default({}),
   backfill: z.enum(['yes', 'no']).default('no'),
+  kind: z.enum(['issue', 'schedule']).default('issue'),
+  /** kind=schedule 必填：5 段 cron，server 本地时区 */
+  schedule: z.string().nullable().optional(),
 });
 
 const patchSchema = z.object({
@@ -31,11 +35,26 @@ const patchSchema = z.object({
   vars: z.record(z.string(), z.string()).optional(),
   enabled: z.enum(['yes', 'no']).optional(),
   backfill: z.enum(['yes', 'no']).optional(),
+  kind: z.enum(['issue', 'schedule']).optional(),
+  /** kind=schedule 必填：5 段 cron，server 本地时区 */
+  schedule: z.string().nullable().optional(),
 });
 
 export async function registerTriggerRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/triggers', async (req, reply) => {
     const body = createSchema.parse(req.body);
+    if (body.kind === 'schedule') {
+      if (!body.schedule) {
+        void reply.code(400);
+        return { error: 'kind=schedule 需要 cron 表达式 schedule' };
+      }
+      try {
+        new Cron(body.schedule);
+      } catch {
+        void reply.code(400);
+        return { error: `非法 cron 表达式: ${body.schedule}` };
+      }
+    }
     const db = getDb();
     const def = await db.select({ id: schema.workflowDefs.id }).from(schema.workflowDefs).where(eq(schema.workflowDefs.id, body.defId)).limit(1);
     if (!def[0]) {
@@ -53,6 +72,8 @@ export async function registerTriggerRoutes(app: FastifyInstance): Promise<void>
       titlePattern: body.titlePattern,
       vars: body.vars,
       backfill: body.backfill,
+      kind: body.kind ?? 'issue',
+      schedule: body.schedule ?? null,
       createdBy: req.user?.id,
     });
     void reply.code(201);

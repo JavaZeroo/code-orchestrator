@@ -87,6 +87,8 @@ function CreateTriggerForm({ me, projectId }: { me: Me; projectId: string }) {
   const [titlePattern, setTitlePattern] = useState('');
   const [varsText, setVarsText] = useState('');
   const [backfill, setBackfill] = useState(false);
+  const [kind, setKind] = useState<'issue' | 'schedule'>('issue');
+  const [schedule, setSchedule] = useState('');
   const [busy, setBusy] = useState(false);
 
   const bound = me.forges[forge]?.bound;
@@ -101,6 +103,8 @@ function CreateTriggerForm({ me, projectId }: { me: Me; projectId: string }) {
       titlePattern: titlePattern.trim() || undefined,
       vars: parseVars(varsText),
       backfill: backfill ? 'yes' : 'no',
+      kind,
+      ...(kind === 'schedule' ? { schedule: schedule.trim() } : {}),
     };
     setBusy(true);
     api
@@ -125,6 +129,22 @@ function CreateTriggerForm({ me, projectId }: { me: Me; projectId: string }) {
         <h3 className="text-sm font-semibold">新建触发器</h3>
       </div>
       <div className="grid grid-cols-2 gap-3">
+        <Label>
+          触发方式
+          <Select value={kind} onValueChange={(v) => setKind(v as 'issue' | 'schedule')}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="issue">issue 轮询（label/标题过滤）</SelectItem>
+              <SelectItem value="schedule">定时（cron，如每日冒烟）</SelectItem>
+            </SelectContent>
+          </Select>
+        </Label>
+        {kind === 'schedule' && (
+          <Label>
+            cron 表达式
+            <Input value={schedule} onChange={(e) => setSchedule(e.target.value)} placeholder="0 9 * * *（每天 09:00）" />
+          </Label>
+        )}
         <Label>
           代码托管
           <Select value={forge} onValueChange={(v) => setForge(v as ForgeKind)}>

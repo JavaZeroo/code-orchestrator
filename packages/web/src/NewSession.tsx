@@ -5,7 +5,7 @@ import { api, type Effort } from './api';
 import { Input, Textarea } from './components/ui/primitives';
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { SelectContent, SelectGroup, SelectItem, SelectLabel } from './components/ui/select';
-import { useLlmProviders, useMachines, useProjects, useWorkflows } from './lib/queries';
+import { useLlmProviders, useMachines, useProjects, useResources, useWorkflows } from './lib/queries';
 import { useProjectScope } from './lib/project';
 import { cn } from './lib/utils';
 
@@ -97,6 +97,7 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
   const { data: projects = [] } = useProjects();
   const { data: providers = [] } = useLlmProviders();
   const { data: allDefs = [] } = useWorkflows();
+  const { data: resources } = useResources();
   const { projectId } = useProjectScope();
 
   const project = projects.find((p) => p.id === projectId);
@@ -352,6 +353,24 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
                 )}
               </div>
             </div>
+
+            {/* 资源一览：谁有空闲加速器、排队多少——免 ssh 找机器 */}
+            {resources && (resources.machines.some((m) => m.accels.length > 0) || resources.queued > 0) && (
+              <div className="mono-nums mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-faint">
+                {resources.machines.filter((m) => m.accels.length > 0).map((m) => {
+                  const total = m.accels.reduce((n, a) => n + a.total, 0);
+                  const free = Math.max(0, total - m.used);
+                  const kinds = m.accels.map((a) => a.kind).join('/');
+                  return (
+                    <span key={m.id} className="inline-flex items-center gap-1.5">
+                      <span className={free > 0 ? 'size-1.5 rounded-full bg-ok' : 'size-1.5 rounded-full bg-warn'} />
+                      {m.id} · {kinds} 空闲 {free}/{total}
+                    </span>
+                  );
+                })}
+                {resources.queued > 0 && <span className="text-warn">排队 {resources.queued}</span>}
+              </div>
+            )}
           </>
         )}
       </div>
