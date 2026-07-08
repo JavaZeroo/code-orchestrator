@@ -519,7 +519,7 @@ export function ProjectSettings({
                   defaultValue={project.name}
                   onBlur={(e) => {
                     const v = e.target.value.trim();
-                    if (v && v !== project.name) saveBasicField({ name: v } as Partial<ProjectRow>);
+                    if (v && v !== project.name) saveBasicField({ name: v });
                   }}
                 />
               </Label>
@@ -529,7 +529,7 @@ export function ProjectSettings({
                   defaultValue={project.repo}
                   onBlur={(e) => {
                     const v = e.target.value.trim();
-                    if (v && v !== project.repo) saveBasicField({ repo: v } as Partial<ProjectRow>);
+                    if (v && v !== project.repo) saveBasicField({ repo: v });
                   }}
                 />
               </Label>
@@ -543,7 +543,7 @@ export function ProjectSettings({
                 onBlur={(e) => {
                   const v = e.target.value.trim() || null;
                   if ((v ?? null) !== (project.baseImage ?? null)) {
-                    saveBasicField({ baseImage: v } as Partial<ProjectRow>);
+                    saveBasicField({ baseImage: v });
                   }
                 }}
               />
