@@ -58,6 +58,8 @@ export interface WorkflowDefRow {
 export interface RunRow {
   id: string;
   defId: string;
+  /** server 已返回（leftJoin workflow_defs），前端补上类型 */
+  defName?: string | null;
   projectId: string | null;
   status: string;
   context: { vars: Record<string, string>; outputs: Record<string, string> };
