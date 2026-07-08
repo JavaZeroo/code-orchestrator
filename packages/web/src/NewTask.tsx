@@ -72,7 +72,7 @@ function TaskPlanPane({
     return (
       <div className="flex w-[46%] flex-col overflow-hidden">
         <header className="flex items-center justify-between border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
-          <b className="font-display text-[14px] font-semibold text-ink">工作流草图</b>
+          <b className="font-display text-[14px] font-semibold text-ink">编排草图</b>
           <Button variant="default" size="sm" disabled={saving} onClick={() => { setSaving(true); onSaveAndStart(workflowDraft); }}>
             <Save size={13} /> {saving ? '保存并启动…' : '保存为模板并启动'}
           </Button>
@@ -93,7 +93,7 @@ function TaskPlanPane({
     return (
       <div className="flex w-[46%] flex-col overflow-hidden">
         <header className="flex items-center justify-between border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
-          <b className="font-display text-[14px] font-semibold text-ink">任务计划</b>
+          <b className="font-display text-[14px] font-semibold text-ink">执行计划</b>
           <Button variant="default" size="sm" disabled={starting} onClick={() => { setStarting(true); onStart(editVars); }}>
             <Play size={13} /> {starting ? '启动中…' : '启动'}
           </Button>
@@ -132,10 +132,10 @@ function TaskPlanPane({
   return (
     <div className="flex w-[46%] flex-col overflow-hidden">
       <header className="flex items-center justify-between border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
-        <b className="font-display text-[14px] font-semibold text-ink">任务计划</b>
+        <b className="font-display text-[14px] font-semibold text-ink">执行计划</b>
       </header>
       <div className="p-6 text-sm text-dim">
-        在左侧描述你要做的任务，agent 会从当前项目的模板中选一个合适的并给出计划。
+        …描述你要做的，agent 会从当前项目的模板中选一个合适的并给出计划。
       </div>
       <div className="mt-auto border-t border-line px-4 py-2.5">
         <button
@@ -275,7 +275,7 @@ export function TaskIntake({
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft size={14} /> 返回
         </Button>
-        <b className="font-display text-[14px] font-semibold text-ink">对话式新建任务</b>
+        <b className="font-display text-[14px] font-semibold text-ink">对话式规划</b>
         <span className="hidden text-xs text-faint sm:inline">描述需求 → agent 推荐模板 → 确认启动</span>
       </header>
       {error ? (

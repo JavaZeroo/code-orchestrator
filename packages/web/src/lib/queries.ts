@@ -13,6 +13,9 @@ export const useSessions = () =>
 export const useMachines = () =>
   useQuery({ queryKey: ['machines'], queryFn: api.machines, refetchInterval: 15_000 });
 
+export const useAllMachines = () =>
+  useQuery({ queryKey: ['machines-all'], queryFn: api.allMachines, refetchInterval: 15_000 });
+
 export const useWorkflows = () =>
   useQuery({ queryKey: ['workflows'], queryFn: api.workflows, refetchInterval: 10_000 });
 

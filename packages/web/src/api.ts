@@ -42,6 +42,16 @@ export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface MaterializationRow { machineId: string; basePath: string; status: 'materializing' | 'ready' | 'failed'; }
 
+export interface AllMachineRow {
+  id: string;
+  name: string;
+  labels: string[];
+  status: 'online' | 'offline';
+  lastActiveAt: string | null;
+  dataRoot: string | null;
+  resources: Array<{ kind: string; index: number; model?: string }>;
+}
+
 export type { ApprovalRequest, SessionEnvelope, SessionState, WorkflowDef };
 
 export interface WorkflowDefRow {
@@ -221,6 +231,7 @@ export interface LlmProviderRow {
 
 export const api = {
   machines: () => fetch('/api/machines').then((r) => j<{ machines: MachineRow[] }>(r)).then((d) => d.machines),
+  allMachines: () => fetch('/api/machines/all').then((r) => j<{ machines: AllMachineRow[] }>(r)).then((d) => d.machines),
   sessions: () => fetch('/api/sessions').then((r) => j<{ sessions: SessionRow[] }>(r)).then((d) => d.sessions),
   events: (sessionId: string) =>
     fetch(`/api/sessions/${sessionId}/events`).then((r) => j<{ events: EventRow[] }>(r)).then((d) => d.events),

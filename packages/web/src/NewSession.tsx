@@ -91,7 +91,7 @@ function ChipToggle({
 
 // ─── NewSession ───────────────────────────────────────────────────────────────
 /** ChatGPT 式居中 Composer —— 输入框 + chips + Enter 发送，机器与目录全自动就位 */
-export function NewSession({ onCreated }: { onCreated: (sessionId: string) => void }) {
+export function NewSession({ onCreated, onPlanMode }: { onCreated: (sessionId: string) => void; onPlanMode?: () => void }) {
   const { data: machines = [] } = useMachines();
   const { data: projects = [] } = useProjects();
   const { data: providers = [] } = useLlmProviders();
@@ -218,7 +218,7 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
                 onChange={handleTextareaInput}
                 onKeyDown={handleKeyDown}
                 rows={2}
-                placeholder="描述任务，Enter 发送"
+                placeholder="描述你要做的，Enter 发送"
                 disabled={busy}
                 className="min-h-[64px] resize-none overflow-hidden rounded-xl py-3.5 pl-4 pr-14 text-sm leading-relaxed shadow-[var(--shadow-panel)]"
               />
@@ -243,6 +243,16 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
                 <ChipToggle value={container} onChange={setContainer}>
                   容器
                 </ChipToggle>
+              )}
+              {/* 编排模式：由 agent 规划编排 → 流水线受理 */}
+              {onPlanMode && (
+                <button
+                  type="button"
+                  onClick={onPlanMode}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-line/70 bg-bg-2/60 px-2.5 py-0.5 text-[11px] font-medium text-ink-2 outline-none transition-all hover:border-accent/40 hover:bg-accent/5 cursor-pointer"
+                >
+                  编排模式
+                </button>
               )}
               {/* 高级 ▾ */}
               <div className="relative" ref={advancedRef}>
