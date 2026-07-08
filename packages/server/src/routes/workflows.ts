@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { createId } from '@paralleldrive/cuid2';
-import { desc, eq } from 'drizzle-orm';
+import { asc, desc, eq, inArray, or } from 'drizzle-orm';
 import * as z from 'zod';
 import { workflowDefSchema } from '@co/protocol';
 import { getDb, schema } from '../db/index';
@@ -128,4 +128,63 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       .where(eq(schema.nodeStates.runId, run.id));
     return { run, def: defs[0], nodes };
   });
+
+  /** 合流时间线：run 级事件 + 所有关联会话消息 + forge refs，按 seq 升序 */
+  app.get<{ Params: { id: string }; Querystring: { since?: string } }>(
+    '/api/runs/:id/thread',
+    async (req, reply) => {
+      const db = getDb();
+      const since = Number(req.query.since ?? 0);
+
+      // ① run + def + nodes（复用 /:id 逻辑）
+      const runs = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, req.params.id)).limit(1);
+      const run = runs[0];
+      if (!run) {
+        void reply.code(404);
+        return { error: 'run not found' };
+      }
+      const defs = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, run.defId)).limit(1);
+      const nodes = await db
+        .select({
+          runId: schema.nodeStates.runId,
+          nodeId: schema.nodeStates.nodeId,
+          status: schema.nodeStates.status,
+          sessionId: schema.nodeStates.sessionId,
+          output: schema.nodeStates.output,
+          updatedAt: schema.nodeStates.updatedAt,
+          model: schema.sessions.model,
+        })
+        .from(schema.nodeStates)
+        .leftJoin(schema.sessions, eq(schema.nodeStates.sessionId, schema.sessions.id))
+        .where(eq(schema.nodeStates.runId, run.id));
+
+      // ② 本 run 的全部会话 id（用于兜底历史 session.message 行无 runId）
+      const sessionRows = await db
+        .select({ id: schema.sessions.id })
+        .from(schema.sessions)
+        .where(eq(schema.sessions.runId, run.id));
+      const sessionIds = sessionRows.map((r) => r.id);
+
+      // ③ 合流事件：runId 匹配 OR sessionId 属于本 run
+      const conditions = [eq(schema.events.runId, run.id)];
+      if (sessionIds.length > 0) {
+        conditions.push(inArray(schema.events.sessionId, sessionIds));
+      }
+      const rows = await db
+        .select()
+        .from(schema.events)
+        .where(or(...conditions))
+        .orderBy(asc(schema.events.seq))
+        .limit(2000);
+      const events = since > 0 ? rows.filter((r) => r.seq > since) : rows;
+
+      // ④ forge refs
+      const forgeRefs = await db
+        .select()
+        .from(schema.forgeRefs)
+        .where(eq(schema.forgeRefs.runId, run.id));
+
+      return { run, def: defs[0], nodes, events, forgeRefs };
+    },
+  );
 }

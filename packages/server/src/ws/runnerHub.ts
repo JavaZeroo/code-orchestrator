@@ -39,6 +39,21 @@ interface RunnerConn {
 
 const runners = new Map<string, RunnerConn>();
 
+/** 会话→runId 懒缓存：runId 创建后不变，查一次即缓存（含 null，交互会话 O(1) 跳过） */
+const sessionRunIdCache = new Map<string, string | null>();
+async function getSessionRunId(sessionId: string): Promise<string | null | undefined> {
+  if (sessionRunIdCache.has(sessionId)) return sessionRunIdCache.get(sessionId);
+  if (!hasDb()) return undefined;
+  const rows = await getDb()
+    .select({ runId: schema.sessions.runId })
+    .from(schema.sessions)
+    .where(eq(schema.sessions.id, sessionId))
+    .limit(1);
+  const runId = rows[0]?.runId ?? null;
+  sessionRunIdCache.set(sessionId, runId);
+  return runId;
+}
+
 export function listMachines(): MachineInfo[] {
   return [...runners.values()]
     .map((c) => c.machine)
@@ -136,7 +151,8 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
     }
     case 'session.event': {
       const p = serverMethods['session.event'].params.parse(params);
-      const seq = await publish({ type: 'session.message', sessionId: p.sessionId, payload: p.envelope });
+      const runId = await getSessionRunId(p.sessionId);
+      const seq = await publish({ type: 'session.message', sessionId: p.sessionId, runId: runId ?? undefined, payload: p.envelope });
       return { seq };
     }
     case 'session.state': {
@@ -151,9 +167,11 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
           })
           .where(eq(schema.sessions.id, p.sessionId));
       }
+      const runId = await getSessionRunId(p.sessionId);
       await publish({
         type: 'session.state',
         sessionId: p.sessionId,
+        runId: runId ?? undefined,
         payload: { state: p.state, nativeSessionId: p.nativeSessionId, usage: p.usage },
       });
       return { ok: true };
