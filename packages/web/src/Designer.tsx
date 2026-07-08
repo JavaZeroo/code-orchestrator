@@ -29,7 +29,7 @@ function DraftPane({ sessionId, onSaved }: { sessionId: string; onSaved: (id: st
     }
     setSaving(true);
     api.createWorkflow(draft, 'chat', projectId).then((d) => {
-      toast.success('工作流已保存');
+      toast.success('编排已保存');
       onSaved(d.id);
     }).catch((e) => toast.error(String(e))).finally(() => setSaving(false));
   };
@@ -37,9 +37,9 @@ function DraftPane({ sessionId, onSaved }: { sessionId: string; onSaved: (id: st
   return (
     <div className="flex w-[46%] flex-col overflow-hidden">
       <header className="flex items-center justify-between border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
-        <b className="font-display text-[14px] font-semibold text-ink">工作流草图</b>
+        <b className="font-display text-[14px] font-semibold text-ink">编排草图</b>
         <Button variant="default" size="sm" disabled={!draft || saving} onClick={save}>
-          <Save size={13} /> {saving ? '保存中…' : '保存为工作流'}
+          <Save size={13} /> {saving ? '保存中…' : '保存编排'}
         </Button>
       </header>
       {draft ? (
@@ -91,7 +91,7 @@ export function Designer({ onSaved, onBack }: { onSaved: (workflowId: string) =>
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft size={14} /> 返回
         </Button>
-        <b className="font-display text-[14px] font-semibold text-ink">对话式搭建工作流</b>
+        <b className="font-display text-[14px] font-semibold text-ink">对话式搭建编排</b>
         <span className="hidden text-xs text-faint sm:inline">描述流程 → 实时出图 → 确认保存</span>
       </header>
       {error && <div className="m-4 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div>}

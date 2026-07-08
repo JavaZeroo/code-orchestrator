@@ -81,7 +81,7 @@ export function crossProjectWaiting(
       projectId: r.projectId,
       projectName: projMap.get(r.projectId)?.name ?? r.projectId,
       title: r.defName ?? r.defId.slice(0, 8),
-      subtitle: '工作流等待审批',
+      subtitle: '流水线等待审批',
     });
   }
 

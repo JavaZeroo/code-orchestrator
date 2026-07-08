@@ -63,6 +63,14 @@ app.get('/health', async () => ({
 
 app.get('/api/machines', async () => ({ machines: listMachines() }));
 
+// 全量机器列表（含离线机）—— 供设置页机器管理。与 /api/machines 并存，语义不同。
+app.get('/api/machines/all', async (req, reply) => {
+  if (!hasDb()) return reply.code(503).send({ error: 'database not available' });
+  const { getDb, schema } = await import('./db/index');
+  const rows = await getDb().select().from(schema.machines);
+  return { machines: rows };
+});
+
 await registerRunnerHub(app);
 registerClientHub(app, authEnabled);
 await registerSessionRoutes(app);

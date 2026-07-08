@@ -4,9 +4,9 @@ import { toast } from 'sonner';
 import { api, type LlmProviderRow } from './api';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
 import { Button } from './components/ui/button';
-import { Badge, Input } from './components/ui/primitives';
-import { useLlmProviders } from './lib/queries';
-import { cn } from './lib/utils';
+import { Badge, Input, StatusDot } from './components/ui/primitives';
+import { useAllMachines, useLlmProviders } from './lib/queries';
+import { cn, relTime } from './lib/utils';
 
 export interface ForgeBinding {
   bound: boolean;
@@ -656,6 +656,37 @@ function LarkWebhookRow({
   );
 }
 
+function MachinesSection() {
+  const { data: machines = [], isLoading } = useAllMachines();
+
+  return (
+    <div className="rounded-lg border border-line p-3">
+      <h4 className="mb-2 text-sm font-medium">机器</h4>
+      {isLoading ? (
+        <p className="text-xs text-dim">加载中…</p>
+      ) : machines.length === 0 ? (
+        <p className="text-xs text-dim">暂无机器注册。</p>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {machines.map((m) => (
+            <div key={m.id} className="flex items-center gap-2 rounded-md bg-bg-2/40 px-2.5 py-1.5">
+              <StatusDot tone={m.status === 'online' ? 'ok' : 'neutral'} live={m.status === 'online'} />
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink-2">{m.name}</span>
+              {m.labels.length > 0 && m.labels.map((l) => (
+                <Badge key={l} tone="neutral">{l}</Badge>
+              ))}
+              <span className="shrink-0 text-[11px] text-faint">
+                {m.status === 'online' ? '在线' : '离线'}
+                {m.lastActiveAt && ` · ${relTime(m.lastActiveAt)}`}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () => void; onChanged: () => void }) {
   const { data: providers = [], refetch: refreshProviders } = useLlmProviders();
 
@@ -673,6 +704,7 @@ export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () 
           {FORGES.map((f) => (
             <ForgeTokenRow key={f.key} forge={f} binding={me.forges[f.key] ?? { bound: false }} onChanged={onAnyChanged} />
           ))}
+          <MachinesSection />
           <h4 className="mt-2 text-xs font-medium text-dim">模型服务商</h4>
           {providers.map((p) => (
             <ProviderCard key={p.name} provider={p} me={me} onChanged={onAnyChanged} />
