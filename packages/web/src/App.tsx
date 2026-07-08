@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { authApi, LoginPage, SettingsModal, useMe, type Me } from './Auth';
 import { CreateProjectDialog } from './CreateProjectDialog';
 import { NewSession } from './NewSession';
-import { TaskIntake } from './NewTask';
 import { NotificationBell } from './Notifications';
 import { ProjectSettings } from './ProjectSettings';
 import { RunView } from './RunView';
@@ -18,7 +17,7 @@ import { cn, relTime, fmtCost, shortModel } from './lib/utils';
 
 type Tab = 'home';
 
-type Selected = 'new' | 'newTask' | { session: string } | { run: string };
+type Selected = 'new' | { session: string } | { run: string };
 
 const NAV: { id: Tab; label: string; icon: LucideIcon; hint: string }[] = [
   { id: 'home', label: '对话', icon: MessageSquareText, hint: '线程 · 会话 · 运行' },
@@ -235,11 +234,9 @@ function isThreadWaiting(t: ThreadItem): boolean {
 function HomeScreen({
   selected,
   setSelected,
-  onPlanMode,
 }: {
   selected: Selected;
   setSelected: (v: Selected) => void;
-  onPlanMode: () => void;
 }) {
   const { data: allSessions = [] } = useSessions();
   const { data: runs = [] } = useRuns();
@@ -359,16 +356,7 @@ function HomeScreen({
 
   // 右侧面板
   const renderRight = () => {
-    if (selected === 'new') return <NewSession onCreated={(id) => setSelected({ session: id })} onPlanMode={onPlanMode} />;
-    if (selected === 'newTask') {
-      return (
-        <TaskIntake
-          projectId={projectId}
-          onStarted={(runId) => setSelected({ run: runId })}
-          onBack={() => setSelected('new')}
-        />
-      );
-    }
+    if (selected === 'new') return <NewSession onCreated={(id) => setSelected({ session: id })} onRunStarted={(runId) => setSelected({ run: runId })} />;
     if (typeof selected === 'object' && 'session' in selected) {
       const s = allSessions.find((s) => s.id === selected.session);
       if (!s) return <div className="p-6 text-sm text-dim">会话未找到</div>;
@@ -524,7 +512,7 @@ function AppShell({ me, refresh }: { me: Me; refresh: () => void }) {
         </header>
         <main className="flex min-h-0 flex-1 overflow-hidden">
           <div key={tab} className="rise flex min-h-0 flex-1 overflow-hidden">
-            {tab === 'home' && <HomeScreen selected={selected} setSelected={setSelected} onPlanMode={() => setSelected('newTask')} />}
+            {tab === 'home' && <HomeScreen selected={selected} setSelected={setSelected} />}
           </div>
         </main>
       </div>

@@ -283,6 +283,9 @@ export const api = {
     fetch(`/api/llm/providers/${encodeURIComponent(name)}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
   projects: () => fetch('/api/projects').then((r) => j<{ projects: ProjectRow[] }>(r)).then((d) => d.projects),
   createProject: (body: Partial<ProjectRow>) => post('/api/projects', body).then((r) => j<{ id: string }>(r)),
+  dispatchPipeline: (projectId: string, body: { text: string; defId?: string }) =>
+    post(`/api/projects/${projectId}/dispatch`, body).then((r) =>
+      j<{ runId: string; issueNumber: string; issueUrl?: string }>(r)),
   patchProject: (id: string, patch: Partial<ProjectRow>) =>
     fetch(`/api/projects/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
   deleteProject: (id: string) => fetch(`/api/projects/${id}`, { method: 'DELETE' }).then((r) => j(r)),

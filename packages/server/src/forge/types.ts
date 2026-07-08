@@ -65,6 +65,8 @@ export interface Forge {
   /** ensure 语义：分支已有 open PR 时返回其编号（existed=true），不报错 */
   createPull(repo: string, params: CreatePullParams, token: string): Promise<{ number: number; existed: boolean }>;
   getIssue(repo: string, number: string | number, token?: string): Promise<NormalizedIssue>;
+  /** 手动「走流水线」入口用：真建 issue，让手动/自动路径在 intake 语义上合一 */
+  createIssue(repo: string, params: { title: string; body?: string }, token: string): Promise<{ number: string; htmlUrl?: string }>;
   createIssueComment(repo: string, number: string | number, body: string, token: string): Promise<{ id: number }>;
   /** 列出仓库 issue（需求录入触发器用）；opts.since 为 ISO8601 增量 */
   listIssues(repo: string, opts: { state?: string; labels?: string[]; since?: string }, token?: string): Promise<NormalizedIssue[]>;
