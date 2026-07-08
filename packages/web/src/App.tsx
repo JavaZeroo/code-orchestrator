@@ -509,7 +509,7 @@ function AppShell({ me, refresh }: { me: Me; refresh: () => void }) {
         <main className="flex min-h-0 flex-1 overflow-hidden">
           <div key={tab} className="rise flex min-h-0 flex-1 overflow-hidden">
             {tab === 'home' && <HomeScreen selected={selected} setSelected={setSelected} />}
-            {tab === 'projects' && <ProjectsPage me={me} onOpenSession={(id) => { setTab('home'); setSelected({ session: id }); }} onOpenRun={(runId) => { setTab('home'); setSelected({ run: runId }); }} />}
+            {tab === 'projects' && <ProjectsPage me={me} onOpenSession={(id) => { setTab('home'); setSelected(id === 'new' ? 'new' : { session: id }); }} onOpenRun={(runId) => { setTab('home'); setSelected({ run: runId }); }} />}
           </div>
         </main>
       </div>

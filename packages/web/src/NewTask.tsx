@@ -12,11 +12,9 @@ import { FlowGraph } from './FlowGraph';
 import { SessionView } from './SessionView';
 import { StartForm } from './components/StartForm';
 import { Button } from './components/ui/button';
-import { Badge, Card, Spinner } from './components/ui/primitives';
+import { Spinner } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { useWorkflows, useProjects } from './lib/queries';
-import { useProjectScope } from './lib/project';
-import { cn } from './lib/utils';
 import { useSessionEvents } from './useEvents';
 
 /* ──────── 对话优先新建任务 ──────── */
