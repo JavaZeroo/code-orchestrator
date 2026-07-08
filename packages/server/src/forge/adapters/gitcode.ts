@@ -136,6 +136,16 @@ export const gitcodeForge: Forge = {
     return normIssue(r);
   },
 
+  async createIssue(repo, params, token) {
+    // gitcode 建 issue 走 owner 级端点，repo 作为参数传入（与评论/列表的 /repos/ 前缀不同族）
+    const [owner, name] = repo.split('/');
+    const r = await request<RawIssue>('POST', `/repos/${owner}/issues`, {
+      token,
+      body: { repo: name, title: params.title, body: params.body ?? '' },
+    });
+    return { number: String(r.number), htmlUrl: r.html_url };
+  },
+
   async createIssueComment(repo, number, body, token) {
     const c = await request<{ id: number }>('POST', `/repos/${repo}/issues/${number}/comments`, { token, body: { body } });
     return { id: c.id };

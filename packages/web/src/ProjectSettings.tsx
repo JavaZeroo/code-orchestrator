@@ -3,7 +3,7 @@
  * 基本信息（可编辑）/ 自动化栏（触发器+编排）/ 机器物化状态 / 编排编辑器二级入口。
  */
 
-import { Archive, ArchiveRestore, ChevronDown, ExternalLink, MessageCircle, Play, Plus, RefreshCw, Rocket, Star, Trash2, Workflow as WorkflowIcon } from 'lucide-react';
+import { Archive, ArchiveRestore, ChevronDown, ExternalLink, MessageCircle, Play, Plus, RefreshCw, Rocket, Star, Trash2, Workflow as WorkflowIcon, Pencil } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import type { CreateTriggerBody, ForgeKind, ProjectRow, RequirementRow, TriggerRow, WorkflowDefRow } from './api';
@@ -280,7 +280,7 @@ function RequirementRowItem({ r, onOpenRun }: { r: RequirementRow; onOpenRun: (r
   );
 }
 
-/* ──────── 流程模板卡片 ──────── */
+/* ──────── 流水线卡片 ──────── */
 
 function WorkflowDefCard({ def, project }: { def: WorkflowDefRow; project: ProjectRow }) {
   const [archiving, setArchiving] = useState(false);
@@ -295,10 +295,18 @@ function WorkflowDefCard({ def, project }: { def: WorkflowDefRow; project: Proje
       .finally(() => setArchiving(false));
   };
 
+  const doRename = () => {
+    const name = window.prompt('流水线名称', def.name)?.trim();
+    if (!name || name === def.name) return;
+    api.patchWorkflow(def.id, { name })
+      .then(() => { invalidate('workflows'); invalidate('runs'); })
+      .catch((e) => toast.error(String(e)));
+  };
+
   const doSetDefault = () => {
     setSettingDefault(true);
     api.patchProject(project.id, { defaultWorkflow: def.id })
-      .then(() => { toast.success('已设为默认模板'); invalidate('projects'); })
+      .then(() => { toast.success('已设为默认流水线'); invalidate('projects'); })
       .catch((e) => toast.error(String(e)))
       .finally(() => setSettingDefault(false));
   };
@@ -319,6 +327,9 @@ function WorkflowDefCard({ def, project }: { def: WorkflowDefRow; project: Proje
           </span>
         </div>
         <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" onClick={doRename} title="改名">
+            <Pencil size={13} />
+          </Button>
           <Button variant="ghost" size="icon" disabled={settingDefault || isDefault} onClick={doSetDefault} title="设为默认">
             <Star size={13} className={isDefault ? 'fill-ok text-ok' : ''} />
           </Button>
@@ -340,7 +351,7 @@ function ArchivedDefsSection({ defs, project }: { defs: WorkflowDefRow[]; projec
         onClick={() => setOpen((v) => !v)}
       >
         <ChevronDown size={12} className={cn('transition-transform', open && 'rotate-0', !open && '-rotate-90')} />
-        已归档模板（{defs.length}）
+        已归档流水线（{defs.length}）
       </button>
       {open && defs.map((d) => (
         <ArchivedDefCard key={d.id} def={d} />
@@ -636,12 +647,12 @@ export function ProjectSettings({
           {/* ── 编排 ── */}
           <section className="flex flex-col gap-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-ink-2">编排</h2>
+              <h2 className="text-sm font-semibold text-ink-2">流水线</h2>
               <Button variant="default" size="sm" className="shrink-0" onClick={() => setView('designer')}>
-                <MessageCircle size={14} /> 编辑编排 / 对话式搭建编排
+                <MessageCircle size={14} /> 对话编排新流水线
               </Button>
             </div>
-            <p className="text-xs text-dim">当前项目的流程定义。</p>
+            <p className="text-xs text-dim">项目的自动化流程。Composer「走流水线」与 issue 触发器都从这里取定义；星标为默认。</p>
             {(() => {
               const activeDefs = defs.filter((d) => d.archived !== 'yes');
               const archivedDefs = defs.filter((d) => d.archived === 'yes');
@@ -650,7 +661,7 @@ export function ProjectSettings({
                   {activeDefs.length === 0 && archivedDefs.length === 0 ? (
                     <Card className="flex flex-col items-center gap-2 py-8 text-center">
                       <WorkflowIcon size={24} className="text-faint" />
-                      <p className="text-sm text-dim">还没有编排 —— 点「编辑编排」，跟 agent 说你要什么流程。</p>
+                      <p className="text-sm text-dim">还没有流水线 —— 点「对话编排」，跟 agent 说你要什么流程（存而不跑）。</p>
                     </Card>
                   ) : (
                     <>

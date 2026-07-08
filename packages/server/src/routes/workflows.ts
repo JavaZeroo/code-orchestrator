@@ -19,6 +19,7 @@ const startBodySchema = z.object({
 
 const patchDefSchema = z.object({
   archived: z.enum(['yes', 'no']).optional(),
+  name: z.string().trim().min(1).max(120).optional(),
 });
 
 export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void> {
@@ -66,7 +67,18 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       void reply.code(400);
       return { error: '无更新字段' };
     }
-    await getDb().update(schema.workflowDefs).set(patch).where(eq(schema.workflowDefs.id, req.params.id));
+    const db = getDb();
+    const rows = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, req.params.id)).limit(1);
+    if (!rows[0]) {
+      void reply.code(404);
+      return { error: 'workflow not found' };
+    }
+    // 改名同步进 graph.name，保持 def 行与图定义一致
+    const set: Record<string, unknown> = { ...patch };
+    if (patch.name) {
+      set.graph = { ...(rows[0].graph as Record<string, unknown>), name: patch.name };
+    }
+    await db.update(schema.workflowDefs).set(set).where(eq(schema.workflowDefs.id, req.params.id));
     return { ok: true };
   });
 

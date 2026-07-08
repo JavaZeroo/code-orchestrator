@@ -5,7 +5,7 @@ import { api, type Effort } from './api';
 import { Input, Textarea } from './components/ui/primitives';
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { SelectContent, SelectGroup, SelectItem, SelectLabel } from './components/ui/select';
-import { useLlmProviders, useMachines, useProjects } from './lib/queries';
+import { useLlmProviders, useMachines, useProjects, useWorkflows } from './lib/queries';
 import { useProjectScope } from './lib/project';
 import { cn } from './lib/utils';
 
@@ -90,23 +90,35 @@ function ChipToggle({
 }
 
 // ─── NewSession ───────────────────────────────────────────────────────────────
-/** ChatGPT 式居中 Composer —— 输入框 + chips + Enter 发送，机器与目录全自动就位 */
-export function NewSession({ onCreated, onPlanMode }: { onCreated: (sessionId: string) => void; onPlanMode?: () => void }) {
+/** ChatGPT 式居中 Composer —— 输入框 + chips + Enter 发送，机器与目录全自动就位。
+ *  两种去向：直接干（会话）/ 走流水线（真建 issue → 项目流水线开跑，与 forge intake 入口合一）。 */
+export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId: string) => void; onRunStarted?: (runId: string) => void }) {
   const { data: machines = [] } = useMachines();
   const { data: projects = [] } = useProjects();
   const { data: providers = [] } = useLlmProviders();
+  const { data: allDefs = [] } = useWorkflows();
   const { projectId } = useProjectScope();
 
   const project = projects.find((p) => p.id === projectId);
+  const pipelines = allDefs.filter((d) => d.projectId === projectId && d.archived !== 'yes');
 
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState('claude');
   const [effort, setEffort] = useState('default');
   const [container, setContainer] = useState(true);
+  const [pipeline, setPipeline] = useState(false);
+  const [pipelineDefId, setPipelineDefId] = useState('');
   const [advancedMachine, setAdvancedMachine] = useState('');
   const [advancedCwd, setAdvancedCwd] = useState('');
   const [busy, setBusy] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // 流水线默认选项目默认；切项目重置
+  useEffect(() => {
+    setPipeline(false);
+    setPipelineDefId('');
+  }, [projectId]);
+  const effectiveDefId = pipelineDefId || project?.defaultWorkflow || pipelines[0]?.id || '';
 
   const advancedRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -155,6 +167,25 @@ export function NewSession({ onCreated, onPlanMode }: { onCreated: (sessionId: s
     const text = prompt.trim();
     if (!text || busy) return;
     setBusy(true);
+
+    // 走流水线：真建 issue → 默认流水线开跑 → 跳 run 时间线（一键直达零确认）
+    if (pipeline && onRunStarted) {
+      if (!projectId || !effectiveDefId) {
+        toast.error('项目还没有流水线——去 项目设置→流水线 创建');
+        setBusy(false);
+        return;
+      }
+      api.dispatchPipeline(projectId, { text, defId: effectiveDefId })
+        .then((r) => {
+          toast.success(`已建 issue #${r.issueNumber}，流水线开跑`);
+          onRunStarted(r.runId);
+        })
+        .catch((e) => {
+          toast.error(String(e instanceof Error ? e.message : e));
+          setBusy(false);
+        });
+      return;
+    }
 
     const eff = effort === 'default' ? undefined : (effort as Effort);
     const body: Parameters<typeof api.spawn>[0] = {
@@ -218,7 +249,7 @@ export function NewSession({ onCreated, onPlanMode }: { onCreated: (sessionId: s
                 onChange={handleTextareaInput}
                 onKeyDown={handleKeyDown}
                 rows={2}
-                placeholder="描述你要做的，Enter 发送"
+                placeholder={pipeline ? '描述需求，发送后将建 issue 并启动流水线' : '描述你要做的，Enter 发送'}
                 disabled={busy}
                 className="min-h-[64px] resize-none overflow-hidden rounded-xl py-3.5 pl-4 pr-14 text-sm leading-relaxed shadow-[var(--shadow-panel)]"
               />
@@ -244,15 +275,28 @@ export function NewSession({ onCreated, onPlanMode }: { onCreated: (sessionId: s
                   容器
                 </ChipToggle>
               )}
-              {/* 编排模式：由 agent 规划编排 → 流水线受理 */}
-              {onPlanMode && (
-                <button
-                  type="button"
-                  onClick={onPlanMode}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-line/70 bg-bg-2/60 px-2.5 py-0.5 text-[11px] font-medium text-ink-2 outline-none transition-all hover:border-accent/40 hover:bg-accent/5 cursor-pointer"
-                >
-                  编排模式
-                </button>
+              {/* 走流水线：真建 issue → 项目流水线开跑（与 issue 自动触发同一条路） */}
+              {onRunStarted && (
+                pipelines.length > 0 ? (
+                  <ChipToggle value={pipeline} onChange={setPipeline}>
+                    走流水线
+                  </ChipToggle>
+                ) : (
+                  <span
+                    className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-full border border-line/40 bg-bg-2/40 px-2.5 py-0.5 text-[11px] text-faint"
+                    title="项目还没有流水线——去 项目设置→流水线 创建"
+                  >
+                    走流水线
+                  </span>
+                )
+              )}
+              {/* 流水线选择：开了走流水线且有多条时出现 */}
+              {pipeline && pipelines.length > 1 && (
+                <ChipSelect
+                  value={effectiveDefId}
+                  onValueChange={setPipelineDefId}
+                  options={pipelines.map((d) => ({ value: d.id, label: d.name.slice(0, 24) }))}
+                />
               )}
               {/* 高级 ▾ */}
               <div className="relative" ref={advancedRef}>

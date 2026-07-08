@@ -244,7 +244,7 @@ export const api = {
   workflows: () => fetch('/api/workflows').then((r) => j<{ workflows: WorkflowDefRow[] }>(r)).then((d) => d.workflows),
   createWorkflow: (graph: WorkflowDef, createdVia: 'chat' | 'manual', projectId?: string | null) =>
     post('/api/workflows', { graph, createdVia, projectId }).then((r) => j<{ id: string }>(r)),
-  patchWorkflow: (id: string, patch: { archived?: 'yes' | 'no' }) =>
+  patchWorkflow: (id: string, patch: { archived?: 'yes' | 'no'; name?: string }) =>
     fetch(`/api/workflows/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
   startRun: (workflowId: string, vars: Record<string, string>, projectId?: string | null) =>
     post(`/api/workflows/${workflowId}/runs`, { vars, projectId }).then((r) => j<{ runId: string }>(r)),
@@ -283,6 +283,9 @@ export const api = {
     fetch(`/api/llm/providers/${encodeURIComponent(name)}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
   projects: () => fetch('/api/projects').then((r) => j<{ projects: ProjectRow[] }>(r)).then((d) => d.projects),
   createProject: (body: Partial<ProjectRow>) => post('/api/projects', body).then((r) => j<{ id: string }>(r)),
+  dispatchPipeline: (projectId: string, body: { text: string; defId?: string }) =>
+    post(`/api/projects/${projectId}/dispatch`, body).then((r) =>
+      j<{ runId: string; issueNumber: string; issueUrl?: string }>(r)),
   patchProject: (id: string, patch: Partial<ProjectRow>) =>
     fetch(`/api/projects/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
   deleteProject: (id: string) => fetch(`/api/projects/${id}`, { method: 'DELETE' }).then((r) => j(r)),
