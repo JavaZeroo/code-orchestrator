@@ -204,15 +204,6 @@ function threadActiveTime(t: ThreadItem): string {
   return t.run.endedAt ?? t.run.startedAt;
 }
 
-function threadTitle(t: ThreadItem): string {
-  if (t.kind === 'session') return t.session.title ?? (t.session.cwd.split('/').pop() || t.session.cwd);
-  return t.run.defName ?? t.run.defId.slice(0, 8);
-}
-
-function threadId(t: ThreadItem): string {
-  return t.kind === 'session' ? t.session.id : t.run.id;
-}
-
 function isThreadWaiting(t: ThreadItem): boolean {
   return t.kind === 'session' ? isWaitingSession(t.session) : isWaitingRun(t.run);
 }
