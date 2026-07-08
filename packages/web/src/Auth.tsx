@@ -351,8 +351,10 @@ function ProviderCard({
         <Badge>{baseUrlLabel}</Badge>
         {provider.hasKey ? (
           <Badge tone="ok">已配置</Badge>
-        ) : (
+        ) : provider.baseUrl ? (
           <Badge tone="warn">未配置</Badge>
+        ) : (
+          <Badge title="官方直连无需 API key，使用执行机自身凭据">宿主凭据</Badge>
         )}
       </div>
 
