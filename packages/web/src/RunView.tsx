@@ -118,6 +118,15 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
   const statuses = useMemo(() => Object.fromEntries(nodes.map((n) => [n.nodeId, n.status])), [nodes]);
   const selState = nodes.find((n) => n.nodeId === selected);
   const selNode = def?.graph.nodes.find((n) => n.id === selected);
+  // def 标题里的 {{vars.x}} 模板用本 run 变量插值（thread 视图在 RunTimeline 内处理）
+  const interpTitle = useCallback((t?: string) => {
+    const vars = (run ?? threadRun)?.context?.vars ?? {};
+    return t?.replace(/\{\{vars\.([\w.]+)\}\}/g, (_, k: string) => vars[k] ?? '');
+  }, [run, threadRun]);
+  const interpGraph = useMemo(() => {
+    if (!def) return null;
+    return { ...def.graph, nodes: def.graph.nodes.map((n) => ({ ...n, title: interpTitle(n.title) })) };
+  }, [def, interpTitle]);
   const gate = pending.find((a) => a.kind === 'gate' && a.runId === runId && a.nodeId === selected);
   const runMeta = RUN_META[effectiveRun?.status ?? ''] ?? { label: effectiveRun?.status ?? '', tone: 'neutral' as const };
 
@@ -184,12 +193,12 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
       ) : mode === 'graph' ? (
         <div className="flex flex-1 overflow-hidden">
           <div className="min-h-72 flex-1">
-            {def && <FlowGraph def={def.graph} statuses={statuses} onNodeClick={setSelected} />}
+            {def && <FlowGraph def={interpGraph ?? def.graph} statuses={statuses} onNodeClick={setSelected} />}
           </div>
           {selected && selNode && (
             <div className="flex w-96 shrink-0 flex-col gap-3 overflow-y-auto border-l border-line bg-bg-2/40 p-4 backdrop-blur-sm">
               <div className="flex flex-wrap items-center gap-2">
-                <h3 className="font-display font-semibold text-ink">{selNode.title ?? selNode.id}</h3>
+                <h3 className="font-display font-semibold text-ink">{interpTitle(selNode.title) ?? selNode.id}</h3>
                 <span className="text-[11px] text-faint">({selNode.type})</span>
                 {selState?.model && <span className="mono-nums rounded bg-panel-2 px-1.5 py-0.5 text-[10px] text-accent/80">{selState.model}</span>}
                 {selState && <Badge tone={NODE_TONE[selState.status] ?? 'neutral'}>{selState.status}</Badge>}

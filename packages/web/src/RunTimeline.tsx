@@ -255,14 +255,16 @@ export function RunTimeline({ events, nodes, def, run, forgeRefs, activeSessionI
     return map;
   }, [nodes]);
 
-  // 节点 id→定义 映射
+  // 节点 id→定义 映射（def 标题里的 {{vars.x}} 模板用本 run 变量插值）
   const nodeDefById = useMemo(() => {
+    const vars = run.context?.vars ?? {};
+    const interp = (t?: string) => t?.replace(/\{\{vars\.([\w.]+)\}\}/g, (_, k: string) => vars[k] ?? '');
     const map = new Map<string, { title?: string; type: string; model?: string }>();
     for (const n of (def.graph as WorkflowDef).nodes) {
-      map.set(n.id, { title: n.title, type: n.type, model: (n as Record<string, unknown>).model as string | undefined });
+      map.set(n.id, { title: interp(n.title), type: n.type, model: (n as Record<string, unknown>).model as string | undefined });
     }
     return map;
-  }, [def]);
+  }, [def, run]);
 
   // forge ref → 最新 ci/pr 状态
   const forgeRefByKey = useMemo(() => {
