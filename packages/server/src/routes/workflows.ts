@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { createId } from '@paralleldrive/cuid2';
-import { asc, desc, eq, inArray, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, or } from 'drizzle-orm';
 import * as z from 'zod';
 import { workflowDefSchema } from '@co/protocol';
 import { getDb, schema } from '../db/index';
@@ -166,17 +166,28 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       const sessionIds = sessionRows.map((r) => r.id);
 
       // ③ 合流事件：runId 匹配 OR sessionId 属于本 run
-      const conditions = [eq(schema.events.runId, run.id)];
+      //    首次加载返回最新 2000 条（desc+limit+reverse）；since>0 时增量拉取 >since 的事件
+      const baseConditions = [eq(schema.events.runId, run.id)];
       if (sessionIds.length > 0) {
-        conditions.push(inArray(schema.events.sessionId, sessionIds));
+        baseConditions.push(inArray(schema.events.sessionId, sessionIds));
       }
-      const rows = await db
-        .select()
-        .from(schema.events)
-        .where(or(...conditions))
-        .orderBy(asc(schema.events.seq))
-        .limit(2000);
-      const events = since > 0 ? rows.filter((r) => r.seq > since) : rows;
+      let events;
+      if (since > 0) {
+        events = await db
+          .select()
+          .from(schema.events)
+          .where(and(or(...baseConditions), gt(schema.events.seq, since)))
+          .orderBy(asc(schema.events.seq))
+          .limit(2000);
+      } else {
+        const latest = await db
+          .select()
+          .from(schema.events)
+          .where(or(...baseConditions))
+          .orderBy(desc(schema.events.seq))
+          .limit(2000);
+        events = latest.reverse();
+      }
 
       // ④ forge refs
       const forgeRefs = await db

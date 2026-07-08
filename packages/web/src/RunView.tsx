@@ -1,5 +1,5 @@
 import { ArrowLeft, ExternalLink } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type ApprovalRow, type ForgeRefRow, type NodeStateRow, type RunRow, type WorkflowDefRow } from './api';
 import { FlowGraph } from './FlowGraph';
@@ -68,15 +68,37 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
 
   const threadEvents = useRunEvents(runId);
 
-  useEffect(() => {
-    if (mode !== 'thread') return;
+  // thread 模式 refresh：重新拉 run/def/nodes/forgeRefs（轻量查询，仿 graph 模式 5s 轮询）
+  const refreshThread = useCallback(() => {
     api.runThread(runId).then((d) => {
       setThreadRun(d.run);
       setThreadDef(d.def);
       setThreadNodes(d.nodes);
       setThreadForgeRefs(d.forgeRefs);
     }).catch((e) => toast.error(String(e)));
-  }, [runId, mode]);
+  }, [runId]);
+
+  // 首次挂载 + 切模式时拉取
+  useEffect(() => {
+    if (mode !== 'thread') return;
+    refreshThread();
+  }, [runId, mode, refreshThread]);
+
+  // WS 事件到达时重新拉取（debounce 1s，合并短时间内的连续事件）
+  const threadDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    if (mode !== 'thread' || threadEvents.length === 0) return;
+    clearTimeout(threadDebounceRef.current);
+    threadDebounceRef.current = setTimeout(refreshThread, 1_000);
+    return () => clearTimeout(threadDebounceRef.current);
+  }, [threadEvents.length, mode, refreshThread]);
+
+  // 每 5s 兜底轮询（cover 无 WS 事件但状态已变的情况，如 runner 离线/网络瞬断）
+  useEffect(() => {
+    if (mode !== 'thread') return;
+    const timer = setInterval(refreshThread, 5_000);
+    return () => clearInterval(timer);
+  }, [mode, refreshThread]);
 
   // 当前活跃节点会话（用于插话）
   const activeSessionId = useMemo(() => {
@@ -104,10 +126,10 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
     api.decide(id, b)
       .then(() => {
         if (mode === 'graph') refreshGraph();
-        // thread 模式通过 WS 自动刷新 events
+        else refreshThread();
       })
       .catch((e) => toast.error(String(e)));
-  }, [mode, refreshGraph]);
+  }, [mode, refreshGraph, refreshThread]);
 
   // 共享的 send 处理
   const handleSend = useCallback((text: string) => {
