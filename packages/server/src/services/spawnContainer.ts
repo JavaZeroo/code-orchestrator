@@ -220,7 +220,12 @@ export async function spawnContainerSession(
     await activateComponents(machineId, containerId, project.components ?? {}, dataRoot);
 
     // 6) 起 agent 于容器内（#37）：默认经 session.spawn 的 container 分支（docker exec 挂载的 node+agent.mjs）
-    await (startAgent ?? defaultStartAgent)({ sessionId, machineId, containerId, workdir: WORKSPACE, env: containerEnv, prompt: req.prompt, model: resolved.model ?? req.model, meta: req.meta });
+    // 手动会话默认全自动放行（与 spawnSession 同规则）：容器即隔离边界，逐工具审批只造成卡壳
+    const agentMeta: MessageMeta =
+      !req.runId && req.meta?.permissionMode == null
+        ? { ...(req.meta ?? {}), permissionMode: 'bypassPermissions' }
+        : (req.meta ?? {});
+    await (startAgent ?? defaultStartAgent)({ sessionId, machineId, containerId, workdir: WORKSPACE, env: containerEnv, prompt: req.prompt, model: resolved.model ?? req.model, meta: agentMeta });
 
     await publish({ type: 'session.created', sessionId, runId: req.runId, payload: { machineId, cwd: WORKSPACE, projectId: req.projectId, containerId } });
     return { sessionId, machineId, cwd: WORKSPACE };

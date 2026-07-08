@@ -122,6 +122,14 @@ export function SessionView({ session }: { session: SessionRow }) {
   const dead = state === 'dead';
   const busy = state === 'thinking' || state === 'starting';
   const meta = STATE_META[state] ?? { label: state, tone: 'neutral' as BadgeTone };
+  const pendingApprovals = useMemo(() => [...approvals.values()].filter((a) => a.status === 'pending'), [approvals]);
+
+  const decide = (id: string, b: 'allow' | 'deny') =>
+    api.decide(id, b).catch((e) => {
+      // 已被处理（其他端/自动决策）：降级为提示，等增量轮询把 decided 事件补回来
+      if (String(e).includes('already')) toast.info('该审批已被处理，状态稍后同步');
+      else toast.error(String(e));
+    });
 
   const doSend = () => {
     const t = text.trim();
@@ -178,7 +186,7 @@ export function SessionView({ session }: { session: SessionRow }) {
 
       <div className="relative flex-1 min-h-0 overflow-hidden">
         <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">
-          <Timeline events={events} approvals={approvals} onDecide={(id, b) => api.decide(id, b).catch((e) => toast.error(String(e)))} />
+          <Timeline events={events} approvals={approvals} cwd={session.cwd} onDecide={decide} />
           <div ref={bottomRef} />
         </div>
         {showJump && (
@@ -190,6 +198,28 @@ export function SessionView({ session }: { session: SessionRow }) {
           </button>
         )}
       </div>
+
+      {pendingApprovals.length > 0 && (
+        <div className="flex flex-col gap-1.5 border-t border-warn/30 bg-warn/5 px-4 py-2">
+          {pendingApprovals.map(({ request }) => {
+            const payload = request.payload as Record<string, unknown>;
+            const input = (payload.input ?? payload) as Record<string, unknown>;
+            const preview =
+              typeof input.command === 'string' ? input.command.replace(/\s+/g, ' ')
+              : typeof input.file_path === 'string' ? input.file_path
+              : '';
+            return (
+              <div key={request.id} className="flex items-center gap-2">
+                <Badge tone="warn">待审批</Badge>
+                <span className="shrink-0 text-xs font-medium text-ink">{request.title}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-dim" title={preview}>{preview}</span>
+                <Button variant="success" size="sm" onClick={() => void decide(request.id, 'allow')}>批准</Button>
+                <Button variant="danger" size="sm" onClick={() => void decide(request.id, 'deny')}>拒绝</Button>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       <footer className="flex gap-2 border-t border-line bg-bg-2/40 px-4 py-3 backdrop-blur-sm">
         <Textarea

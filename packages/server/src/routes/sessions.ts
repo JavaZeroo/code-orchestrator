@@ -4,7 +4,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, gt } from 'drizzle-orm';
 import * as z from 'zod';
 import { approvalDecisionSchema, MessageMetaSchema, sessionAgentSchema } from '@co/protocol';
 import { getDb, hasDb, schema } from '../db/index';
@@ -193,13 +193,24 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     async (req) => {
       const db = requireDb();
       const since = Number(req.query.since ?? 0);
-      const rows = await db
+      // 首次加载返回最新 2000 条（desc+limit+reverse，长会话不能截断尾部——
+      // 否则 approval.decided / tool-call-end 永远到不了前端）；since>0 增量拉取
+      if (since > 0) {
+        const rows = await db
+          .select()
+          .from(schema.events)
+          .where(and(eq(schema.events.sessionId, req.params.id), gt(schema.events.seq, since)))
+          .orderBy(asc(schema.events.seq))
+          .limit(2000);
+        return { events: rows };
+      }
+      const latest = await db
         .select()
         .from(schema.events)
         .where(eq(schema.events.sessionId, req.params.id))
-        .orderBy(asc(schema.events.seq))
-        .limit(500);
-      return { events: since > 0 ? rows.filter((r) => r.seq > since) : rows };
+        .orderBy(desc(schema.events.seq))
+        .limit(2000);
+      return { events: latest.reverse() };
     },
   );
 

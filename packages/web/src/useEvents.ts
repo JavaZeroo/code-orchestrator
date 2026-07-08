@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
 import { api, type EventRow } from './api';
 
-/** 先开 WS（实时缓冲）再拉历史，按 seq 去重合并——不丢中间事件 */
+/** 先开 WS（实时缓冲）再拉历史，按 seq 去重合并——不丢中间事件；
+ *  另每 10s 以 since=maxSeq 增量补拉，兜底 WS 掉线/后台标签页漏帧 */
 export function useSessionEvents(sessionId: string): EventRow[] {
   const [events, setEvents] = useState<EventRow[]>([]);
 
   useEffect(() => {
     if (!sessionId) return;
     setEvents([]);
+    let maxSeq = 0;
     const add = (rows: EventRow[]) => {
       setEvents((prev) => {
         const seen = new Set(prev.map((e) => e.seq));
@@ -15,7 +17,9 @@ export function useSessionEvents(sessionId: string): EventRow[] {
         if (fresh.length === 0) {
           return prev;
         }
-        return [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
+        const next = [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
+        maxSeq = next[next.length - 1]!.seq;
+        return next;
       });
     };
 
@@ -29,8 +33,14 @@ export function useSessionEvents(sessionId: string): EventRow[] {
       }
     };
     api.events(sessionId).then(add).catch(console.error);
+    const timer = setInterval(() => {
+      api.events(sessionId, maxSeq).then(add).catch(() => {});
+    }, 10_000);
 
-    return () => ws.close();
+    return () => {
+      ws.close();
+      clearInterval(timer);
+    };
   }, [sessionId]);
 
   return events;

@@ -1,4 +1,4 @@
-import { ChevronRight, FileEdit, Paperclip, Terminal, Wrench } from 'lucide-react';
+import { ChevronRight, Paperclip } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { ApprovalRequest, EventRow, SessionEnvelope } from './api';
 import { Markdown } from './components/Markdown';
@@ -50,39 +50,54 @@ export function ThinkingBubble({ text }: { text: string }) {
   );
 }
 
-export function ToolCard({ tool }: { tool: ToolCall }) {
+/** 显示用：把绝对路径按会话 cwd 收敛成相对路径 */
+function stripCwd(text: string, cwd?: string): string {
+  if (!cwd) return text;
+  return text.split(`${cwd}/`).join('').split(cwd).join('.');
+}
+
+/** 单行工具调用（Claude Code 风格）：状态点 + 工具名 + 参数摘要，点击展开详情 */
+export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd?: string }) {
   const [open, setOpen] = useState(false);
   const isEdit = tool.name === 'Edit' || tool.name === 'MultiEdit';
   const isWrite = tool.name === 'Write';
-  const isBash = tool.name === 'Bash';
-  const Icon = isBash ? Terminal : isEdit || isWrite ? FileEdit : Wrench;
   const filePath = typeof tool.args.file_path === 'string' ? tool.args.file_path : undefined;
-  const subtitle = isBash
-    ? String(tool.args.command ?? '')
-    : filePath ?? (typeof tool.args.pattern === 'string' ? tool.args.pattern : '');
+  const rawSubtitle =
+    typeof tool.args.command === 'string'
+      ? tool.args.command.replace(/\s+/g, ' ')
+      : filePath ??
+        (typeof tool.args.pattern === 'string'
+          ? tool.args.pattern
+          : typeof tool.args.description === 'string'
+            ? tool.args.description
+            : '');
+  const subtitle = stripCwd(rawSubtitle, cwd);
 
   return (
-    <div className="self-stretch rounded-lg border border-line bg-panel/60">
+    <div className="self-stretch">
       <button
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm"
+        className="group flex w-full items-center gap-2 rounded-md px-1.5 py-[3px] text-left transition-colors hover:bg-panel/60"
         onClick={() => setOpen((v) => !v)}
+        title={rawSubtitle}
       >
-        <ChevronRight size={13} className={cn('shrink-0 text-dim transition-transform', open && 'rotate-90')} />
-        <Icon size={13} className="shrink-0 text-accent" />
-        <span className="font-medium">{tool.name}</span>
-        {subtitle && <span className="truncate font-mono text-xs text-dim">{subtitle}</span>}
-        <span className="ml-auto shrink-0">
-          {!tool.done ? (
-            <Badge tone="run" className="!py-0">运行中</Badge>
-          ) : tool.isError ? (
-            <Badge tone="danger" className="!py-0">失败</Badge>
-          ) : (
-            <Badge tone="ok" className="!py-0">完成</Badge>
+        <span
+          className={cn(
+            'shrink-0 text-[9px] leading-none',
+            !tool.done ? 'animate-pulse text-run' : tool.isError ? 'text-danger' : 'text-ok/70',
           )}
+        >
+          ●
         </span>
+        <span className="shrink-0 text-xs font-medium text-ink-2">{tool.name}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-dim">{subtitle}</span>
+        {tool.isError && <Badge tone="danger" className="!py-0 shrink-0">失败</Badge>}
+        <ChevronRight
+          size={12}
+          className={cn('shrink-0 text-faint opacity-0 transition-all group-hover:opacity-100', open && 'rotate-90 opacity-100')}
+        />
       </button>
       {open && (
-        <div className="border-t border-line px-3 py-2">
+        <div className="mt-0.5 mb-1 ml-4 rounded-md border border-line bg-panel/40 px-3 py-2">
           {isEdit && typeof tool.args.old_string === 'string' && typeof tool.args.new_string === 'string' ? (
             <TextDiff oldText={tool.args.old_string} newText={tool.args.new_string} />
           ) : isWrite && typeof tool.args.content === 'string' ? (
@@ -136,7 +151,7 @@ export function ApprovalCard({ item, onDecide }: { item: ApprovalItem; onDecide:
         {status === 'denied' && <Badge tone="danger">已拒绝</Badge>}
       </div>
       {toolName === 'Bash' || typeof input.command === 'string' ? (
-        <pre className="mb-2 max-h-52 overflow-auto rounded-md border border-line bg-bg p-2 font-mono text-xs text-ink-2">
+        <pre className="mb-2 max-h-40 overflow-auto rounded-md border border-line bg-bg p-2 font-mono text-xs text-ink-2">
           {String(input.command ?? '')}
         </pre>
       ) : (toolName === 'Edit' || toolName === 'MultiEdit') &&
@@ -144,11 +159,11 @@ export function ApprovalCard({ item, onDecide }: { item: ApprovalItem; onDecide:
         typeof input.new_string === 'string' ? (
         <div className="mb-2"><TextDiff oldText={input.old_string} newText={input.new_string} /></div>
       ) : toolName === 'Write' && typeof input.content === 'string' ? (
-        <pre className="mb-2 max-h-52 overflow-auto rounded-md border border-line bg-bg p-2 font-mono text-xs text-ink-2">
+        <pre className="mb-2 max-h-40 overflow-auto rounded-md border border-line bg-bg p-2 font-mono text-xs text-ink-2">
           {input.content}
         </pre>
       ) : (
-        <pre className="mb-2 max-h-52 overflow-auto rounded-md border border-line bg-bg p-2 font-mono text-xs text-dim">
+        <pre className="mb-2 max-h-40 overflow-auto rounded-md border border-line bg-bg p-2 font-mono text-xs text-dim">
           {JSON.stringify(input, null, 2)}
         </pre>
       )}
@@ -173,9 +188,9 @@ export interface RenderItem {
   seq: number;
 }
 
-/** 把 session.message 事件折叠成渲染项：文本气泡、合并工具卡、thinking、file/service/turn 分隔。
+/** 把 session.message 事件折叠成渲染项：文本块、单行工具调用、thinking、file/service/turn 分隔。
  *  不处理 approval.requested —— 由调用方自行合并。 */
-export function foldSessionEvents(events: EventRow[]): RenderItem[] {
+export function foldSessionEvents(events: EventRow[], opts?: { cwd?: string }): RenderItem[] {
   const tools = new Map<string, ToolCall>();
   const out: RenderItem[] = [];
   for (const row of events) {
@@ -185,20 +200,24 @@ export function foldSessionEvents(events: EventRow[]): RenderItem[] {
     if (ev.t === 'text') {
       if (ev.thinking) {
         out.push({ key: String(row.seq), seq: row.seq, el: <ThinkingBubble text={ev.text} /> });
-      } else {
+      } else if (env.role === 'user') {
         out.push({
           key: String(row.seq),
           seq: row.seq,
           el: (
-            <div
-              className={cn(
-                'max-w-[85%] rounded-xl border px-3.5 py-2.5',
-                env.role === 'user'
-                  ? 'self-end border-accent/30 bg-accent/10'
-                  : 'self-start border-line bg-panel',
-              )}
-            >
-              {env.role === 'user' ? <div className="whitespace-pre-wrap">{ev.text}</div> : <Markdown text={ev.text} />}
+            <div className="my-1 max-w-[75%] self-end rounded-xl border border-accent/30 bg-accent/10 px-3.5 py-2.5">
+              <div className="whitespace-pre-wrap">{ev.text}</div>
+            </div>
+          ),
+        });
+      } else {
+        // agent 正文：不加气泡框，全宽排版（用满右侧空间，正文才是主角）
+        out.push({
+          key: String(row.seq),
+          seq: row.seq,
+          el: (
+            <div className="my-1 self-stretch px-1">
+              <Markdown text={ev.text} />
             </div>
           ),
         });
@@ -246,27 +265,29 @@ export function foldSessionEvents(events: EventRow[]): RenderItem[] {
       });
     }
   }
-  // 回填工具卡（合并了 start/end 状态）
+  // 回填工具行（合并了 start/end 状态）
   return out.map((it) =>
     it.el === null && it.key.startsWith('tool-')
-      ? { ...it, el: <ToolCard tool={tools.get(it.key.slice(5))!} /> }
+      ? { ...it, el: <ToolRow tool={tools.get(it.key.slice(5))!} cwd={opts?.cwd} /> }
       : it,
   );
 }
 
-/** 把事件流折叠成渲染项：文本气泡、合并的工具卡、审批卡、系统行、回合分隔 */
+/** 把事件流折叠成渲染项：文本块、单行工具调用、审批卡、系统行、回合分隔 */
 export function Timeline({
   events,
   approvals,
   onDecide,
+  cwd,
 }: {
   events: EventRow[];
   approvals: Map<string, ApprovalItem>;
   onDecide: (id: string, b: 'allow' | 'deny') => void;
+  cwd?: string;
 }) {
   const items = useMemo(() => {
     // ① session.message → 折叠的渲染项
-    const rendered = foldSessionEvents(events);
+    const rendered = foldSessionEvents(events, { cwd });
     // ② 审批卡
     const approvalsItems: RenderItem[] = [];
     for (const row of events) {
@@ -278,7 +299,7 @@ export function Timeline({
     }
     // ③ 合并后按 seq 排序
     return [...rendered, ...approvalsItems].sort((a, b) => a.seq - b.seq);
-  }, [events, approvals, onDecide]);
+  }, [events, approvals, onDecide, cwd]);
 
-  return <div className="flex flex-col gap-2.5 px-4 py-4">{items.map((it) => it.el && <div key={it.key} className="flex flex-col">{it.el}</div>)}</div>;
+  return <div className="flex flex-col gap-1 px-4 py-4">{items.map((it) => it.el && <div key={it.key} className="flex flex-col">{it.el}</div>)}</div>;
 }
