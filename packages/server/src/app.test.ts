@@ -39,4 +39,18 @@ describe('createApp', () => {
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual({ error: 'database not available' });
   });
+
+  it('keeps DB-backed machine and resource reads explicit when DATABASE_URL is absent', async () => {
+    const app = await testApp();
+
+    for (const request of [
+      { method: 'GET' as const, url: '/api/resources' },
+      { method: 'GET' as const, url: '/api/machines/all' },
+    ]) {
+      const res = await app.inject(request);
+
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: 'database not available' });
+    }
+  });
 });
