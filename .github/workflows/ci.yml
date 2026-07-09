@@ -5,23 +5,17 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# 只跑同仓 PR（不执行外部 fork 的代码）
+# self-hosted runner 安全：只跑同仓 PR（不执行外部 fork 的代码）
 jobs:
   unit:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, co-host]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Enable pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.9.0 --activate
+      - name: Ensure node/pnpm on PATH
+        run: echo "/root/.nvm/versions/node/v24.15.0/bin" >> "$GITHUB_PATH"
       # 源码禁止裸控制字节（NUL 等）：会让 git 把文件判成二进制，diff/评审全盲。
       # 真需要控制字符时写 \u0000 转义（autoMerge.ts 的 glob 占位符踩过此坑）。
       - name: No raw control bytes in sources
@@ -48,7 +42,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, co-host]
     needs: unit
     env:
       DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
@@ -56,14 +50,8 @@ jobs:
       AUTH_SECRET: ""
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Enable pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.9.0 --activate
+      - name: Ensure node/pnpm on PATH
+        run: echo "/root/.nvm/versions/node/v24.15.0/bin" >> "$GITHUB_PATH"
       - name: Install deps (warm store, offline)
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Apply database schema
