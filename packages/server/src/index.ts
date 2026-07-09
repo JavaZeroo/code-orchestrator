@@ -23,6 +23,8 @@ import { registerTriggerRoutes } from './routes/triggers';
 import { registerWorkRoutes } from './routes/work';
 import { registerWorkflowRoutes } from './routes/workflows';
 import { startAutoMergeReconciler } from './services/autoMerge';
+import { makeContainerDispatch } from './services/spawnContainer';
+import { startQueueReconciler } from './services/taskQueue';
 import { rebuildWorkItems, startWorkProjector } from './services/workProjector';
 import { registerClientHub } from './ws/clientHub';
 import { listMachines, registerRunnerHub } from './ws/runnerHub';
@@ -197,6 +199,8 @@ if (hasDb()) {
     .catch((err) => console.error('[work] backfill failed:', err));
   // Auto-merge 控制回路：能力常开，开关在 Project.autonomy（用户按项目拨）
   startAutoMergeReconciler();
+  // 排队任务派发（design-v2 Q9）：此前从未接线——排队的容器会话永远 pending（含 24h 过期回收）
+  startQueueReconciler(makeContainerDispatch());
 }
 
 // 生产形态：托管 web 构建产物（pnpm --filter @co/web build 后生效）

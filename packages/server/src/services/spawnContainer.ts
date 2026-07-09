@@ -8,6 +8,9 @@
  * 「起 agent 于容器内」(#37) 是唯一注入的 seam：driver 未接时清理回滚 + 明确报错，绝不留半吊子会话。
  */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createId } from '@paralleldrive/cuid2';
 import { eq } from 'drizzle-orm';
 import { getAgentBackend } from '../agents/backends';
@@ -94,6 +97,23 @@ async function activateComponents(
   }
 }
 
+/** 把 co-fetch-ms/msenv 写进容器（base64 避免引号地狱）+ BASH_ENV 钩子文件 */
+async function installShims(machineId: string, containerId: string): Promise<void> {
+  const dir = join(dirname(fileURLToPath(import.meta.url)), 'shims');
+  const files: Array<[string, string]> = [
+    ['co-fetch-ms', readFileSync(join(dir, 'co-fetch-ms.sh'), 'utf8')],
+    ['msenv', readFileSync(join(dir, 'msenv.sh'), 'utf8')],
+  ];
+  const bashenv = '[ -d /opt/co-envs/current/bin ] && case ":$PATH:" in *":/opt/co-envs/current/bin:"*) ;; *) export PATH=/opt/co-envs/current/bin:$PATH ;; esac';
+  const parts = files.map(([name, content]) =>
+    `echo ${Buffer.from(content).toString('base64')} | base64 -d > /usr/local/bin/${name} && chmod +x /usr/local/bin/${name}`);
+  parts.push(`echo ${Buffer.from(bashenv).toString('base64')} | base64 -d > /etc/co-bashenv`);
+  const res = await callRunner(machineId, 'container.exec', { containerId, cmd: parts.join(' && '), timeoutMs: 30_000 }, 40_000);
+  if (res.exitCode !== 0) {
+    throw new Error(`shim install exit ${res.exitCode}: ${(res.stderr || res.stdout).slice(-200)}`);
+  }
+}
+
 async function loadProject(projectId: string) {
   if (!hasDb()) {
     return null;
@@ -176,6 +196,12 @@ export async function spawnContainerSession(
       { host: RUNTIME_HOST, container: RUNTIME_MOUNT, ro: true },
     ];
     if (dataRoot) {
+      // 组件缓存与 MindSpore 三源（design-machines-env ④⑤）：dataRoot 整盘挂载，容器内同路径可见
+      containerEnv.CO_CACHE_DIR = `${dataRoot}/co/cache`;
+      containerEnv.CO_MS_DAILY_BASE = process.env.MS_DAILY_BASE ?? 'https://repo.mindspore.cn/mindspore/mindspore/version';
+      containerEnv.CO_MS_BUILD_API = process.env.MS_BUILD_API ?? 'http://192.168.9.199:8666/api';
+      // 每个非交互 bash 先过 /etc/co-bashenv → msenv 切换的 venv 对后续所有命令生效
+      containerEnv.BASH_ENV = '/etc/co-bashenv';
       mounts.push({ host: dataRoot, container: dataRoot, ro: false });
       // memory 持久化（design-v2 Q5）：后端记忆目录挂到数据盘持久卷——跨容器持久（跨机 git 同步留 v2）
       const backend = getAgentBackend(agent);
@@ -222,6 +248,13 @@ export async function spawnContainerSession(
 
     // 5.5) EnvComponent activate（design-v2 Q7）：项目自带 .co/activate.sh，co 只按版本注入并在容器内执行（零领域代码）
     await activateComponents(machineId, containerId, project.components ?? {}, dataRoot);
+
+    // 5.6) 注入 msenv/co-fetch-ms shim（design-machines-env B2）：wheel 三源拉取 + venv 秒切
+    if (dataRoot) {
+      await installShims(machineId, containerId).catch((err) => {
+        console.warn('[spawnContainer] shim 注入失败（不阻断会话）:', err instanceof Error ? err.message : err);
+      });
+    }
 
     // 6) 起 agent 于容器内（#37）：默认经 session.spawn 的 container 分支（docker exec 挂载的 node+agent.mjs）
 // 手动会话默认全自动放行（与 spawnSession 同规则）：容器即隔离边界，逐工具审批只造成卡壳
