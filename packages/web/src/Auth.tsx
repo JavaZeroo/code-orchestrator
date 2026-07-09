@@ -683,6 +683,22 @@ function MachinesSection() {
           ))}
         </div>
       )}
+      <details className="mt-2.5">
+        <summary className="cursor-pointer text-xs text-accent hover:underline">＋ 接入新机器</summary>
+        <div className="mt-2 flex flex-col gap-1.5 text-xs text-dim">
+          <p>机器 = 跑一个 co runner 守护进程。在目标机上克隆仓库、pnpm install 后：</p>
+          <pre className="overflow-x-auto rounded-md border border-line bg-bg p-2 font-mono text-[11px] leading-relaxed text-ink-2">
+{`SERVER_URL=${location.origin.replace(/^http/, 'ws')}/ws/runner \\
+RUNNER_SHARED_TOKEN=<server .env 里的同名值> \\
+MACHINE_LABELS=npu,docker \\
+pnpm dev:runner    # 生产用 pm2，参考 deploy/ecosystem.config.cjs`}
+          </pre>
+          <p>
+            labels 决定调度（<code className="text-ink-2">dev</code>=交互会话默认机；有加速器的机器由 runner 自动上报 resources）。
+            连上后本列表即出现该机器。
+          </p>
+        </div>
+      </details>
     </div>
   );
 }
