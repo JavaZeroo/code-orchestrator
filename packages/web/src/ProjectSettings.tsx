@@ -448,51 +448,112 @@ function MaterializationStatus({ projectId }: { projectId: string }) {
   );
 }
 
-/* ──────── ProjectSettings 主组件 ──────── */
+/* ──────── 项目设置分区（供全屏设置页复用） ──────── */
 
-export function ProjectSettings({
-  projectId,
-  me,
-  onClose,
-  onOpenRun,
-  onOpenSession,
-}: {
-  projectId: string;
-  me: Me;
-  onClose: () => void;
-  onOpenRun: (runId: string) => void;
-  onOpenSession: (id: string) => void;
-}) {
-  const { data: projects = [] } = useProjects();
-  const project = projects.find((p) => p.id === projectId);
+export function ProjectBasicSection({ project, onOpenSession }: { project: ProjectRow; onOpenSession: (id: string) => void }) {
   const { setProjectId } = useCurrentProject();
-  const [view, setView] = useState<'settings' | 'designer'>('settings');
 
-  const { data: allDefs = [] } = useWorkflows();
+  const saveBasicField = (patch: Partial<ProjectRow>) => {
+    api.patchProject(project.id, patch)
+      .then(() => invalidate('projects'))
+      .catch((e) => toast.error(String(e)));
+  };
+  const setAutonomy = (autonomy: ProjectRow['autonomy']) => {
+    api.patchProject(project.id, { autonomy })
+      .then(() => { toast.success(`自治已设为 ${autonomy}`); invalidate('projects'); })
+      .catch((e) => toast.error(String(e)));
+  };
+
+  return (
+    <Card className="flex flex-col gap-4 p-4">
+      <div className="grid grid-cols-2 gap-3">
+        <Label>
+          名称
+          <Input
+            defaultValue={project.name}
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v && v !== project.name) saveBasicField({ name: v } as Partial<ProjectRow>);
+            }}
+          />
+        </Label>
+        <Label>
+          仓库
+          <Input
+            defaultValue={project.repo}
+            onBlur={(e) => {
+              const v = e.target.value.trim();
+              if (v && v !== project.repo) saveBasicField({ repo: v } as Partial<ProjectRow>);
+            }}
+          />
+        </Label>
+      </div>
+
+      <Label>
+        容器镜像（可选 · design-v2）
+        <Input
+          defaultValue={project.baseImage ?? ''}
+          placeholder="留空=非容器化；如 mindformers:ms2.7.2_..."
+          onBlur={(e) => {
+            const v = e.target.value.trim() || null;
+            if ((v ?? null) !== (project.baseImage ?? null)) {
+              saveBasicField({ baseImage: v } as Partial<ProjectRow>);
+            }
+          }}
+        />
+      </Label>
+
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-semibold tracking-wide text-dim uppercase">自治开关</span>
+        <AutonomySwitch value={project.autonomy} onChange={setAutonomy} />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-dim">
+        {Object.keys(project.models).length > 0 && (
+          <span className="inline-flex items-center gap-1.5">
+            {(['pm', 'dev', 'se'] as const).filter((k) => project.models[k]).map((k) => (
+              <span key={k} className="mono-nums rounded bg-panel-2 px-1.5 py-0.5 text-[10px]">
+                {k}:{project.models[k]}
+              </span>
+            ))}
+          </span>
+        )}
+        <span className="inline-flex items-center gap-1">护栏 {project.guardrails.length} 条</span>
+      </div>
+
+      {project.baseImage && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-3">
+          <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-dim">
+            <span className="mono-nums truncate" title={project.baseImage}>{project.baseImage}</span>
+            {project.accel && <Badge tone="run">{project.accel.kind}</Badge>}
+          </span>
+          <Button variant="secondary" size="sm" onClick={() => { setProjectId(project.id); onOpenSession('new'); }}>
+            <Rocket size={13} /> 启动容器会话
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+export function ProjectMaterialSection({ projectId }: { projectId: string }) {
+  return (
+    <Card className="flex flex-col gap-3 p-4">
+      <MaterializationStatus projectId={projectId} />
+    </Card>
+  );
+}
+
+export function ProjectAutomationSection({ me, project, onOpenRun }: { me: Me; project: ProjectRow; onOpenRun: (runId: string) => void }) {
   const { data: allTriggers = [], isLoading: tLoading } = useTriggers();
   const { data: allRequirements = [], isLoading: rLoading } = useRequirements();
-
-  const defs = allDefs.filter((d) => d.projectId === projectId);
-  const triggers = allTriggers.filter((t) => t.projectId === projectId);
-  const requirements = allRequirements.filter((r) => r.projectId === projectId);
-
+  const triggers = allTriggers.filter((t) => t.projectId === project.id);
+  const requirements = allRequirements.filter((r) => r.projectId === project.id);
   const [polling, setPolling] = useState(false);
-
-  if (!project) {
-    return (
-      <Dialog open onOpenChange={(v) => !v && onClose()}>
-        <DialogContent>
-          <DialogTitle>项目设置</DialogTitle>
-          <p className="text-sm text-dim">项目不存在或已被删除。</p>
-        </DialogContent>
-      </Dialog>
-    );
-  }
 
   const pollNow = () => {
     setPolling(true);
-    api
-      .pollTriggers()
+    api.pollTriggers()
       .then((d) => {
         toast.success(`已轮询 ${d.polled} 个触发器`);
         invalidate('requirements');
@@ -502,201 +563,74 @@ export function ProjectSettings({
       .finally(() => setPolling(false));
   };
 
-  const setAutonomy = (autonomy: typeof project.autonomy) => {
-    api
-      .patchProject(project.id, { autonomy })
-      .then(() => {
-        toast.success(`自治已设为 ${autonomy}`);
-        invalidate('projects');
-      })
-      .catch((e) => toast.error(String(e)));
-  };
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-dim">issue 命中过滤 / cron 到点 → 自动起流水线。seeded/failed 基线是配置域诊断日志。</p>
+        <Button variant="secondary" size="sm" className="shrink-0" disabled={polling} onClick={pollNow}>
+          <RefreshCw size={13} className={cn(polling && 'animate-spin')} /> 立即轮询
+        </Button>
+      </div>
+      <CreateTriggerForm me={me} projectId={project.id} />
 
-  // 基本信息字段（失焦保存）
-  const saveBasicField = (patch: Partial<ProjectRow>) => {
-    api
-      .patchProject(project.id, patch)
-      .then(() => invalidate('projects'))
-      .catch((e) => toast.error(String(e)));
-  };
+      <h3 className="pt-2 text-xs font-semibold text-dim">
+        触发器 {triggers.length > 0 && <span className="text-dim/70">({triggers.length})</span>}
+      </h3>
+      <Card className="overflow-hidden p-0">
+        {tLoading ? (
+          <div className="flex items-center justify-center gap-2 p-6 text-dim"><Spinner /> 加载中…</div>
+        ) : triggers.length === 0 ? (
+          <p className="p-6 text-center text-sm text-dim">还没有触发器。新建一个，让 issue/定时自动驱动流程。</p>
+        ) : (
+          triggers.map((t) => <TriggerRowItem key={t.id} t={t} />)
+        )}
+      </Card>
 
-  // Designer 视图：顶替弹窗 body
-  if (view === 'designer') {
-    return (
-      <Dialog open onOpenChange={(v) => !v && onClose()}>
-        <DialogContent wide className="flex flex-col" style={{ height: '82vh' }}>
-          <DialogTitle>编辑编排</DialogTitle>
-          <div className="flex-1 -mx-5 -mb-5 overflow-hidden rounded-b-xl">
-            <Designer onBack={() => setView('settings')} onSaved={() => { invalidate('workflows'); setView('settings'); }} />
-          </div>
-        </DialogContent>
-      </Dialog>
-    );
-  }
+      <h3 className="pt-2 text-xs font-semibold text-dim">
+        需求列表 {requirements.length > 0 && <span className="text-dim/70">({requirements.length})</span>}
+      </h3>
+      <Card className="overflow-hidden p-0">
+        {rLoading ? (
+          <div className="flex items-center justify-center gap-2 p-6 text-dim"><Spinner /> 加载中…</div>
+        ) : requirements.length === 0 ? (
+          <p className="p-6 text-center text-sm text-dim">暂无命中的需求。</p>
+        ) : (
+          requirements.map((r) => <RequirementRowItem key={r.id} r={r} onOpenRun={onOpenRun} />)
+        )}
+      </Card>
+    </section>
+  );
+}
+
+export function ProjectPipelinesSection({ project, onOpenDesigner }: { project: ProjectRow; onOpenDesigner: () => void }) {
+  const { data: allDefs = [] } = useWorkflows();
+  const defs = allDefs.filter((d) => d.projectId === project.id);
+  const activeDefs = defs.filter((d) => d.archived !== 'yes');
+  const archivedDefs = defs.filter((d) => d.archived === 'yes');
 
   return (
-    <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent wide className="!max-h-[88vh]">
-        <DialogTitle>{project.name} · 项目设置</DialogTitle>
-        <div className="flex flex-col gap-6" style={{ minHeight: '70vh' }}>
-          {/* ── 基本信息 ── */}
-          <Card className="flex flex-col gap-4 p-4">
-            <h2 className="text-sm font-semibold text-ink-2">基本信息</h2>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Label>
-                名称
-                <Input
-                  defaultValue={project.name}
-                  onBlur={(e) => {
-                    const v = e.target.value.trim();
-                    if (v && v !== project.name) saveBasicField({ name: v } as Partial<ProjectRow>);
-                  }}
-                />
-              </Label>
-              <Label>
-                仓库
-                <Input
-                  defaultValue={project.repo}
-                  onBlur={(e) => {
-                    const v = e.target.value.trim();
-                    if (v && v !== project.repo) saveBasicField({ repo: v } as Partial<ProjectRow>);
-                  }}
-                />
-              </Label>
-            </div>
-
-            <Label>
-              容器镜像（可选 · design-v2）
-              <Input
-                defaultValue={project.baseImage ?? ''}
-                placeholder="留空=非容器化；如 mindformers:ms2.7.2_..."
-                onBlur={(e) => {
-                  const v = e.target.value.trim() || null;
-                  if ((v ?? null) !== (project.baseImage ?? null)) {
-                    saveBasicField({ baseImage: v } as Partial<ProjectRow>);
-                  }
-                }}
-              />
-            </Label>
-
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold tracking-wide text-dim uppercase">自治开关</span>
-              <AutonomySwitch value={project.autonomy} onChange={setAutonomy} />
-            </div>
-
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-dim">
-              {Object.keys(project.models).length > 0 && (
-                <span className="inline-flex items-center gap-1.5">
-                  {(['pm', 'dev', 'se'] as const).filter((k) => project.models[k]).map((k) => (
-                    <span key={k} className="mono-nums rounded bg-panel-2 px-1.5 py-0.5 text-[10px]">
-                      {k}:{project.models[k]}
-                    </span>
-                  ))}
-                </span>
-              )}
-              <span className="inline-flex items-center gap-1">
-                护栏 {project.guardrails.length} 条
-              </span>
-            </div>
-
-            {project.baseImage && (
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-3">
-                <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] text-dim">
-                  <span className="mono-nums truncate" title={project.baseImage}>{project.baseImage}</span>
-                  {project.accel && <Badge tone="run">{project.accel.kind}</Badge>}
-                </span>
-                <Button variant="secondary" size="sm" onClick={() => { setProjectId(project.id); onOpenSession('new'); }}>
-                  <Rocket size={13} /> 启动容器会话
-                </Button>
-              </div>
-            )}
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-dim">项目的自动化流程。Composer「走流水线」与 issue/定时触发器都从这里取定义；星标为默认。</p>
+        <Button variant="default" size="sm" className="shrink-0" onClick={onOpenDesigner}>
+          <MessageCircle size={14} /> 对话编排新流水线
+        </Button>
+      </div>
+      <div className="flex flex-col gap-2">
+        {activeDefs.length === 0 && archivedDefs.length === 0 ? (
+          <Card className="flex flex-col items-center gap-2 py-8 text-center">
+            <WorkflowIcon size={24} className="text-faint" />
+            <p className="text-sm text-dim">还没有流水线 —— 点「对话编排」，跟 agent 说你要什么流程（存而不跑）。</p>
           </Card>
-
-          {/* ── 机器物化状态 ── */}
-          <Card className="flex flex-col gap-3 p-4">
-            <h2 className="text-sm font-semibold text-ink-2">机器物化状态</h2>
-            <MaterializationStatus projectId={projectId} />
-          </Card>
-
-          {/* ── 自动化 ── */}
-          <section className="flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-ink-2">自动化</h2>
-              <Button variant="secondary" size="sm" className="shrink-0" disabled={polling} onClick={pollNow}>
-                <RefreshCw size={13} className={cn(polling && 'animate-spin')} /> 立即轮询
-              </Button>
-            </div>
-            <p className="text-xs text-dim">
-              issue 满足条件 → 自动起流程。
-              <span className="text-ink-2"> seeded/failed 基线在这里查看</span>——它们是配置域诊断日志。
-            </p>
-            <CreateTriggerForm me={me} projectId={project.id} />
-
-            <h3 className="pt-2 text-xs font-semibold text-dim">
-              触发器 {triggers.length > 0 && <span className="text-dim/70">({triggers.length})</span>}
-            </h3>
-            <Card className="overflow-hidden p-0">
-              {tLoading ? (
-                <div className="flex items-center justify-center gap-2 p-6 text-dim">
-                  <Spinner /> 加载中…
-                </div>
-              ) : triggers.length === 0 ? (
-                <p className="p-6 text-center text-sm text-dim">还没有触发器。新建一个，让 issue 自动驱动流程。</p>
-              ) : (
-                triggers.map((t) => <TriggerRowItem key={t.id} t={t} />)
-              )}
-            </Card>
-
-            <h3 className="pt-2 text-xs font-semibold text-dim">
-              需求列表 {requirements.length > 0 && <span className="text-dim/70">({requirements.length})</span>}
-            </h3>
-            <Card className="overflow-hidden p-0">
-              {rLoading ? (
-                <div className="flex items-center justify-center gap-2 p-6 text-dim">
-                  <Spinner /> 加载中…
-                </div>
-              ) : requirements.length === 0 ? (
-                <p className="p-6 text-center text-sm text-dim">暂无命中的需求。</p>
-              ) : (
-                requirements.map((r) => <RequirementRowItem key={r.id} r={r} onOpenRun={onOpenRun} />)
-              )}
-            </Card>
-          </section>
-
-          {/* ── 编排 ── */}
-          <section className="flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-ink-2">流水线</h2>
-              <Button variant="default" size="sm" className="shrink-0" onClick={() => setView('designer')}>
-                <MessageCircle size={14} /> 对话编排新流水线
-              </Button>
-            </div>
-            <p className="text-xs text-dim">项目的自动化流程。Composer「走流水线」与 issue 触发器都从这里取定义；星标为默认。</p>
-            {(() => {
-              const activeDefs = defs.filter((d) => d.archived !== 'yes');
-              const archivedDefs = defs.filter((d) => d.archived === 'yes');
-              return (
-                <div className="flex flex-col gap-2">
-                  {activeDefs.length === 0 && archivedDefs.length === 0 ? (
-                    <Card className="flex flex-col items-center gap-2 py-8 text-center">
-                      <WorkflowIcon size={24} className="text-faint" />
-                      <p className="text-sm text-dim">还没有流水线 —— 点「对话编排」，跟 agent 说你要什么流程（存而不跑）。</p>
-                    </Card>
-                  ) : (
-                    <>
-                      {activeDefs.map((d) => (
-                        <WorkflowDefCard key={d.id} def={d} project={project} />
-                      ))}
-                      {archivedDefs.length > 0 && <ArchivedDefsSection defs={archivedDefs} project={project} />}
-                    </>
-                  )}
-                </div>
-              );
-            })()}
-          </section>
-        </div>
-      </DialogContent>
-    </Dialog>
+        ) : (
+          <>
+            {activeDefs.map((d) => (
+              <WorkflowDefCard key={d.id} def={d} project={project} />
+            ))}
+            {archivedDefs.length > 0 && <ArchivedDefsSection defs={archivedDefs} project={project} />}
+          </>
+        )}
+      </div>
+    </section>
   );
 }

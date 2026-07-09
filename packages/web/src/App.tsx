@@ -1,11 +1,11 @@
 import { FolderGit2, type LucideIcon, LogOut, MessageSquareText, Settings } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { authApi, LoginPage, SettingsModal, useMe, type Me } from './Auth';
+import { authApi, LoginPage, useMe, type Me } from './Auth';
 import { CreateProjectDialog } from './CreateProjectDialog';
 import { NewSession } from './NewSession';
 import { NotificationBell } from './Notifications';
-import { ProjectSettings } from './ProjectSettings';
 import { RunView } from './RunView';
+import { SettingsPage, type SettingsSection } from './Settings';
 import { SessionView } from './SessionView';
 import { Button } from './components/ui/button';
 import { Spinner, StatusDot } from './components/ui/primitives';
@@ -456,8 +456,7 @@ function HomeScreen({
 function AppShell({ me, refresh }: { me: Me; refresh: () => void }) {
   const [tab, setTab] = useState<Tab>('home');
   const [selected, setSelected] = useState<Selected>('new');
-  const [showSettings, setShowSettings] = useState(false);
-  const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
   const { projectId, setProjectId } = useCurrentProject();
 
@@ -483,6 +482,7 @@ function AppShell({ me, refresh }: { me: Me; refresh: () => void }) {
   // 铃铛跳转：切项目 + 切 tab + 选线程
   const handleBellJump = (item: AttentionItem) => {
     setProjectId(item.projectId);
+    setSettingsSection(null);
     setTab('home');
     if (item.kind === 'session') {
       setSelected({ session: item.id });
@@ -500,7 +500,7 @@ function AppShell({ me, refresh }: { me: Me; refresh: () => void }) {
 
   return (
     <div className="flex h-full overflow-hidden">
-      <Sidebar tab={tab} setTab={setTab} me={me} onSettings={() => setShowSettings(true)} waitingCounts={waitingCounts} onProjectSettings={() => setSettingsProjectId(projectId)} onNewProject={() => setShowNewProject(true)} />
+      <Sidebar tab={tab} setTab={setTab} me={me} onSettings={() => setSettingsSection('me-tokens')} waitingCounts={waitingCounts} onProjectSettings={() => setSettingsSection('proj-basic')} onNewProject={() => setShowNewProject(true)} />
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-13 shrink-0 items-center gap-3 border-b border-line bg-bg-2/40 px-5 py-3 backdrop-blur-sm">
           <active.icon size={17} className="text-accent" />
@@ -511,21 +511,23 @@ function AppShell({ me, refresh }: { me: Me; refresh: () => void }) {
           </div>
         </header>
         <main className="flex min-h-0 flex-1 overflow-hidden">
-          <div key={tab} className="rise flex min-h-0 flex-1 overflow-hidden">
-            {tab === 'home' && <HomeScreen selected={selected} setSelected={setSelected} />}
-          </div>
+          {settingsSection ? (
+            <SettingsPage
+              me={me}
+              section={settingsSection}
+              onSectionChange={setSettingsSection}
+              onBack={() => setSettingsSection(null)}
+              onChanged={refresh}
+              onOpenRun={(runId: string) => { setSettingsSection(null); setSelected({ run: runId }); }}
+              onOpenSession={(id: string) => { setSettingsSection(null); setSelected(id === 'new' ? 'new' : { session: id }); }}
+            />
+          ) : (
+            <div key={tab} className="rise flex min-h-0 flex-1 overflow-hidden">
+              {tab === 'home' && <HomeScreen selected={selected} setSelected={setSelected} />}
+            </div>
+          )}
         </main>
       </div>
-      {showSettings && <SettingsModal me={me} onClose={() => setShowSettings(false)} onChanged={refresh} />}
-      {settingsProjectId && (
-        <ProjectSettings
-          projectId={settingsProjectId}
-          me={me}
-          onClose={() => setSettingsProjectId(null)}
-          onOpenRun={(runId) => { setSettingsProjectId(null); setTab('home'); setSelected({ run: runId }); }}
-          onOpenSession={(id) => { setSettingsProjectId(null); setTab('home'); setSelected(id === 'new' ? 'new' : { session: id }); }}
-        />
-      )}
       <CreateProjectDialog open={showNewProject} onClose={() => setShowNewProject(false)} onDone={() => invalidate('projects')} />
     </div>
   );

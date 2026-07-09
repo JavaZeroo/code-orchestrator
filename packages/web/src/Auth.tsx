@@ -747,7 +747,7 @@ function MachineRow({ m }: { m: AllMachineRow }) {
   );
 }
 
-function MachinesSection() {
+export function MachinesSection() {
   const { data: machines = [], isLoading } = useAllMachines();
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
@@ -802,34 +802,35 @@ function MachinesSection() {
   );
 }
 
-export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () => void; onChanged: () => void }) {
-  const { data: providers = [], refetch: refreshProviders } = useLlmProviders();
+/* ──────── 设置分区（供全屏设置页复用） ──────── */
 
+export function TokensSection({ me, onChanged }: { me: Me; onChanged: () => void }) {
+  return (
+    <div className="flex flex-col gap-3">
+      {FORGES.map((f) => (
+        <ForgeTokenRow key={f.key} forge={f} binding={me.forges[f.key] ?? { bound: false }} onChanged={onChanged} />
+      ))}
+    </div>
+  );
+}
+
+export function NotifySection({ me, onChanged }: { me: Me; onChanged: () => void }) {
+  return <LarkWebhookRow binding={me.lark ?? { bound: false, enabled: false }} onChanged={onChanged} />;
+}
+
+export function ProvidersSection({ me, onChanged }: { me: Me; onChanged: () => void }) {
+  const { data: providers = [], refetch } = useLlmProviders();
   const onAnyChanged = () => {
     onChanged();
-    refreshProviders();
+    void refetch();
   };
-
   return (
-    <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent>
-        <DialogTitle>设置</DialogTitle>
-        <p className="mb-4 text-xs text-dim">{me.user.email}</p>
-        <div className="flex flex-col gap-3">
-          {FORGES.map((f) => (
-            <ForgeTokenRow key={f.key} forge={f} binding={me.forges[f.key] ?? { bound: false }} onChanged={onAnyChanged} />
-          ))}
-          <MachinesSection />
-          <h4 className="mt-2 text-xs font-medium text-dim">模型服务商</h4>
-          {providers.map((p) => (
-            <ProviderCard key={p.name} provider={p} me={me} onChanged={onAnyChanged} />
-          ))}
-          <NewProviderForm onChanged={refreshProviders} />
-          <h4 className="mt-2 text-xs font-medium text-dim">飞书通知</h4>
-          <LarkWebhookRow binding={me.lark ?? { bound: false, enabled: false }} onChanged={onChanged} />
-        </div>
-      </DialogContent>
-    </Dialog>
+    <div className="flex flex-col gap-3">
+      {providers.map((p) => (
+        <ProviderCard key={p.name} provider={p} me={me} onChanged={onAnyChanged} />
+      ))}
+      <NewProviderForm onChanged={() => void refetch()} />
+    </div>
   );
 }
 
