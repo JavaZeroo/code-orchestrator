@@ -260,6 +260,8 @@ export const machines = pgTable('machines', {
   dataRoot: text('data_root'),
   /** 加速器清单（design-v2 Q4）：[{kind,index,model?}]。由 accelerator 适配器 detect 上报（M2），替代死字段 npu */
   resources: jsonb('resources').$type<Array<{ kind: string; index: number; model?: string }>>().notNull().default([]),
+  /** 每机接入凭证：UI「添加机器」生成，runner 以它为 Bearer token 连入并绑定本行（替代共享 token 抄写） */
+  enrollToken: text('enroll_token'),
   lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
 });
 
@@ -406,6 +408,10 @@ export const forgeRefs = pgTable('forge_refs', {
  *  最初愿景的入口：需求（issue）进来 → 分析 → 拆解 → 设计 → 实现 → PR → 门禁回流。 */
 export const requirementTriggers = pgTable('requirement_triggers', {
   id: text('id').primaryKey(),
+  /** 触发方式：issue 轮询（默认）或 cron 定时（schedule 字段生效，如每日冒烟） */
+  kind: text('kind', { enum: ['issue', 'schedule'] }).notNull().default('issue'),
+  /** cron 表达式（kind=schedule 时必填），5 段标准格式，按 server 本地时区 */
+  schedule: text('schedule'),
   /** 归属项目（可空兼容存量）：起 run 时继承项目的 vars/模型/自治等策略 */
   projectId: text('project_id').references(() => projects.id),
   forge: text('forge', { enum: ['gitcode', 'github'] }).notNull(),

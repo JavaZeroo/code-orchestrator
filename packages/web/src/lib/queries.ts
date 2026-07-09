@@ -13,6 +13,9 @@ export const useSessions = () =>
 export const useMachines = () =>
   useQuery({ queryKey: ['machines'], queryFn: api.machines, refetchInterval: 15_000 });
 
+export const useAllMachines = () =>
+  useQuery({ queryKey: ['machines-all'], queryFn: api.allMachines, refetchInterval: 15_000 });
+
 export const useWorkflows = () =>
   useQuery({ queryKey: ['workflows'], queryFn: api.workflows, refetchInterval: 10_000 });
 
@@ -42,5 +45,8 @@ export const useProjectMaterializations = (projectId?: string | null) =>
     queryFn: () => (projectId ? api.projectMaterializations(projectId) : Promise.resolve([])),
     enabled: !!projectId,
   });
+
+export const useResources = () =>
+  useQuery({ queryKey: ['resources'], queryFn: api.resources, refetchInterval: 15_000 });
 
 export const invalidate = (key: string) => void queryClient.invalidateQueries({ queryKey: [key] });

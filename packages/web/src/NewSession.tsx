@@ -5,7 +5,7 @@ import { api, type Effort, type SessionAgent } from './api';
 import { Input, Textarea } from './components/ui/primitives';
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { SelectContent, SelectGroup, SelectItem, SelectLabel } from './components/ui/select';
-import { useLlmProviders, useMachines, useProjects } from './lib/queries';
+import { useLlmProviders, useMachines, useProjects, useResources, useWorkflows } from './lib/queries';
 import { useProjectScope } from './lib/project';
 import { cn } from './lib/utils';
 
@@ -92,24 +92,37 @@ function ChipToggle({
 }
 
 // ─── NewSession ───────────────────────────────────────────────────────────────
-/** ChatGPT 式居中 Composer —— 输入框 + chips + Enter 发送，机器与目录全自动就位 */
-export function NewSession({ onCreated }: { onCreated: (sessionId: string) => void }) {
+/** ChatGPT 式居中 Composer —— 输入框 + chips + Enter 发送，机器与目录全自动就位。
+ *  两种去向：直接干（会话）/ 走流水线（真建 issue → 项目流水线开跑，与 forge intake 入口合一）。 */
+export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId: string) => void; onRunStarted?: (runId: string) => void }) {
   const { data: machines = [] } = useMachines();
   const { data: projects = [] } = useProjects();
   const { data: providers = [] } = useLlmProviders();
+  const { data: allDefs = [] } = useWorkflows();
+  const { data: resources } = useResources();
   const { projectId } = useProjectScope();
 
   const project = projects.find((p) => p.id === projectId);
+  const pipelines = allDefs.filter((d) => d.projectId === projectId && d.archived !== 'yes');
 
   const [prompt, setPrompt] = useState('');
   const [agent, setAgent] = useState<SessionAgent>('claude');
   const [model, setModel] = useState(DEFAULT_MODEL_VALUE);
   const [effort, setEffort] = useState('default');
   const [container, setContainer] = useState(true);
+  const [pipeline, setPipeline] = useState(false);
+  const [pipelineDefId, setPipelineDefId] = useState('');
   const [advancedMachine, setAdvancedMachine] = useState('');
   const [advancedCwd, setAdvancedCwd] = useState('');
   const [busy, setBusy] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // 流水线默认选项目默认；切项目重置
+  useEffect(() => {
+    setPipeline(false);
+    setPipelineDefId('');
+  }, [projectId]);
+  const effectiveDefId = pipelineDefId || project?.defaultWorkflow || pipelines[0]?.id || '';
 
   const advancedRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -163,6 +176,25 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
     const text = prompt.trim();
     if (!text || busy) return;
     setBusy(true);
+
+    // 走流水线：真建 issue → 默认流水线开跑 → 跳 run 时间线（一键直达零确认）
+    if (pipeline && onRunStarted) {
+      if (!projectId || !effectiveDefId) {
+        toast.error('项目还没有流水线——去 项目设置→流水线 创建');
+        setBusy(false);
+        return;
+      }
+      api.dispatchPipeline(projectId, { text, defId: effectiveDefId })
+        .then((r) => {
+          toast.success(`已建 issue #${r.issueNumber}，流水线开跑`);
+          onRunStarted(r.runId);
+        })
+        .catch((e) => {
+          toast.error(String(e instanceof Error ? e.message : e));
+          setBusy(false);
+        });
+      return;
+    }
 
     const eff = effort === 'default' ? undefined : (effort as Effort);
     const body: Parameters<typeof api.spawn>[0] = {
@@ -227,7 +259,7 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
                 onChange={handleTextareaInput}
                 onKeyDown={handleKeyDown}
                 rows={2}
-                placeholder="描述任务，Enter 发送"
+                placeholder={pipeline ? '描述需求，发送后将建 issue 并启动流水线' : '描述你要做的，Enter 发送'}
                 disabled={busy}
                 className="min-h-[64px] resize-none overflow-hidden rounded-xl py-3.5 pl-4 pr-14 text-sm leading-relaxed shadow-[var(--shadow-panel)]"
               />
@@ -254,6 +286,29 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
                 <ChipToggle value={container} onChange={setContainer}>
                   容器
                 </ChipToggle>
+              )}
+              {/* 走流水线：真建 issue → 项目流水线开跑（与 issue 自动触发同一条路） */}
+              {onRunStarted && (
+                pipelines.length > 0 ? (
+                  <ChipToggle value={pipeline} onChange={setPipeline}>
+                    走流水线
+                  </ChipToggle>
+                ) : (
+                  <span
+                    className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-full border border-line/40 bg-bg-2/40 px-2.5 py-0.5 text-[11px] text-faint"
+                    title="项目还没有流水线——去 项目设置→流水线 创建"
+                  >
+                    走流水线
+                  </span>
+                )
+              )}
+              {/* 流水线选择：开了走流水线且有多条时出现 */}
+              {pipeline && pipelines.length > 1 && (
+                <ChipSelect
+                  value={effectiveDefId}
+                  onValueChange={setPipelineDefId}
+                  options={pipelines.map((d) => ({ value: d.id, label: d.name.slice(0, 24) }))}
+                />
               )}
               {/* 高级 ▾ */}
               <div className="relative" ref={advancedRef}>
@@ -309,6 +364,24 @@ export function NewSession({ onCreated }: { onCreated: (sessionId: string) => vo
                 )}
               </div>
             </div>
+
+            {/* 资源一览：谁有空闲加速器、排队多少——免 ssh 找机器 */}
+            {resources && (resources.machines.some((m) => m.accels.length > 0) || resources.queued > 0) && (
+              <div className="mono-nums mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-faint">
+                {resources.machines.filter((m) => m.accels.length > 0).map((m) => {
+                  const total = m.accels.reduce((n, a) => n + a.total, 0);
+                  const free = Math.max(0, total - m.used);
+                  const kinds = m.accels.map((a) => a.kind).join('/');
+                  return (
+                    <span key={m.id} className="inline-flex items-center gap-1.5">
+                      <span className={free > 0 ? 'size-1.5 rounded-full bg-ok' : 'size-1.5 rounded-full bg-warn'} />
+                      {m.id} · {kinds} 空闲 {free}/{total}
+                    </span>
+                  );
+                })}
+                {resources.queued > 0 && <span className="text-warn">排队 {resources.queued}</span>}
+              </div>
+            )}
           </>
         )}
       </div>

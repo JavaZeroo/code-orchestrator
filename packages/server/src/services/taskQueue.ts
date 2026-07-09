@@ -24,6 +24,7 @@ export interface QueuedTask {
   kind: string | null;
   payload: Record<string, unknown>;
   priority: number;
+  enqueuedAt: Date;
 }
 
 /** dispatch 结果：'started'=已起；'no-capacity'=当前无机（保持 pending，本轮停）；'failed'=派发失败 */
@@ -53,7 +54,7 @@ async function listPending(): Promise<QueuedTask[]> {
     .from(schema.taskQueue)
     .where(eq(schema.taskQueue.status, 'pending'))
     .orderBy(desc(schema.taskQueue.priority), asc(schema.taskQueue.enqueuedAt));
-  return rows.map((r) => ({ id: r.id, projectId: r.projectId, kind: r.kind, payload: r.payload, priority: r.priority }));
+  return rows.map((r) => ({ id: r.id, projectId: r.projectId, kind: r.kind, payload: r.payload, priority: r.priority, enqueuedAt: r.enqueuedAt }));
 }
 
 async function setStatus(id: string, status: 'pending' | 'scheduled' | 'running' | 'done' | 'failed'): Promise<void> {
@@ -79,7 +80,19 @@ export function startQueueReconciler(dispatch: (task: QueuedTask) => Promise<Dis
   const tick = async () => {
     try {
       const pending = await listPending();
+      // 过期回收：排队超 24h 的任务多半已失去意义（用户早走了/需求变了），标 failed 防止永久占着「排队中」
+      const MAX_PENDING_AGE_MS = 24 * 3600_000;
+      const now = Date.now();
+      const fresh: typeof pending = [];
       for (const task of pending) {
+        if (now - new Date(task.enqueuedAt).getTime() > MAX_PENDING_AGE_MS) {
+          console.warn(`[queue] 任务 ${task.id} 排队超 24h，标记过期`);
+          await setStatus(task.id, 'failed');
+        } else {
+          fresh.push(task);
+        }
+      }
+      for (const task of fresh) {
         const res = await dispatch(task);
         if (res === 'no-capacity') {
           break; // 机器满，保持其余 pending，下轮再试

@@ -63,6 +63,111 @@ app.get('/health', async () => ({
 
 app.get('/api/machines', async () => ({ machines: listMachines() }));
 
+// —— 添加机器闭环：UI 建行→发每机凭证→runner 携凭证连入绑定（runnerHub 校验） ——
+app.post('/api/machines', async (req, reply) => {
+  if (!hasDb()) return reply.code(503).send({ error: 'database not available' });
+  const z = await import('zod');
+  const body = z.object({
+    name: z.string().trim().min(1).max(64),
+    labels: z.array(z.string().trim().min(1)).default([]),
+  }).parse(req.body);
+  const { getDb, schema } = await import('./db/index');
+  const { createId } = await import('@paralleldrive/cuid2');
+  const { randomBytes } = await import('node:crypto');
+  const id = body.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || createId();
+  const enrollToken = `co-mk-${randomBytes(24).toString('base64url')}`;
+  try {
+    await getDb().insert(schema.machines).values({ id, name: body.name, labels: body.labels, status: 'offline', enrollToken });
+  } catch {
+    return reply.code(409).send({ error: `机器 id 已存在: ${id}` });
+  }
+  void reply.code(201);
+  return { id, enrollToken };
+});
+
+app.patch('/api/machines/:id', async (req, reply) => {
+  if (!hasDb()) return reply.code(503).send({ error: 'database not available' });
+  const z = await import('zod');
+  const body = z.object({
+    name: z.string().trim().min(1).max(64).optional(),
+    labels: z.array(z.string().trim().min(1)).optional(),
+  }).parse(req.body);
+  if (Object.keys(body).length === 0) return reply.code(400).send({ error: '无更新字段' });
+  const { getDb, schema } = await import('./db/index');
+  const { eq } = await import('drizzle-orm');
+  const id = (req.params as { id: string }).id;
+  await getDb().update(schema.machines).set(body).where(eq(schema.machines.id, id));
+  // 在线机同步内存（调度真源）
+  const conn = listMachines().find((m) => m.id === id);
+  if (conn) Object.assign(conn, body);
+  return { ok: true };
+});
+
+app.delete('/api/machines/:id', async (req, reply) => {
+  if (!hasDb()) return reply.code(503).send({ error: 'database not available' });
+  const id = (req.params as { id: string }).id;
+  if (listMachines().some((m) => m.id === id)) {
+    return reply.code(409).send({ error: '机器在线，不能删除（先停掉该机 runner）' });
+  }
+  const { getDb, schema } = await import('./db/index');
+  const { eq } = await import('drizzle-orm');
+  await getDb().delete(schema.machines).where(eq(schema.machines.id, id));
+  return { ok: true };
+});
+
+app.post('/api/machines/:id/token', async (req, reply) => {
+  if (!hasDb()) return reply.code(503).send({ error: 'database not available' });
+  const { getDb, schema } = await import('./db/index');
+  const { eq } = await import('drizzle-orm');
+  const { randomBytes } = await import('node:crypto');
+  const id = (req.params as { id: string }).id;
+  const enrollToken = `co-mk-${randomBytes(24).toString('base64url')}`;
+  await getDb().update(schema.machines).set({ enrollToken }).where(eq(schema.machines.id, id));
+  return { enrollToken };
+});
+
+// 资源面板：在线机加速器占用（总数 vs 活跃预留）+ 排队任务数——「哪台机有空闲 NPU」一眼可见
+app.get('/api/resources', async (req, reply) => {
+  if (!hasDb()) return reply.code(503).send({ error: 'database not available' });
+  const { getDb, schema } = await import('./db/index');
+  const { inArray, eq: eqOp } = await import('drizzle-orm');
+  const online = listMachines();
+  const db = getDb();
+  const reservations = online.length
+    ? await db
+        .select({ machineId: schema.resourceReservations.machineId })
+        .from(schema.resourceReservations)
+        .where(inArray(schema.resourceReservations.status, ['reserved', 'active']))
+    : [];
+  const usedBy = new Map<string, number>();
+  for (const r of reservations) usedBy.set(r.machineId, (usedBy.get(r.machineId) ?? 0) + 1);
+  const queued = await db
+    .select({ id: schema.taskQueue.id })
+    .from(schema.taskQueue)
+    .where(eqOp(schema.taskQueue.status, 'pending'));
+  return {
+    machines: online.map((m) => {
+      const byKind = new Map<string, number>();
+      for (const r of m.resources ?? []) byKind.set(r.kind, (byKind.get(r.kind) ?? 0) + 1);
+      return {
+        id: m.id,
+        labels: m.labels,
+        accels: [...byKind.entries()].map(([kind, total]) => ({ kind, total })),
+        used: usedBy.get(m.id) ?? 0,
+      };
+    }),
+    queued: queued.length,
+  };
+});
+
+// 全量机器列表（含离线机）—— 供设置页机器管理。与 /api/machines 并存，语义不同。
+app.get('/api/machines/all', async (req, reply) => {
+  if (!hasDb()) return reply.code(503).send({ error: 'database not available' });
+  const { getDb, schema } = await import('./db/index');
+  const rows = await getDb().select().from(schema.machines);
+  return { machines: rows };
+});
+
 await registerRunnerHub(app);
 registerClientHub(app, authEnabled);
 await registerSessionRoutes(app);

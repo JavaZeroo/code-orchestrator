@@ -1,12 +1,12 @@
 import { ExternalLink, GitPullRequest, ShieldCheck, Workflow } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { api, type LlmProviderRow } from './api';
+import { api, type AllMachineRow, type LlmProviderRow } from './api';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
 import { Button } from './components/ui/button';
-import { Badge, Input } from './components/ui/primitives';
-import { useLlmProviders } from './lib/queries';
-import { cn } from './lib/utils';
+import { Badge, Input, StatusDot } from './components/ui/primitives';
+import { invalidate, useAllMachines, useLlmProviders } from './lib/queries';
+import { cn, relTime } from './lib/utils';
 
 export interface ForgeBinding {
   bound: boolean;
@@ -656,6 +656,152 @@ function LarkWebhookRow({
   );
 }
 
+function installCommand(m: { id: string; labels: string[]; enrollToken: string | null }): string {
+  const ws = location.origin.replace(/^http/, 'ws');
+  return [
+    `git clone https://github.com/JavaZeroo/code-orchestrator.git && cd code-orchestrator && pnpm install`,
+    `SERVER_URL=${ws}/ws/runner \\`,
+    `RUNNER_SHARED_TOKEN=${m.enrollToken ?? '<接入凭证>'} \\`,
+    `MACHINE_ID=${m.id} \\`,
+    `MACHINE_LABELS=${m.labels.join(',') || 'dev'} \\`,
+    `pnpm dev:runner    # 生产用 pm2 托管，参考 deploy/ecosystem.config.cjs`,
+  ].join('\n');
+}
+
+function MachineRow({ m }: { m: AllMachineRow }) {
+  const [showCmd, setShowCmd] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [labelsText, setLabelsText] = useState(m.labels.join(','));
+
+  const saveLabels = () => {
+    setEditing(false);
+    const labels = labelsText.split(',').map((x) => x.trim()).filter(Boolean);
+    if (labels.join(',') === m.labels.join(',')) return;
+    api.patchMachine(m.id, { labels })
+      .then(() => { toast.success('labels 已更新（在线机下次注册全量生效）'); invalidate('machines-all'); })
+      .catch((e) => toast.error(String(e)));
+  };
+  const remove = () => {
+    if (!confirm(`删除机器 ${m.name}？（须先停掉该机 runner）`)) return;
+    api.deleteMachine(m.id)
+      .then(() => { toast.success('已删除'); invalidate('machines-all'); })
+      .catch((e) => toast.error(String(e instanceof Error ? e.message : e)));
+  };
+  const regen = () => {
+    api.regenMachineToken(m.id)
+      .then(() => { toast.success('已重发凭证'); invalidate('machines-all'); setShowCmd(true); })
+      .catch((e) => toast.error(String(e)));
+  };
+  const pending = m.status === 'offline' && !m.lastActiveAt;
+
+  return (
+    <div className="rounded-md bg-bg-2/40 px-2.5 py-1.5">
+      <div className="flex items-center gap-2">
+        <StatusDot tone={m.status === 'online' ? 'ok' : pending ? 'human' : 'neutral'} live={m.status === 'online'} />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink-2">{m.name}</span>
+        {editing ? (
+          <input
+            autoFocus
+            value={labelsText}
+            onChange={(e) => setLabelsText(e.target.value)}
+            onBlur={saveLabels}
+            onKeyDown={(e) => { if (e.key === 'Enter') saveLabels(); if (e.key === 'Escape') setEditing(false); }}
+            className="w-40 rounded border border-accent bg-bg px-1.5 py-0.5 font-mono text-[11px] text-ink outline-none"
+            placeholder="dev,npu,docker"
+          />
+        ) : (
+          <button className="flex items-center gap-1" title="点击编辑 labels" onClick={() => { setLabelsText(m.labels.join(',')); setEditing(true); }}>
+            {m.labels.length > 0 ? m.labels.map((l) => <Badge key={l} tone="neutral">{l}</Badge>) : <span className="text-[11px] text-faint underline decoration-dotted">labels</span>}
+          </button>
+        )}
+        <span className="shrink-0 text-[11px] text-faint">
+          {m.status === 'online' ? '在线' : pending ? '待接入' : '离线'}
+          {m.lastActiveAt && ` · ${relTime(m.lastActiveAt)}`}
+        </span>
+        {m.status !== 'online' && (
+          <>
+            <button className="shrink-0 text-[11px] text-accent hover:underline" onClick={() => (m.enrollToken ? setShowCmd(!showCmd) : regen())}>
+              接入命令
+            </button>
+            <button className="shrink-0 text-[11px] text-danger/80 hover:underline" onClick={remove}>
+              删除
+            </button>
+          </>
+        )}
+      </div>
+      {showCmd && (
+        <div className="mt-2">
+          <pre className="overflow-x-auto rounded-md border border-line bg-bg p-2 font-mono text-[11px] leading-relaxed text-ink-2">{installCommand(m)}</pre>
+          <div className="mt-1 flex items-center gap-3">
+            <button className="text-[11px] text-accent hover:underline" onClick={() => { void navigator.clipboard.writeText(installCommand(m)); toast.success('已复制'); }}>
+              复制
+            </button>
+            <button className="text-[11px] text-dim hover:underline" onClick={regen} title="旧凭证立即失效">
+              重发凭证
+            </button>
+            <span className="text-[10px] text-faint">目标机需 git / node ≥20 / pnpm；跑起来后本行变为在线</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MachinesSection() {
+  const { data: machines = [], isLoading } = useAllMachines();
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState('');
+  const [labels, setLabels] = useState('dev');
+  const [busy, setBusy] = useState(false);
+  const [createdId, setCreatedId] = useState<string | null>(null);
+
+  const create = () => {
+    const n = name.trim();
+    if (!n || busy) return;
+    setBusy(true);
+    api.createMachine({ name: n, labels: labels.split(',').map((x) => x.trim()).filter(Boolean) })
+      .then((r) => {
+        toast.success('机器已创建，按接入命令启动 runner');
+        setCreatedId(r.id);
+        setAdding(false);
+        setName('');
+        invalidate('machines-all');
+      })
+      .catch((e) => toast.error(String(e instanceof Error ? e.message : e)))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="rounded-lg border border-line p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <h4 className="text-sm font-medium">机器</h4>
+        <button className="text-xs text-accent hover:underline" onClick={() => setAdding(!adding)}>
+          ＋ 添加机器
+        </button>
+      </div>
+      {adding && (
+        <div className="mb-2 flex items-center gap-2 rounded-md border border-accent/30 bg-accent/5 px-2.5 py-2">
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="机器名（如 npu-a2-01）"
+            className="w-40 rounded border border-line bg-bg px-2 py-1 text-[12px] text-ink outline-none focus:border-accent" />
+          <input value={labels} onChange={(e) => setLabels(e.target.value)} placeholder="labels：dev,npu,docker"
+            className="flex-1 rounded border border-line bg-bg px-2 py-1 font-mono text-[12px] text-ink outline-none focus:border-accent" />
+          <Button variant="default" size="sm" disabled={!name.trim() || busy} onClick={create}>创建</Button>
+        </div>
+      )}
+      {createdId && <p className="mb-2 text-[11px] text-ok">✓ 已创建，点该行「接入命令」复制到目标机执行</p>}
+      {isLoading ? (
+        <p className="text-xs text-dim">加载中…</p>
+      ) : machines.length === 0 ? (
+        <p className="text-xs text-dim">暂无机器。点右上「添加机器」生成接入命令。</p>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {machines.map((m) => <MachineRow key={m.id} m={m} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () => void; onChanged: () => void }) {
   const { data: providers = [], refetch: refreshProviders } = useLlmProviders();
 
@@ -673,6 +819,7 @@ export function SettingsModal({ me, onClose, onChanged }: { me: Me; onClose: () 
           {FORGES.map((f) => (
             <ForgeTokenRow key={f.key} forge={f} binding={me.forges[f.key] ?? { bound: false }} onChanged={onAnyChanged} />
           ))}
+          <MachinesSection />
           <h4 className="mt-2 text-xs font-medium text-dim">模型服务商</h4>
           {providers.map((p) => (
             <ProviderCard key={p.name} provider={p} me={me} onChanged={onAnyChanged} />

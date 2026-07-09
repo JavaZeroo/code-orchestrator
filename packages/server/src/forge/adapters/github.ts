@@ -193,6 +193,14 @@ export const githubForge: Forge = {
     return normIssue(r);
   },
 
+  async createIssue(repo, params, token) {
+    const r = await request<{ number: number; html_url?: string }>('POST', `/repos/${repo}/issues`, {
+      token,
+      body: { title: params.title, body: params.body ?? '' },
+    });
+    return { number: String(r.number), htmlUrl: r.html_url };
+  },
+
   async createIssueComment(repo, number, body, token) {
     const c = await request<{ id: number }>('POST', `/repos/${repo}/issues/${number}/comments`, { token, body: { body } });
     return { id: c.id };

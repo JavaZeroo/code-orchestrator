@@ -42,6 +42,17 @@ export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface MaterializationRow { machineId: string; basePath: string; status: 'materializing' | 'ready' | 'failed'; }
 
+export interface AllMachineRow {
+  id: string;
+  name: string;
+  labels: string[];
+  status: 'online' | 'offline';
+  lastActiveAt: string | null;
+  dataRoot: string | null;
+  resources: Array<{ kind: string; index: number; model?: string }>;
+  enrollToken: string | null;
+}
+
 export type { ApprovalRequest, SessionEnvelope, SessionState, WorkflowDef };
 export type { SessionAgent };
 
@@ -76,6 +87,7 @@ export interface NodeStateRow {
   output: { summary?: string; error?: string; verdict?: string; minutes?: string } | null;
   /** 该节点执行时使用的模型（来自 sessions 表） */
   model?: string | null;
+  updatedAt: string;
 }
 
 export interface ApprovalRow {
@@ -89,6 +101,20 @@ export interface ApprovalRow {
 }
 
 export type ForgeKind = 'gitcode' | 'github';
+
+export interface ForgeRefRow {
+  id: string;
+  forge: ForgeKind;
+  kind: 'pr' | 'issue';
+  repo: string;
+  number: number;
+  runId: string | null;
+  nodeId: string | null;
+  sessionId: string | null;
+  ciStatus: string | null;
+  snapshot: Record<string, unknown> | null;
+  active: 'yes' | 'no';
+}
 
 export interface TriggerRow {
   id: string;
@@ -120,6 +146,8 @@ export interface CreateTriggerBody {
   titlePattern?: string;
   vars?: Record<string, string>;
   backfill?: 'yes' | 'no';
+  kind?: 'issue' | 'schedule';
+  schedule?: string;
 }
 
 export interface RequirementRow {
@@ -207,9 +235,11 @@ export interface LlmProviderRow {
 
 export const api = {
   machines: () => fetch('/api/machines').then((r) => j<{ machines: MachineRow[] }>(r)).then((d) => d.machines),
+  allMachines: () => fetch('/api/machines/all').then((r) => j<{ machines: AllMachineRow[] }>(r)).then((d) => d.machines),
   sessions: () => fetch('/api/sessions').then((r) => j<{ sessions: SessionRow[] }>(r)).then((d) => d.sessions),
-  events: (sessionId: string) =>
-    fetch(`/api/sessions/${sessionId}/events`).then((r) => j<{ events: EventRow[] }>(r)).then((d) => d.events),
+  events: (sessionId: string, since?: number) =>
+    fetch(`/api/sessions/${sessionId}/events${since ? `?since=${since}` : ''}`)
+      .then((r) => j<{ events: EventRow[] }>(r)).then((d) => d.events),
   spawn: (body: { projectId?: string | null; prompt?: string; agent?: SessionAgent; model?: string; effort?: Effort;
                   machineId?: string; cwd?: string; container?: boolean;
                   designer?: boolean; taskIntake?: boolean }) =>
@@ -218,13 +248,16 @@ export const api = {
   workflows: () => fetch('/api/workflows').then((r) => j<{ workflows: WorkflowDefRow[] }>(r)).then((d) => d.workflows),
   createWorkflow: (graph: WorkflowDef, createdVia: 'chat' | 'manual', projectId?: string | null) =>
     post('/api/workflows', { graph, createdVia, projectId }).then((r) => j<{ id: string }>(r)),
-  patchWorkflow: (id: string, patch: { archived?: 'yes' | 'no' }) =>
+  patchWorkflow: (id: string, patch: { archived?: 'yes' | 'no'; name?: string }) =>
     fetch(`/api/workflows/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
   startRun: (workflowId: string, vars: Record<string, string>, projectId?: string | null) =>
     post(`/api/workflows/${workflowId}/runs`, { vars, projectId }).then((r) => j<{ runId: string }>(r)),
   runs: () => fetch('/api/runs').then((r) => j<{ runs: RunRow[] }>(r)).then((d) => d.runs),
   run: (runId: string) =>
     fetch(`/api/runs/${runId}`).then((r) => j<{ run: RunRow; def: WorkflowDefRow; nodes: NodeStateRow[] }>(r)),
+  runThread: (runId: string, since?: number) =>
+    fetch(`/api/runs/${runId}/thread${since ? `?since=${since}` : ''}`)
+      .then((r) => j<{ run: RunRow; def: WorkflowDefRow; nodes: NodeStateRow[]; events: EventRow[]; forgeRefs: ForgeRefRow[] }>(r)),
   pendingApprovals: () =>
     fetch('/api/approvals?status=pending').then((r) => j<{ approvals: ApprovalRow[] }>(r)).then((d) => d.approvals),
   send: (sessionId: string, text: string) => post(`/api/sessions/${sessionId}/send`, { text }).then((r) => j(r)),
@@ -254,6 +287,18 @@ export const api = {
     fetch(`/api/llm/providers/${encodeURIComponent(name)}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
   projects: () => fetch('/api/projects').then((r) => j<{ projects: ProjectRow[] }>(r)).then((d) => d.projects),
   createProject: (body: Partial<ProjectRow>) => post('/api/projects', body).then((r) => j<{ id: string }>(r)),
+  createMachine: (body: { name: string; labels: string[] }) =>
+    post('/api/machines', body).then((r) => j<{ id: string; enrollToken: string }>(r)),
+  patchMachine: (id: string, patch: { name?: string; labels?: string[] }) =>
+    fetch(`/api/machines/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
+  deleteMachine: (id: string) => fetch(`/api/machines/${id}`, { method: 'DELETE' }).then((r) => j(r)),
+  regenMachineToken: (id: string) => post(`/api/machines/${id}/token`, {}).then((r) => j<{ enrollToken: string }>(r)),
+  resources: () =>
+    fetch('/api/resources').then((r) =>
+      j<{ machines: { id: string; labels: string[]; accels: { kind: string; total: number }[]; used: number }[]; queued: number }>(r)),
+  dispatchPipeline: (projectId: string, body: { text: string; defId?: string }) =>
+    post(`/api/projects/${projectId}/dispatch`, body).then((r) =>
+      j<{ runId: string; issueNumber: string; issueUrl?: string }>(r)),
   patchProject: (id: string, patch: Partial<ProjectRow>) =>
     fetch(`/api/projects/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
   deleteProject: (id: string) => fetch(`/api/projects/${id}`, { method: 'DELETE' }).then((r) => j(r)),

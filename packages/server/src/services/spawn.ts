@@ -130,6 +130,11 @@ export async function spawnSession(req: SpawnRequest): Promise<{ sessionId: stri
     model: resolved.model ?? req.meta?.model ?? null,
     ...(req.effort != null ? { effort: req.effort } : {}),
   };
+  // 手动会话（非工作流节点）默认全自动放行：会话跑在专属 worktree/容器里，
+  // 逐工具审批只会把人变成瓶颈；工作流节点仍由 node.permissionMode 显式控制
+  if (!req.runId && meta.permissionMode == null) {
+    meta.permissionMode = 'bypassPermissions';
+  }
 
   const title =
     req.title ??

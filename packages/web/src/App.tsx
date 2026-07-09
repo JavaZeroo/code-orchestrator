@@ -1,27 +1,26 @@
 import { FolderGit2, type LucideIcon, LogOut, MessageSquareText, Settings } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { authApi, LoginPage, SettingsModal, useMe, type Me } from './Auth';
+import { CreateProjectDialog } from './CreateProjectDialog';
 import { NewSession } from './NewSession';
-import { TaskIntake } from './NewTask';
 import { NotificationBell } from './Notifications';
-import { ProjectsPage } from './ProjectsPage';
+import { ProjectSettings } from './ProjectSettings';
 import { RunView } from './RunView';
 import { SessionView } from './SessionView';
 import { Button } from './components/ui/button';
 import { Spinner, StatusDot } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { isWaitingRun, isWaitingSession, waitingCountByProject, type AttentionItem } from './lib/attention';
-import { useProjects, useRuns, useSessions } from './lib/queries';
+import { invalidate, useProjects, useRuns, useSessions } from './lib/queries';
 import { ProjectProvider, useCurrentProject, useProjectScope } from './lib/project';
 import { cn, relTime, fmtCost, shortModel } from './lib/utils';
 
-type Tab = 'home' | 'projects';
+type Tab = 'home';
 
-type Selected = 'new' | 'newTask' | { session: string } | { run: string };
+type Selected = 'new' | { session: string } | { run: string };
 
 const NAV: { id: Tab; label: string; icon: LucideIcon; hint: string }[] = [
   { id: 'home', label: '对话', icon: MessageSquareText, hint: '线程 · 会话 · 运行' },
-  { id: 'projects', label: '项目', icon: FolderGit2, hint: '策略容器 · 自治开关' },
 ];
 
 const STATE_DOT: Record<string, string> = {
@@ -56,7 +55,7 @@ function BrandMark() {
   );
 }
 
-function ProjectSwitcher({ waitingCounts }: { waitingCounts: Map<string, number> }) {
+function ProjectSwitcher({ waitingCounts, onSettingsOpen, onNewProject }: { waitingCounts: Map<string, number>; onSettingsOpen: () => void; onNewProject: () => void }) {
   const { data: projects = [] } = useProjects();
   const { projectId, setProjectId } = useCurrentProject();
   const totalOther = useMemo(() => {
@@ -77,36 +76,47 @@ function ProjectSwitcher({ waitingCounts }: { waitingCounts: Map<string, number>
 
   return (
     <div className="px-2.5 pb-1">
-      <Select value={projectId ?? ''} onValueChange={(v) => setProjectId(v)}>
-        <SelectTrigger className="w-full">
-          <span className="flex min-w-0 items-center gap-2">
-            <FolderGit2 size={13} className="shrink-0 text-accent" />
-            <SelectValue placeholder="选择项目" />
-            {totalOther > 0 && (
-              <span className="ml-auto flex size-4 items-center justify-center rounded-full bg-danger text-[9px] font-semibold text-white">
-                {totalOther > 9 ? '9+' : totalOther}
-              </span>
-            )}
-          </span>
-        </SelectTrigger>
-        <SelectContent>
-          {projects.map((p) => {
-            const cnt = waitingCounts.get(p.id) ?? 0;
-            return (
-              <SelectItem key={p.id} value={p.id}>
-                <span className="flex items-center gap-2">
-                  {p.name}
-                  {cnt > 0 && (
-                    <span className="flex size-4 items-center justify-center rounded-full bg-danger text-[9px] font-semibold text-white">
-                      {cnt > 9 ? '9+' : cnt}
-                    </span>
-                  )}
+      <div className="flex items-center gap-1">
+        <Select value={projectId ?? ''} onValueChange={(v) => {
+          if (v === '__new_project__') { onNewProject(); return; }
+          setProjectId(v);
+        }}>
+          <SelectTrigger className="w-full">
+            <span className="flex min-w-0 items-center gap-2">
+              <FolderGit2 size={13} className="shrink-0 text-accent" />
+              <SelectValue placeholder="选择项目" />
+              {totalOther > 0 && (
+                <span className="ml-auto flex size-4 items-center justify-center rounded-full bg-danger text-[9px] font-semibold text-white">
+                  {totalOther > 9 ? '9+' : totalOther}
                 </span>
-              </SelectItem>
-            );
-          })}
-        </SelectContent>
-      </Select>
+              )}
+            </span>
+          </SelectTrigger>
+          <SelectContent>
+            {projects.map((p) => {
+              const cnt = waitingCounts.get(p.id) ?? 0;
+              return (
+                <SelectItem key={p.id} value={p.id}>
+                  <span className="flex items-center gap-2">
+                    {p.name}
+                    {cnt > 0 && (
+                      <span className="flex size-4 items-center justify-center rounded-full bg-danger text-[9px] font-semibold text-white">
+                        {cnt > 9 ? '9+' : cnt}
+                      </span>
+                    )}
+                  </span>
+                </SelectItem>
+              );
+            })}
+            <SelectItem value="__new_project__">＋ 新建项目</SelectItem>
+          </SelectContent>
+        </Select>
+        {projectId && (
+          <Button variant="ghost" size="icon-sm" onClick={onSettingsOpen} title="项目设置">
+            <Settings size={15} />
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
@@ -117,12 +127,16 @@ function Sidebar({
   me,
   onSettings,
   waitingCounts,
+  onProjectSettings,
+  onNewProject,
 }: {
   tab: Tab;
   setTab: (t: Tab) => void;
   me: Me;
   onSettings: () => void;
   waitingCounts: Map<string, number>;
+  onProjectSettings: () => void;
+  onNewProject: () => void;
 }) {
   const bound = Object.entries(me.forges).filter(([, b]) => b.bound);
   return (
@@ -135,7 +149,7 @@ function Sidebar({
         </div>
       </div>
 
-      <ProjectSwitcher waitingCounts={waitingCounts} />
+      <ProjectSwitcher waitingCounts={waitingCounts} onSettingsOpen={onProjectSettings} onNewProject={onNewProject} />
 
       <nav className="flex flex-1 flex-col gap-0.5 px-2.5 pt-2">
         <div className="px-2 pb-1.5 text-[10px] font-semibold tracking-widest text-faint uppercase">Console</div>
@@ -342,16 +356,7 @@ function HomeScreen({
 
   // 右侧面板
   const renderRight = () => {
-    if (selected === 'new') return <NewSession onCreated={(id) => setSelected({ session: id })} />;
-    if (selected === 'newTask') {
-      return (
-        <TaskIntake
-          projectId={projectId}
-          onStarted={(runId) => setSelected({ run: runId })}
-          onBack={() => setSelected('new')}
-        />
-      );
-    }
+    if (selected === 'new') return <NewSession onCreated={(id) => setSelected({ session: id })} onRunStarted={(runId) => setSelected({ run: runId })} />;
     if (typeof selected === 'object' && 'session' in selected) {
       const s = allSessions.find((s) => s.id === selected.session);
       if (!s) return <div className="p-6 text-sm text-dim">会话未找到</div>;
@@ -369,10 +374,7 @@ function HomeScreen({
         {/* 新建区 */}
         <div className="flex gap-1.5">
           <Button variant="default" size="sm" className="flex-1 text-[11px]" onClick={() => setSelected('new')}>
-            新建会话
-          </Button>
-          <Button variant="secondary" size="sm" className="flex-1 text-[11px]" onClick={() => setSelected('newTask')}>
-            新建任务
+            新对话
           </Button>
         </div>
 
@@ -455,7 +457,9 @@ function AppShell({ me, refresh }: { me: Me; refresh: () => void }) {
   const [tab, setTab] = useState<Tab>('home');
   const [selected, setSelected] = useState<Selected>('new');
   const [showSettings, setShowSettings] = useState(false);
-  const { setProjectId } = useCurrentProject();
+  const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
+  const [showNewProject, setShowNewProject] = useState(false);
+  const { projectId, setProjectId } = useCurrentProject();
 
   // 全局 WS 订阅：刷新 sessions/runs 缓存，让红点/铃铛更跟手
   useEffect(() => {
@@ -496,7 +500,7 @@ function AppShell({ me, refresh }: { me: Me; refresh: () => void }) {
 
   return (
     <div className="flex h-full overflow-hidden">
-      <Sidebar tab={tab} setTab={setTab} me={me} onSettings={() => setShowSettings(true)} waitingCounts={waitingCounts} />
+      <Sidebar tab={tab} setTab={setTab} me={me} onSettings={() => setShowSettings(true)} waitingCounts={waitingCounts} onProjectSettings={() => setSettingsProjectId(projectId)} onNewProject={() => setShowNewProject(true)} />
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-13 shrink-0 items-center gap-3 border-b border-line bg-bg-2/40 px-5 py-3 backdrop-blur-sm">
           <active.icon size={17} className="text-accent" />
@@ -509,11 +513,20 @@ function AppShell({ me, refresh }: { me: Me; refresh: () => void }) {
         <main className="flex min-h-0 flex-1 overflow-hidden">
           <div key={tab} className="rise flex min-h-0 flex-1 overflow-hidden">
             {tab === 'home' && <HomeScreen selected={selected} setSelected={setSelected} />}
-            {tab === 'projects' && <ProjectsPage me={me} onOpenSession={(id) => { setTab('home'); setSelected(id === 'new' ? 'new' : { session: id }); }} onOpenRun={(runId) => { setTab('home'); setSelected({ run: runId }); }} />}
           </div>
         </main>
       </div>
       {showSettings && <SettingsModal me={me} onClose={() => setShowSettings(false)} onChanged={refresh} />}
+      {settingsProjectId && (
+        <ProjectSettings
+          projectId={settingsProjectId}
+          me={me}
+          onClose={() => setSettingsProjectId(null)}
+          onOpenRun={(runId) => { setSettingsProjectId(null); setTab('home'); setSelected({ run: runId }); }}
+          onOpenSession={(id) => { setSettingsProjectId(null); setTab('home'); setSelected(id === 'new' ? 'new' : { session: id }); }}
+        />
+      )}
+      <CreateProjectDialog open={showNewProject} onClose={() => setShowNewProject(false)} onDone={() => invalidate('projects')} />
     </div>
   );
 }

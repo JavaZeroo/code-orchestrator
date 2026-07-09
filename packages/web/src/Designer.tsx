@@ -29,7 +29,7 @@ function DraftPane({ sessionId, onSaved }: { sessionId: string; onSaved: (id: st
     }
     setSaving(true);
     api.createWorkflow(draft, 'chat', projectId).then((d) => {
-      toast.success('工作流已保存');
+      toast.success('编排已保存');
       onSaved(d.id);
     }).catch((e) => toast.error(String(e))).finally(() => setSaving(false));
   };
@@ -37,9 +37,9 @@ function DraftPane({ sessionId, onSaved }: { sessionId: string; onSaved: (id: st
   return (
     <div className="flex w-[46%] flex-col overflow-hidden">
       <header className="flex items-center justify-between border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
-        <b className="font-display text-[14px] font-semibold text-ink">工作流草图</b>
+        <b className="font-display text-[14px] font-semibold text-ink">编排草图</b>
         <Button variant="default" size="sm" disabled={!draft || saving} onClick={save}>
-          <Save size={13} /> {saving ? '保存中…' : '保存为工作流'}
+          <Save size={13} /> {saving ? '保存中…' : '保存编排'}
         </Button>
       </header>
       {draft ? (
@@ -62,8 +62,10 @@ export function Designer({ onSaved, onBack }: { onSaved: (workflowId: string) =>
   const [session, setSession] = useState<SessionRow | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // 设计会话是一次性辅助会话：离开即终止，不在线程列表残留
   useEffect(() => {
     let cancelled = false;
+    let spawnedId: string | null = null;
     api
       .machines()
       .then((machines: MachineRow[]) => {
@@ -73,7 +75,10 @@ export function Designer({ onSaved, onBack }: { onSaved: (workflowId: string) =>
         }
         return api.spawn({ machineId: machine.id, cwd: '/root', designer: true });
       })
-      .then(({ sessionId }) => api.sessions().then((all) => all.find((s) => s.id === sessionId) ?? null))
+      .then(({ sessionId }) => {
+        spawnedId = sessionId ?? null;
+        return api.sessions().then((all) => all.find((s) => s.id === sessionId) ?? null);
+      })
       .then((row) => {
         if (!cancelled) {
           setSession(row);
@@ -82,6 +87,9 @@ export function Designer({ onSaved, onBack }: { onSaved: (workflowId: string) =>
       .catch((e) => setError(String(e)));
     return () => {
       cancelled = true;
+      if (spawnedId) {
+        void api.kill(spawnedId).catch(() => {});
+      }
     };
   }, []);
 
@@ -91,8 +99,8 @@ export function Designer({ onSaved, onBack }: { onSaved: (workflowId: string) =>
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft size={14} /> 返回
         </Button>
-        <b className="font-display text-[14px] font-semibold text-ink">对话式搭建工作流</b>
-        <span className="hidden text-xs text-faint sm:inline">描述流程 → 实时出图 → 确认保存</span>
+        <b className="font-display text-[14px] font-semibold text-ink">对话编排流水线</b>
+        <span className="hidden text-xs text-faint sm:inline">描述流程 → 实时出图 → 保存（不启动）</span>
       </header>
       {error && <div className="m-4 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">{error}</div>}
       {session ? (

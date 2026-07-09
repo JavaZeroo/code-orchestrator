@@ -35,9 +35,26 @@ interface RunnerConn {
   socket: WebSocket;
   machine: MachineInfo | null;
   pending: Map<string | number, Pending>;
+  /** 非共享 token 连入时暂存，register 时与机器行 enroll_token+id 精确核对 */
+  enrollToken?: string;
 }
 
 const runners = new Map<string, RunnerConn>();
+
+/** 会话→runId 懒缓存：runId 创建后不变，查一次即缓存（含 null，交互会话 O(1) 跳过） */
+const sessionRunIdCache = new Map<string, string | null>();
+async function getSessionRunId(sessionId: string): Promise<string | null | undefined> {
+  if (sessionRunIdCache.has(sessionId)) return sessionRunIdCache.get(sessionId);
+  if (!hasDb()) return undefined;
+  const rows = await getDb()
+    .select({ runId: schema.sessions.runId })
+    .from(schema.sessions)
+    .where(eq(schema.sessions.id, sessionId))
+    .limit(1);
+  const runId = rows[0]?.runId ?? null;
+  sessionRunIdCache.set(sessionId, runId);
+  return runId;
+}
 
 export function listMachines(): MachineInfo[] {
   return [...runners.values()]
@@ -72,9 +89,24 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
   switch (method as ServerMethodName) {
     case 'machine.register': {
       const p = serverMethods['machine.register'].params.parse(params);
+      // 每机凭证：token 必须命中该 id 的机器行（UI「添加机器」生成），否则拒绝
+      if (conn.enrollToken !== undefined) {
+        const rows = hasDb()
+          ? await getDb().select({ id: schema.machines.id, enrollToken: schema.machines.enrollToken }).from(schema.machines).where(eq(schema.machines.id, p.info.id)).limit(1)
+          : [];
+        if (!rows[0]?.enrollToken || rows[0].enrollToken !== conn.enrollToken) {
+          conn.socket.close(4403, 'enroll token mismatch');
+          throw new Error(`enroll token mismatch for machine ${p.info.id}`);
+        }
+      }
       conn.machine = p.info;
       runners.set(p.info.id, conn);
       if (hasDb()) {
+        // 行已存在时 name/labels 以 DB 为准（UI 可编辑），回填内存供调度读取
+        const existing = await getDb().select({ name: schema.machines.name, labels: schema.machines.labels }).from(schema.machines).where(eq(schema.machines.id, p.info.id)).limit(1);
+        if (existing[0]) {
+          conn.machine = { ...p.info, name: existing[0].name, labels: existing[0].labels };
+        }
         await getDb()
           .insert(schema.machines)
           .values({
@@ -89,9 +121,8 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
           })
           .onConflictDoUpdate({
             target: schema.machines.id,
+            // name/labels 不覆盖：行已存在时以 UI/DB 为准（添加机器 UI 可编辑），runner env 只在首次注册时生效
             set: {
-              name: p.info.name,
-              labels: p.info.labels,
               info: p.info as unknown as Record<string, unknown>,
               dataRoot: p.info.dataRoot ?? null,
               resources: p.info.resources ?? [],
@@ -136,7 +167,8 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
     }
     case 'session.event': {
       const p = serverMethods['session.event'].params.parse(params);
-      const seq = await publish({ type: 'session.message', sessionId: p.sessionId, payload: p.envelope });
+      const runId = await getSessionRunId(p.sessionId);
+      const seq = await publish({ type: 'session.message', sessionId: p.sessionId, runId: runId ?? undefined, payload: p.envelope });
       return { seq };
     }
     case 'session.state': {
@@ -151,9 +183,11 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
           })
           .where(eq(schema.sessions.id, p.sessionId));
       }
+      const runId = await getSessionRunId(p.sessionId);
       await publish({
         type: 'session.state',
         sessionId: p.sessionId,
+        runId: runId ?? undefined,
         payload: { state: p.state, nativeSessionId: p.nativeSessionId, usage: p.usage },
       });
       return { ok: true };
@@ -199,12 +233,15 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
 export async function registerRunnerHub(app: FastifyInstance): Promise<void> {
   app.get('/ws/runner', { websocket: true }, (socket, req) => {
     const auth = req.headers.authorization;
-    if (auth !== `Bearer ${env.RUNNER_SHARED_TOKEN}`) {
+    if (!auth?.startsWith('Bearer ') || auth === 'Bearer ') {
       socket.close(4401, 'unauthorized');
       return;
     }
 
     const conn: RunnerConn = { socket, machine: null, pending: new Map() };
+    if (auth !== `Bearer ${env.RUNNER_SHARED_TOKEN}`) {
+      conn.enrollToken = auth!.slice('Bearer '.length);
+    }
 
     socket.on('message', (data: Buffer) => {
       void (async () => {
