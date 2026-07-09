@@ -714,6 +714,13 @@ function MachineRow({ m }: { m: AllMachineRow }) {
             {m.labels.length > 0 ? m.labels.map((l) => <Badge key={l} tone="neutral">{l}</Badge>) : <span className="text-[11px] text-faint underline decoration-dotted">labels</span>}
           </button>
         )}
+        {Object.keys(m.componentCache ?? {}).length > 0 && (
+          <span className="mono-nums hidden shrink-0 gap-1 text-[10px] text-dim md:flex" title="组件缓存（runner 扫描自报）">
+            {Object.entries(m.componentCache).flatMap(([c, vs]) => vs.map((v) => (
+              <span key={`${c}-${v}`} className="rounded bg-panel-2 px-1.5 py-0.5">{c}:{v}</span>
+            )))}
+          </span>
+        )}
         <span className="shrink-0 text-[11px] text-faint">
           {m.status === 'online' ? '在线' : pending ? '待接入' : '离线'}
           {m.lastActiveAt && ` · ${relTime(m.lastActiveAt)}`}

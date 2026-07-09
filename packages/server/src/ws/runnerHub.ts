@@ -142,7 +142,12 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
         // 机器存活刷新（design-v2 M1）：修此前"machines 只在 register 写一次、lastActiveAt 永不更新"的陈旧问题
         await getDb()
           .update(schema.machines)
-          .set({ status: 'online', lastActiveAt: new Date() })
+          .set({
+            status: 'online',
+            lastActiveAt: new Date(),
+            // 组件缓存自报（有携带才覆盖；15s 一拍的小 jsonb 写入可接受）
+            ...(p.componentCache ? { componentCache: p.componentCache } : {}),
+          })
           .where(eq(schema.machines.id, p.machineId));
         const alive = new Set(p.sessions.map((s) => s.sessionId));
         const dbActive = await getDb()

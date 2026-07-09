@@ -27,6 +27,8 @@ module.exports = {
       env: {
         SERVER_URL: process.env.SERVER_URL || 'ws://127.0.0.1:7620/ws/runner',
         MACHINE_LABELS: process.env.MACHINE_LABELS || 'dev',
+        // 本机数据根：co 在 <DATA_ROOT>/co/ 下铺物化与组件缓存（/root/co/ 既有布局）
+        DATA_ROOT: process.env.DATA_ROOT || '/root',
         // 本机 code-server 地址（网页"在编辑器打开"深链用），按需设 CODE_SERVER_URL
         CODE_SERVER_URL: process.env.CODE_SERVER_URL || '',
       },

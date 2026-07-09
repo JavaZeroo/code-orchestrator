@@ -262,6 +262,8 @@ export const machines = pgTable('machines', {
   resources: jsonb('resources').$type<Array<{ kind: string; index: number; model?: string }>>().notNull().default([]),
   /** 每机接入凭证：UI「添加机器」生成，runner 以它为 Bearer token 连入并绑定本行（替代共享 token 抄写） */
   enrollToken: text('enroll_token'),
+  /** 组件缓存自报：{cann:["9.0.0"]}，runner 心跳扫描 <dataRoot>/co/cache/ 上报（design-machines-env ③） */
+  componentCache: jsonb('component_cache').$type<Record<string, string[]>>().notNull().default({}),
   lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
 });
 
@@ -406,6 +408,17 @@ export const forgeRefs = pgTable('forge_refs', {
 
 /** 需求录入触发器（task #22）：某 forge repo 的 issue 满足过滤条件 → 自动起工作流。
  *  最初愿景的入口：需求（issue）进来 → 分析 → 拆解 → 设计 → 实现 → PR → 门禁回流。 */
+/** 组件源登记表（design-machines-env ③）：版本→URL，CANN 等低频大包的下发依据 */
+export const componentSources = pgTable('component_sources', {
+  id: text('id').primaryKey(),
+  component: text('component').notNull(),
+  version: text('version').notNull(),
+  url: text('url').notNull(),
+  sha256: text('sha256'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const requirementTriggers = pgTable('requirement_triggers', {
   id: text('id').primaryKey(),
   /** 触发方式：issue 轮询（默认）或 cron 定时（schedule 字段生效，如每日冒烟） */

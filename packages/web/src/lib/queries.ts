@@ -46,6 +46,9 @@ export const useProjectMaterializations = (projectId?: string | null) =>
     enabled: !!projectId,
   });
 
+export const useComponentSources = () =>
+  useQuery({ queryKey: ['component-sources'], queryFn: api.componentSources, refetchInterval: 30_000 });
+
 export const useResources = () =>
   useQuery({ queryKey: ['resources'], queryFn: api.resources, refetchInterval: 15_000 });
 
