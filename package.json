@@ -6,12 +6,16 @@
     "node": ">=22"
   },
   "scripts": {
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm -r run typecheck",
     "dev:server": "pnpm --filter @co/server dev",
     "dev:runner": "pnpm --filter @co/runner dev",
-    "test": "pnpm -r test"
+    "test": "pnpm test:unit",
+    "test:unit": "pnpm -r run test:unit",
+    "test:coverage": "pnpm -r run test:coverage",
+    "test:st": "pnpm --filter @co/server test:st"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "4.1.9",
     "vitest": "^4.1.9"
   },
   "dependencies": {

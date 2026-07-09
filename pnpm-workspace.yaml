@@ -12,9 +12,10 @@ allowBuilds:
   cpu-features: false
   esbuild: true
   ssh2: false
-# 只拉当前平台的可选依赖（darwin/win32 平台包经代理下载会反复重试卡死安装）
+# 只拉 Linux 平台的可选依赖；覆盖 GitHub-hosted x64 与本地/self-hosted arm64
 supportedArchitectures:
   os:
     - linux
   cpu:
+    - x64
     - arm64

@@ -5,17 +5,21 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# self-hosted runner 安全：只跑同仓 PR（不执行外部 fork 的代码）
+# 只跑同仓 PR（不执行外部 fork 的代码）
 jobs:
-  check:
+  unit:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, co-host]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Ensure node/pnpm on PATH
-        run: echo "/root/.nvm/versions/node/v24.15.0/bin" >> "$GITHUB_PATH"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       # 源码禁止裸控制字节（NUL 等）：会让 git 把文件判成二进制，diff/评审全盲。
       # 真需要控制字符时写 \u0000 转义（autoMerge.ts 的 glob 占位符踩过此坑）。
       - name: No raw control bytes in sources
@@ -25,8 +29,41 @@ jobs:
             exit 1
           fi
       - name: Install deps (warm store, offline)
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: pnpm install --store-dir .pnpm-store --frozen-lockfile --prefer-offline
       - name: Typecheck
-        run: pnpm -r typecheck
-      - name: Test
-        run: pnpm -r test
+        run: pnpm typecheck
+      - name: Unit tests with coverage
+        run: pnpm test:coverage
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage
+          path: packages/*/coverage
+          if-no-files-found: ignore
+
+  st:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    needs: unit
+    env:
+      DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
+      RUNNER_SHARED_TOKEN: st-runner-token
+      AUTH_SECRET: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install deps (warm store, offline)
+        run: pnpm install --store-dir .pnpm-store --frozen-lockfile --prefer-offline
+      - name: Apply database schema
+        if: env.DATABASE_URL != ''
+        run: pnpm --filter @co/server exec drizzle-kit push --force
+      - name: System tests
+        run: pnpm test:st
