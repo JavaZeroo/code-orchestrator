@@ -94,6 +94,9 @@ app.patch('/api/machines/:id', async (req, reply) => {
   const body = z.object({
     name: z.string().trim().min(1).max(64).optional(),
     labels: z.array(z.string().trim().min(1)).optional(),
+    sshHost: z.string().trim().max(200).nullable().optional(),
+    sshPort: z.number().int().min(1).max(65535).nullable().optional(),
+    sshUser: z.string().trim().max(64).nullable().optional(),
   }).parse(req.body);
   if (Object.keys(body).length === 0) return reply.code(400).send({ error: '无更新字段' });
   const { getDb, schema } = await import('./db/index');
@@ -127,6 +130,74 @@ app.post('/api/machines/:id/token', async (req, reply) => {
   const enrollToken = `co-mk-${randomBytes(24).toString('base64url')}`;
   await getDb().update(schema.machines).set({ enrollToken }).where(eq(schema.machines.id, id));
   return { enrollToken };
+});
+
+// —— SSH 运维通道（design-machines-env A）：公钥管理/连通测试/runner 重启；执行面仍走 runner WS ——
+app.get('/api/ssh-key', async (req, reply) => {
+  if (!hasDb()) return reply.code(503).send({ error: 'database not available' });
+  const { getInstanceKey } = await import('./services/sshOps');
+  const { publicSsh } = await getInstanceKey();
+  return { publicKey: publicSsh };
+});
+
+app.post('/api/ssh-key/rotate', async (req, reply) => {
+  if (!hasDb()) return reply.code(503).send({ error: 'database not available' });
+  const { rotateInstanceKey } = await import('./services/sshOps');
+  return rotateInstanceKey();
+});
+
+async function sshTargetOf(id: string) {
+  const { getDb, schema } = await import('./db/index');
+  const { eq } = await import('drizzle-orm');
+  const [m] = await getDb().select().from(schema.machines).where(eq(schema.machines.id, id)).limit(1);
+  if (!m?.sshHost) return null;
+  return { host: m.sshHost, port: m.sshPort ?? 22, user: m.sshUser ?? 'root' };
+}
+
+// 测试连接：带 password 先装实例公钥（密码用完即弃），随后一律以实例私钥验证
+app.post('/api/machines/:id/ssh-test', async (req, reply) => {
+  if (!hasDb()) return reply.code(503).send({ error: 'database not available' });
+  const z = await import('zod');
+  const body = z.object({ password: z.string().optional() }).parse(req.body ?? {});
+  const target = await sshTargetOf((req.params as { id: string }).id);
+  if (!target) return reply.code(400).send({ error: '先在机器行配置 SSH host/user' });
+  const { getInstanceKey, installInstanceKey, sshExec } = await import('./services/sshOps');
+  try {
+    if (body.password) {
+      await installInstanceKey(target, body.password);
+    }
+    const { privatePem } = await getInstanceKey();
+    const res = await sshExec(target, 'uname -sm && echo co-ssh-ok', { privatePem });
+    if (res.exitCode !== 0 || !res.stdout.includes('co-ssh-ok')) {
+      return reply.code(502).send({ error: `连通失败: ${res.stderr || res.stdout}` });
+    }
+    return { ok: true, uname: res.stdout.split('\n')[0], keyInstalled: Boolean(body.password) };
+  } catch (err) {
+    return reply.code(502).send({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// runner 重启（挡救）：systemd 形态优先，退回 pm2 形态
+app.post('/api/machines/:id/runner-restart', async (req, reply) => {
+  if (!hasDb()) return reply.code(503).send({ error: 'database not available' });
+  const target = await sshTargetOf((req.params as { id: string }).id);
+  if (!target) return reply.code(400).send({ error: '先在机器行配置 SSH host/user' });
+  const { getInstanceKey, sshExec } = await import('./services/sshOps');
+  try {
+    const { privatePem } = await getInstanceKey();
+    const res = await sshExec(
+      target,
+      'systemctl restart co-host-runner 2>/dev/null && echo restarted:systemd || (pm2 restart co-runner >/dev/null 2>&1 && echo restarted:pm2) || echo restart-failed',
+      { privatePem },
+      60_000,
+    );
+    if (!res.stdout.includes('restarted')) {
+      return reply.code(502).send({ error: `重启失败: ${res.stderr || res.stdout}` });
+    }
+    return { ok: true, via: res.stdout.trim().split(':')[1] ?? 'unknown' };
+  } catch (err) {
+    return reply.code(502).send({ error: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 // 资源面板：在线机加速器占用（总数 vs 活跃预留）+ 排队任务数——「哪台机有空闲 NPU」一眼可见

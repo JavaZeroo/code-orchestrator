@@ -8,11 +8,12 @@ storeDir: /root/.pnpm-store
 nodeLinker: hoisted
 verifyDepsBeforeRun: false
 allowBuilds:
+  cpu-features: set this to true or false
   esbuild: true
+  ssh2: set this to true or false
 # 只拉当前平台的可选依赖（darwin/win32 平台包经代理下载会反复重试卡死安装）
 supportedArchitectures:
   os:
     - linux
   cpu:
     - arm64
-

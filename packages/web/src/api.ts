@@ -52,6 +52,9 @@ export interface AllMachineRow {
   resources: Array<{ kind: string; index: number; model?: string }>;
   enrollToken: string | null;
   componentCache: Record<string, string[]>;
+  sshHost: string | null;
+  sshPort: number | null;
+  sshUser: string | null;
 }
 
 export interface ComponentSourceRow {
@@ -305,9 +308,14 @@ export const api = {
     fetch(`/api/component-sources/${id}`, { method: 'DELETE' }).then((r) => j(r)),
   dispatchComponent: (id: string, machineId: string) =>
     post(`/api/component-sources/${id}/dispatch`, { machineId }).then((r) => j<{ ok: boolean; note?: string }>(r)),
+  sshKey: () => fetch('/api/ssh-key').then((r) => j<{ publicKey: string }>(r)),
+  rotateSshKey: () => post('/api/ssh-key/rotate', {}).then((r) => j<{ publicSsh: string }>(r)),
+  sshTest: (id: string, password?: string) =>
+    post(`/api/machines/${id}/ssh-test`, password ? { password } : {}).then((r) => j<{ ok: boolean; uname?: string; keyInstalled?: boolean }>(r)),
+  runnerRestart: (id: string) => post(`/api/machines/${id}/runner-restart`, {}).then((r) => j<{ ok: boolean; via?: string }>(r)),
   createMachine: (body: { name: string; labels: string[] }) =>
     post('/api/machines', body).then((r) => j<{ id: string; enrollToken: string }>(r)),
-  patchMachine: (id: string, patch: { name?: string; labels?: string[] }) =>
+  patchMachine: (id: string, patch: { name?: string; labels?: string[]; sshHost?: string | null; sshPort?: number | null; sshUser?: string | null }) =>
     fetch(`/api/machines/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
   deleteMachine: (id: string) => fetch(`/api/machines/${id}`, { method: 'DELETE' }).then((r) => j(r)),
   regenMachineToken: (id: string) => post(`/api/machines/${id}/token`, {}).then((r) => j<{ enrollToken: string }>(r)),
