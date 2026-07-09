@@ -1,9 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { createId } from '@paralleldrive/cuid2';
-import { and, asc, desc, eq, gt, inArray, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, ne, or } from 'drizzle-orm';
 import * as z from 'zod';
 import { workflowDefSchema } from '@co/protocol';
 import { getDb, schema } from '../db/index';
+import { publish } from '../events';
+import { callRunner } from '../ws/runnerHub';
 import { EngineError, startRun } from '../engine/engine';
 
 const createBodySchema = z.object({
@@ -95,6 +97,35 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       }
       throw err;
     }
+  });
+
+  /** 取消 run：终止活跃节点会话（尽力）、pending 审批过期、状态置 cancelled——此前 run 只能跑完/失败 */
+  app.post<{ Params: { id: string } }>('/api/runs/:id/cancel', async (req, reply) => {
+    const db = getDb();
+    const [run] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, req.params.id)).limit(1);
+    if (!run) {
+      void reply.code(404);
+      return { error: 'run not found' };
+    }
+    if (run.status === 'done' || run.status === 'failed' || run.status === 'cancelled') {
+      void reply.code(409);
+      return { error: `run 已终态: ${run.status}` };
+    }
+    const alive = await db
+      .select({ id: schema.sessions.id, machineId: schema.sessions.machineId })
+      .from(schema.sessions)
+      .where(and(eq(schema.sessions.runId, run.id), ne(schema.sessions.state, 'dead')));
+    for (const s of alive) {
+      await callRunner(s.machineId, 'session.kill', { sessionId: s.id }).catch(() => {});
+      await db.update(schema.sessions).set({ state: 'dead' }).where(eq(schema.sessions.id, s.id));
+    }
+    await db
+      .update(schema.approvals)
+      .set({ status: 'expired', decidedBy: req.user?.email ?? 'cancel', decidedAt: new Date() })
+      .where(and(eq(schema.approvals.runId, run.id), eq(schema.approvals.status, 'pending')));
+    await db.update(schema.workflowRuns).set({ status: 'cancelled', endedAt: new Date() }).where(eq(schema.workflowRuns.id, run.id));
+    await publish({ type: 'run.status', runId: run.id, payload: { status: 'cancelled', by: req.user?.email ?? 'ui' } });
+    return { ok: true, killedSessions: alive.length };
   });
 
   app.get('/api/runs', async () => {

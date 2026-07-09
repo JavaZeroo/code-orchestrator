@@ -268,6 +268,7 @@ export const api = {
   runs: () => fetch('/api/runs').then((r) => j<{ runs: RunRow[] }>(r)).then((d) => d.runs),
   run: (runId: string) =>
     fetch(`/api/runs/${runId}`).then((r) => j<{ run: RunRow; def: WorkflowDefRow; nodes: NodeStateRow[] }>(r)),
+  cancelRun: (runId: string) => post(`/api/runs/${runId}/cancel`, {}).then((r) => j<{ ok: boolean }>(r)),
   runThread: (runId: string, since?: number) =>
     fetch(`/api/runs/${runId}/thread${since ? `?since=${since}` : ''}`)
       .then((r) => j<{ run: RunRow; def: WorkflowDefRow; nodes: NodeStateRow[]; events: EventRow[]; forgeRefs: ForgeRefRow[] }>(r)),
@@ -312,6 +313,8 @@ export const api = {
   rotateSshKey: () => post('/api/ssh-key/rotate', {}).then((r) => j<{ publicSsh: string }>(r)),
   sshTest: (id: string, password?: string) =>
     post(`/api/machines/${id}/ssh-test`, password ? { password } : {}).then((r) => j<{ ok: boolean; uname?: string; keyInstalled?: boolean }>(r)),
+  runnerInstall: (id: string, dataRoot?: string) =>
+    post(`/api/machines/${id}/runner-install`, dataRoot ? { dataRoot } : {}).then((r) => j<{ ok: boolean }>(r)),
   runnerRestart: (id: string) => post(`/api/machines/${id}/runner-restart`, {}).then((r) => j<{ ok: boolean; via?: string }>(r)),
   createMachine: (body: { name: string; labels: string[] }) =>
     post('/api/machines', body).then((r) => j<{ id: string; enrollToken: string }>(r)),
