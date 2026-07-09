@@ -200,6 +200,47 @@ app.post('/api/machines/:id/runner-restart', async (req, reply) => {
   }
 });
 
+// runner 远程安装/更新（A 期收尾）：SSH 到目标机 clone/pull + pnpm install + pm2 起 runner
+app.post('/api/machines/:id/runner-install', async (req, reply) => {
+  if (!hasDb()) return reply.code(503).send({ error: 'database not available' });
+  const z = await import('zod');
+  const body = z.object({ dataRoot: z.string().trim().optional() }).parse(req.body ?? {});
+  const id = (req.params as { id: string }).id;
+  const target = await sshTargetOf(id);
+  if (!target) return reply.code(400).send({ error: '先配置该机 SSH host/user' });
+  const { getDb, schema } = await import('./db/index');
+  const { eq } = await import('drizzle-orm');
+  const [m] = await getDb().select().from(schema.machines).where(eq(schema.machines.id, id)).limit(1);
+  if (!m) return reply.code(404).send({ error: 'machine not found' });
+  const serverWs = (process.env.PUBLIC_URL ?? `http://${req.headers.host ?? '127.0.0.1:7620'}`).replace(/^http/, 'ws') + '/ws/runner';
+  const token = m.enrollToken ?? env.RUNNER_SHARED_TOKEN;
+  const labels = m.labels.join(',') || 'dev';
+  const dataRoot = body.dataRoot ?? '/data';
+  const script = [
+    'set -e',
+    'export PATH=$PATH:/usr/local/bin:$HOME/.local/share/pnpm',
+    'command -v git >/dev/null || { echo MISSING:git; exit 9; }',
+    'command -v pnpm >/dev/null || { echo MISSING:pnpm; exit 9; }',
+    'command -v pm2 >/dev/null || npm i -g pm2',
+    'if [ -d /root/code-orchestrator/.git ]; then cd /root/code-orchestrator && git fetch -q && git reset -q --hard origin/main;',
+    'else git clone -q https://github.com/JavaZeroo/code-orchestrator.git /root/code-orchestrator && cd /root/code-orchestrator; fi',
+    'pnpm install --prefer-offline >/tmp/co-runner-install.log 2>&1 || { tail -5 /tmp/co-runner-install.log; exit 8; }',
+    `SERVER_URL=${serverWs} RUNNER_SHARED_TOKEN='${token}' MACHINE_ID=${m.id} MACHINE_NAME='${m.name}' MACHINE_LABELS=${labels} DATA_ROOT=${dataRoot} pm2 startOrRestart ecosystem.config.cjs --only co-runner --update-env >/dev/null`,
+    'echo runner-install-ok',
+  ].join('\n');
+  const { getInstanceKey, sshExec } = await import('./services/sshOps');
+  try {
+    const { privatePem } = await getInstanceKey();
+    const res = await sshExec(target, script, { privatePem }, 600_000);
+    if (!res.stdout.includes('runner-install-ok')) {
+      return reply.code(502).send({ error: `安装失败(exit ${res.exitCode}): ${(res.stderr || res.stdout).slice(-400)}` });
+    }
+    return { ok: true };
+  } catch (err) {
+    return reply.code(502).send({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // 资源面板：在线机加速器占用（总数 vs 活跃预留）+ 排队任务数——「哪台机有空闲 NPU」一眼可见
 app.get('/api/resources', async (req, reply) => {
   if (!hasDb()) return reply.code(503).send({ error: 'database not available' });

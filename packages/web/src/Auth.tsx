@@ -715,6 +715,14 @@ function SshOpsBlock({ m }: { m: AllMachineRow }) {
       <div className="flex items-center gap-2">
         <Button variant="secondary" size="sm" className="!text-[11px]" disabled={busy || !host.trim()} onClick={test}>测试连接{password.trim() ? '并装公钥' : ''}</Button>
         <Button variant="secondary" size="sm" className="!text-[11px]" disabled={busy || !host.trim()} onClick={restart}>重启 runner</Button>
+        <Button variant="secondary" size="sm" className="!text-[11px]" disabled={busy || !host.trim()} onClick={() => {
+          if (!confirm(`在 ${m.name} 上安装/更新 runner？（clone/pull 仓库 + pnpm install + pm2 拉起，需目标机已有 git/node/pnpm）`)) return;
+          setBusy(true);
+          api.runnerInstall(m.id)
+            .then(() => toast.success('runner 已安装/更新并拉起，等待注册上线'))
+            .catch((e) => toast.error(String(e instanceof Error ? e.message : e)))
+            .finally(() => setBusy(false));
+        }}>安装/更新 runner</Button>
         <span className="text-[10px] text-faint">运维通道：引导/挡救；执行面仍走 runner 长连接</span>
       </div>
     </div>

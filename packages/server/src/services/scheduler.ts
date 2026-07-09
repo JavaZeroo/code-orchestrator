@@ -41,7 +41,7 @@ export function cardIndices(machine: MachineInfo, kind: string): number[] {
 /** 纯放置：从在线机中挑候选（满足 label + kind），free 集合由调用方给（便于单测）。 */
 export function chooseMachine(
   online: MachineInfo[],
-  opts: { accelKind?: string | null; labels?: string[]; id?: string; readyMachineIds?: string[]; busyMachineIds?: string[] },
+  opts: { accelKind?: string | null; labels?: string[]; id?: string; readyMachineIds?: string[]; busyMachineIds?: string[]; components?: Record<string, string>; componentCache?: Record<string, Record<string, string[]>> },
 ): string | null {
   if (opts.id) {
     return online.some((m) => m.id === opts.id) ? opts.id : null;
@@ -57,6 +57,20 @@ export function chooseMachine(
   }
   if (candidates.length === 0) {
     return null;
+  }
+  // 组件感知（design-machines-env ③）：优先派到已缓存项目所需组件的机器；
+  // 全都没有则不阻断（软偏好——缺失时容器内仍可 co-fetch-ms/人工下发补齐）
+  const need = Object.entries(opts.components ?? {});
+  if (need.length > 0 && opts.componentCache) {
+    const satisfied = candidates.filter((m) => {
+      const cache = opts.componentCache?.[m.id] ?? {};
+      return need.every(([comp, ver]) => (cache[comp] ?? []).includes(ver));
+    });
+    if (satisfied.length > 0) {
+      candidates = satisfied;
+    } else {
+      console.warn(`[scheduler] 无机器缓存全部所需组件 ${JSON.stringify(opts.components)}，退回全候选`);
+    }
   }
   // 黏性：优先已 ready 物化的机器（省冷物化）
   const ready = new Set(opts.readyMachineIds ?? []);
@@ -98,10 +112,21 @@ export async function readyMachineIds(projectId?: string): Promise<string[]> {
 export async function schedule(opts: ScheduleOpts): Promise<Scheduled | null> {
   const online = listMachines();
   const ready = await readyMachineIds(opts.projectId);
+  // 项目组件声明 + 各机缓存（软偏好过滤的输入）
+  let components: Record<string, string> | undefined;
+  let componentCache: Record<string, Record<string, string[]>> | undefined;
+  if (hasDb() && opts.projectId) {
+    const [proj] = await getDb().select({ components: schema.projects.components }).from(schema.projects).where(eq(schema.projects.id, opts.projectId)).limit(1);
+    if (proj?.components && Object.keys(proj.components).length > 0) {
+      components = proj.components;
+      const rows = await getDb().select({ id: schema.machines.id, componentCache: schema.machines.componentCache }).from(schema.machines);
+      componentCache = Object.fromEntries(rows.map((r) => [r.id, r.componentCache ?? {}]));
+    }
+  }
 
   // 无加速器：纯放置，不预留
   if (!opts.accelKind) {
-    const machineId = chooseMachine(online, { labels: opts.labels, id: opts.id, readyMachineIds: ready });
+    const machineId = chooseMachine(online, { labels: opts.labels, id: opts.id, readyMachineIds: ready, components, componentCache });
     return machineId ? { machineId } : null;
   }
 
@@ -116,7 +141,7 @@ export async function schedule(opts: ScheduleOpts): Promise<Scheduled | null> {
       .from(schema.resourceReservations)
       .where(eq(schema.resourceReservations.status, 'active'));
     const busy = busyRows.map((r) => r.machineId);
-    const machineId = chooseMachine(online, { accelKind: kind, labels: opts.labels, id: opts.id, readyMachineIds: ready, busyMachineIds: busy });
+    const machineId = chooseMachine(online, { accelKind: kind, labels: opts.labels, id: opts.id, readyMachineIds: ready, busyMachineIds: busy, components, componentCache });
     if (!machineId) {
       return null;
     }

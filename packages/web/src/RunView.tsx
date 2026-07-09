@@ -178,6 +178,20 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
           </div>
           <StatusDot tone={runMeta.tone} live={runMeta.live} />
           <Badge tone={runMeta.tone}>{runMeta.label}</Badge>
+          {(effectiveRun?.status === 'running' || effectiveRun?.status === 'waiting_human') && (
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => {
+                if (!confirm('取消该 run？活跃节点会话将被终止。')) return;
+                api.cancelRun(runId)
+                  .then(() => { toast.success('已取消'); refreshThread(); refreshGraph(); })
+                  .catch((e) => toast.error(String(e instanceof Error ? e.message : e)));
+              }}
+            >
+              取消
+            </Button>
+          )}
         </div>
       </header>
 
