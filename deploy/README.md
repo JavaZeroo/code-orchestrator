@@ -72,6 +72,6 @@ POSTGRES_PASSWORD=... AUTH_SECRET=... RUNNER_SHARED_TOKEN=... deploy/run-host.sh
 
 每台执行机（含 NPU 机器）任选其一：
 - **裸机 pm2**（推荐，NPU 任务需要宿主环境）：clone 仓库 → `pnpm install` → 参照 ecosystem.config.cjs 起 co-runner，`SERVER_URL=ws://<server>:7620/ws/runner MACHINE_LABELS=npu,910b`
-- **容器**：`co-runner:latest` 镜像 + 挂载 `~/.claude`（或传 ANTHROPIC_API_KEY）
+- **容器**：`co-runner:latest` 镜像 + 挂载 `~/.claude`（或传 ANTHROPIC_API_KEY）；Codex 还需要镜像内安装 `codex` CLI，并挂载 `~/.codex` 或按会话注入 `CODEX_API_KEY`
 
-注意每台机器都需要能访问 Anthropic API（直连或代理）与 gitcode。
+注意每台机器都需要能访问所选 agent/model 的 API（直连或代理）与 gitcode。

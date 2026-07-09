@@ -19,7 +19,7 @@ import { getDb, schema } from '../db/index';
 import { encryptSecret } from '../services/crypto';
 
 const BUILTIN_ALIASES = ['claude', 'deepseek', 'glm'];
-const BUILTIN_PROVIDERS = ['anthropic', 'deepseek', 'glm'];
+const BUILTIN_PROVIDERS = ['anthropic', 'openai', 'deepseek', 'glm'];
 
 const endpointBodySchema = z.object({
   model: z.string().min(1),

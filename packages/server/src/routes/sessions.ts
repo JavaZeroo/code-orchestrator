@@ -116,6 +116,7 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       .object({
         projectId: z.string(),
         prompt: z.string().optional(),
+        agent: sessionAgentSchema.default('claude'),
         model: z.string().optional(),
         machineId: z.string().optional(),
         key: z.string().optional(),

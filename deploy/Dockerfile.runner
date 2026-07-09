@@ -1,6 +1,7 @@
 # 执行机 runner 镜像（可选形态——裸机 pm2 部署 runner 同样受支持，
 # NPU 机器上跑真实训练/测试时通常直接用宿主环境 + pm2）。
-# 认证：挂载 ~/.claude（OAuth）或传 ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN。
+# 认证：Claude 挂载 ~/.claude（OAuth）或传 ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN；
+# Codex 需镜像/宿主 PATH 上有 codex CLI，并挂载 ~/.codex 或按单次运行注入 CODEX_API_KEY。
 #
 #   docker build -f deploy/Dockerfile.runner \
 #     --build-arg http_proxy=$http_proxy --build-arg https_proxy=$https_proxy \

@@ -1,6 +1,7 @@
 # code-orchestrator host runner（design-v2 #37）：在有 docker 的宿主机常驻一个 runner，
 # 承载容器化 agent 会话（agent 跑在训练容器内）。装法：
-#   1) 备好运行时目录（node + runner.mjs + agent.mjs + node_modules/@anthropic-ai/claude-agent-sdk[+linux-arm64] + ws），默认 /opt/co-runtime
+#   1) 备好运行时目录（node + runner.mjs + agent.mjs + node_modules/@anthropic-ai/claude-agent-sdk[+linux-arm64] + ws），默认 /opt/co-runtime。
+#      若容器内使用 Codex，训练容器自身还需安装 codex CLI 并提供 ~/.codex 或 CODEX_API_KEY。
 #   2) 按本机改下面 Environment（CO server 地址、token、数据盘根、加速器数量）
 #   3) sudo cp 本文件 /etc/systemd/system/ && sudo systemctl enable --now co-host-runner
 [Unit]

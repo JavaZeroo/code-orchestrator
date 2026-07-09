@@ -9,7 +9,7 @@ export interface AgentBackend {
   /**
    * 容器内该后端的记忆目录（会话 cwd=/workspace 下）。
    * Claude Code：`~/.claude/projects/<cwd-slug>/memory`，cwd=/workspace → slug `-workspace`。
-   * CLAUDE.md 在仓内、随 worktree 走，这里只管仓外那份持续沉淀的 memory。
+   * Codex：`~/.codex/memories`。AGENTS.md 在仓内、随 worktree 走；这里只管仓外沉淀。
    */
   memoryContainerPath: string;
 }
@@ -19,8 +19,14 @@ const claudeCode: AgentBackend = {
   memoryContainerPath: '/root/.claude/projects/-workspace/memory',
 };
 
+const codex: AgentBackend = {
+  name: 'codex',
+  memoryContainerPath: '/root/.codex/memories',
+};
+
 const registry: Record<string, AgentBackend> = {
   [claudeCode.name]: claudeCode,
+  [codex.name]: codex,
 };
 
 export function getAgentBackend(name: string): AgentBackend | null {
