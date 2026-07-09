@@ -20,7 +20,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: pnpm
       # 源码禁止裸控制字节（NUL 等）：会让 git 把文件判成二进制，diff/评审全盲。
       # 真需要控制字符时写 \u0000 转义（autoMerge.ts 的 glob 占位符踩过此坑）。
       - name: No raw control bytes in sources
@@ -30,7 +29,7 @@ jobs:
             exit 1
           fi
       - name: Install deps (warm store, offline)
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: pnpm install --store-dir .pnpm-store --frozen-lockfile --prefer-offline
       - name: Typecheck
         run: pnpm typecheck
       - name: Unit tests with coverage
@@ -61,9 +60,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: pnpm
       - name: Install deps (warm store, offline)
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: pnpm install --store-dir .pnpm-store --frozen-lockfile --prefer-offline
       - name: Apply database schema
         if: env.DATABASE_URL != ''
         run: pnpm --filter @co/server exec drizzle-kit push --force
