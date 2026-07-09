@@ -4,6 +4,7 @@ import postgres from 'postgres';
 import WebSocket from 'ws';
 import { createApp } from './app';
 import { closeDb } from './db/index';
+import { publish } from './events';
 
 const runSt = Boolean(process.env.DATABASE_URL);
 const describeSt = runSt ? describe : describe.skip;
@@ -95,6 +96,15 @@ class FakeRunner {
 let app: FastifyInstance | null = null;
 let baseUrl = '';
 const runners: FakeRunner[] = [];
+
+function waitForWsMessage<T>(ws: WebSocket): Promise<T> {
+  return new Promise((resolve, reject) => {
+    ws.once('message', (data) => {
+      resolve(JSON.parse(data.toString()) as T);
+    });
+    ws.once('error', reject);
+  });
+}
 
 async function truncateDb() {
   const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
@@ -210,5 +220,40 @@ describeSt('server ST: API + runner websocket', () => {
     expect((events.json() as { events: Array<{ type: string }> }).events.map((event) => event.type)).toEqual(
       expect.arrayContaining(['session.created', 'session.state', 'approval.requested', 'approval.decided']),
     );
+  });
+});
+
+describe('server ST: client websocket event stream', () => {
+  afterEach(async () => {
+    await app?.close();
+    app = null;
+    await closeDb();
+  });
+
+  it('broadcasts published session events to matching websocket subscribers without requiring a database', async () => {
+    await startApp();
+    const ws = new WebSocket(`${baseUrl.replace(/^http/, 'ws')}/ws/client?sessionId=s-st-client`);
+    await new Promise<void>((resolve, reject) => {
+      ws.once('open', resolve);
+      ws.once('error', reject);
+    });
+
+    const nextMessage = waitForWsMessage<{
+      type: string;
+      sessionId?: string;
+      payload: unknown;
+    }>(ws);
+    await publish({ type: 'session.state', sessionId: 's-st-client', payload: { state: 'idle' } });
+
+    await expect(nextMessage).resolves.toMatchObject({
+      type: 'session.state',
+      sessionId: 's-st-client',
+      payload: { state: 'idle' },
+    });
+
+    await new Promise<void>((resolve) => {
+      ws.once('close', resolve);
+      ws.close();
+    });
   });
 });
