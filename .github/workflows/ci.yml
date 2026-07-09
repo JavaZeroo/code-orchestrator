@@ -14,14 +14,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-      - name: Enable pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.9.0 --activate
       # 源码禁止裸控制字节（NUL 等）：会让 git 把文件判成二进制，diff/评审全盲。
       # 真需要控制字符时写 \u0000 转义（autoMerge.ts 的 glob 占位符踩过此坑）。
       - name: No raw control bytes in sources
@@ -56,14 +55,13 @@ jobs:
       AUTH_SECRET: ""
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-      - name: Enable pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.9.0 --activate
       - name: Install deps (warm store, offline)
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Apply database schema
