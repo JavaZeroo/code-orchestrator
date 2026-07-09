@@ -503,6 +503,26 @@ export function ProjectBasicSection({ project, onOpenSession }: { project: Proje
         />
       </Label>
 
+      <Label>
+        环境组件（每行 组件=版本，容器内经 activate.sh/msenv 消费）
+        <Textarea
+          rows={2}
+          defaultValue={Object.entries(project.components ?? {}).map(([k, v]) => `${k}=${v}`).join('\n')}
+          placeholder={'cann=9.1.0-beta3\nmindspore=20260105'}
+          className="font-mono text-[12px]"
+          onBlur={(e) => {
+            const next: Record<string, string> = {};
+            for (const line of e.target.value.split('\n')) {
+              const m = line.trim().match(/^([\w.-]+)\s*=\s*(\S+)$/);
+              if (m) next[m[1]!] = m[2]!;
+            }
+            if (JSON.stringify(next) !== JSON.stringify(project.components ?? {})) {
+              saveBasicField({ components: next } as Partial<ProjectRow>);
+            }
+          }}
+        />
+      </Label>
+
       <div className="flex items-center justify-between">
         <span className="text-[11px] font-semibold tracking-wide text-dim uppercase">自治开关</span>
         <AutonomySwitch value={project.autonomy} onChange={setAutonomy} />
