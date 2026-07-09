@@ -50,6 +50,7 @@ export interface AllMachineRow {
   lastActiveAt: string | null;
   dataRoot: string | null;
   resources: Array<{ kind: string; index: number; model?: string }>;
+  enrollToken: string | null;
 }
 
 export type { ApprovalRequest, SessionEnvelope, SessionState, WorkflowDef };
@@ -285,6 +286,12 @@ export const api = {
     fetch(`/api/llm/providers/${encodeURIComponent(name)}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
   projects: () => fetch('/api/projects').then((r) => j<{ projects: ProjectRow[] }>(r)).then((d) => d.projects),
   createProject: (body: Partial<ProjectRow>) => post('/api/projects', body).then((r) => j<{ id: string }>(r)),
+  createMachine: (body: { name: string; labels: string[] }) =>
+    post('/api/machines', body).then((r) => j<{ id: string; enrollToken: string }>(r)),
+  patchMachine: (id: string, patch: { name?: string; labels?: string[] }) =>
+    fetch(`/api/machines/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
+  deleteMachine: (id: string) => fetch(`/api/machines/${id}`, { method: 'DELETE' }).then((r) => j(r)),
+  regenMachineToken: (id: string) => post(`/api/machines/${id}/token`, {}).then((r) => j<{ enrollToken: string }>(r)),
   resources: () =>
     fetch('/api/resources').then((r) =>
       j<{ machines: { id: string; labels: string[]; accels: { kind: string; total: number }[]; used: number }[]; queued: number }>(r)),

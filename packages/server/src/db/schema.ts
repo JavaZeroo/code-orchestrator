@@ -260,6 +260,8 @@ export const machines = pgTable('machines', {
   dataRoot: text('data_root'),
   /** 加速器清单（design-v2 Q4）：[{kind,index,model?}]。由 accelerator 适配器 detect 上报（M2），替代死字段 npu */
   resources: jsonb('resources').$type<Array<{ kind: string; index: number; model?: string }>>().notNull().default([]),
+  /** 每机接入凭证：UI「添加机器」生成，runner 以它为 Bearer token 连入并绑定本行（替代共享 token 抄写） */
+  enrollToken: text('enroll_token'),
   lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
 });
 
