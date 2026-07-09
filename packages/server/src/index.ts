@@ -18,6 +18,7 @@ import { registerLlmRoutes } from './routes/llm';
 import { registerMeRoutes } from './routes/me';
 import { registerProjectRoutes } from './routes/projects';
 import { registerSessionRoutes } from './routes/sessions';
+import { registerComponentRoutes } from './routes/components';
 import { registerTriggerRoutes } from './routes/triggers';
 import { registerWorkRoutes } from './routes/work';
 import { registerWorkflowRoutes } from './routes/workflows';
@@ -174,6 +175,7 @@ await registerSessionRoutes(app);
 await registerWorkflowRoutes(app);
 await registerForgeRoutes(app);
 await registerTriggerRoutes(app);
+await registerComponentRoutes(app);
 await registerWorkRoutes(app);
 await registerProjectRoutes(app);
 if (authEnabled) {

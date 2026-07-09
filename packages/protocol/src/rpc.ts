@@ -188,6 +188,8 @@ export const serverMethods = {
       sessions: z
         .array(z.object({ sessionId: z.string(), state: sessionStateSchema }))
         .default([]),
+      /** 本机组件缓存扫描结果：{cann:["9.0.0",...]}（<dataRoot>/co/cache/ 两级目录） */
+      componentCache: z.record(z.string(), z.array(z.string())).optional(),
     }),
     result: z.object({ ok: z.boolean() }),
   },

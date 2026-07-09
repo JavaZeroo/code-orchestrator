@@ -51,6 +51,16 @@ export interface AllMachineRow {
   dataRoot: string | null;
   resources: Array<{ kind: string; index: number; model?: string }>;
   enrollToken: string | null;
+  componentCache: Record<string, string[]>;
+}
+
+export interface ComponentSourceRow {
+  id: string;
+  component: string;
+  version: string;
+  url: string;
+  sha256: string | null;
+  createdAt: string;
 }
 
 export type { ApprovalRequest, SessionEnvelope, SessionState, WorkflowDef };
@@ -287,6 +297,14 @@ export const api = {
     fetch(`/api/llm/providers/${encodeURIComponent(name)}`, { method: 'DELETE' }).then((r) => j<{ ok: boolean }>(r)),
   projects: () => fetch('/api/projects').then((r) => j<{ projects: ProjectRow[] }>(r)).then((d) => d.projects),
   createProject: (body: Partial<ProjectRow>) => post('/api/projects', body).then((r) => j<{ id: string }>(r)),
+  componentSources: () =>
+    fetch('/api/component-sources').then((r) => j<{ sources: ComponentSourceRow[] }>(r)).then((d) => d.sources),
+  createComponentSource: (body: { component: string; version: string; url: string; sha256?: string }) =>
+    post('/api/component-sources', body).then((r) => j<{ id: string }>(r)),
+  deleteComponentSource: (id: string) =>
+    fetch(`/api/component-sources/${id}`, { method: 'DELETE' }).then((r) => j(r)),
+  dispatchComponent: (id: string, machineId: string) =>
+    post(`/api/component-sources/${id}/dispatch`, { machineId }).then((r) => j<{ ok: boolean; note?: string }>(r)),
   createMachine: (body: { name: string; labels: string[] }) =>
     post('/api/machines', body).then((r) => j<{ id: string; enrollToken: string }>(r)),
   patchMachine: (id: string, patch: { name?: string; labels?: string[] }) =>
