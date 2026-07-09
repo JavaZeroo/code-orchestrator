@@ -262,6 +262,10 @@ export const machines = pgTable('machines', {
   resources: jsonb('resources').$type<Array<{ kind: string; index: number; model?: string }>>().notNull().default([]),
   /** 每机接入凭证：UI「添加机器」生成，runner 以它为 Bearer token 连入并绑定本行（替代共享 token 抄写） */
   enrollToken: text('enroll_token'),
+  /** SSH 运维通道（design-machines-env A）：host/port/user 非密；私钥在 instance_secrets */
+  sshHost: text('ssh_host'),
+  sshPort: integer('ssh_port'),
+  sshUser: text('ssh_user'),
   /** 组件缓存自报：{cann:["9.0.0"]}，runner 心跳扫描 <dataRoot>/co/cache/ 上报（design-machines-env ③） */
   componentCache: jsonb('component_cache').$type<Record<string, string[]>>().notNull().default({}),
   lastActiveAt: timestamp('last_active_at', { withTimezone: true }),
@@ -409,6 +413,14 @@ export const forgeRefs = pgTable('forge_refs', {
 /** 需求录入触发器（task #22）：某 forge repo 的 issue 满足过滤条件 → 自动起工作流。
  *  最初愿景的入口：需求（issue）进来 → 分析 → 拆解 → 设计 → 实现 → PR → 门禁回流。 */
 /** 组件源登记表（design-machines-env ③）：版本→URL，CANN 等低频大包的下发依据 */
+/** 实例级机密（如 SSH 私钥）：value_enc AES-256-GCM，public_value 为可公开侧（公钥） */
+export const instanceSecrets = pgTable('instance_secrets', {
+  key: text('key').primaryKey(),
+  valueEnc: text('value_enc').notNull(),
+  publicValue: text('public_value'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const componentSources = pgTable('component_sources', {
   id: text('id').primaryKey(),
   component: text('component').notNull(),

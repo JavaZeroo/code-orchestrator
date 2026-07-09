@@ -7,12 +7,14 @@ packages:
 storeDir: /root/.pnpm-store
 nodeLinker: hoisted
 verifyDepsBeforeRun: false
+# ssh2/cpu-features 的原生加速构建不需要（纯 JS 回退足够），false 仅为静默审批
 allowBuilds:
+  cpu-features: false
   esbuild: true
+  ssh2: false
 # 只拉当前平台的可选依赖（darwin/win32 平台包经代理下载会反复重试卡死安装）
 supportedArchitectures:
   os:
     - linux
   cpu:
     - arm64
-

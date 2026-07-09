@@ -668,8 +668,83 @@ function installCommand(m: { id: string; labels: string[]; enrollToken: string |
   ].join('\n');
 }
 
+function SshOpsBlock({ m }: { m: AllMachineRow }) {
+  const [host, setHost] = useState(m.sshHost ?? '');
+  const [port, setPort] = useState(String(m.sshPort ?? 22));
+  const [user, setUser] = useState(m.sshUser ?? 'root');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const save = () =>
+    api.patchMachine(m.id, { sshHost: host.trim() || null, sshPort: Number(port) || 22, sshUser: user.trim() || 'root' })
+      .then(() => invalidate('machines-all'))
+      .catch((e) => toast.error(String(e)));
+
+  const test = () => {
+    setBusy(true);
+    save()
+      .then(() => api.sshTest(m.id, password.trim() || undefined))
+      .then((r) => {
+        toast.success(`连通 ✓ ${r.uname ?? ''}${r.keyInstalled ? ' · 公钥已安装（密码即弃）' : ''}`);
+        setPassword('');
+      })
+      .catch((e) => toast.error(String(e instanceof Error ? e.message : e)))
+      .finally(() => setBusy(false));
+  };
+
+  const restart = () => {
+    setBusy(true);
+    api.runnerRestart(m.id)
+      .then((r) => toast.success(`runner 已重启（${r.via}）`))
+      .catch((e) => toast.error(String(e instanceof Error ? e.message : e)))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="mt-2 flex flex-col gap-1.5 rounded-md border border-line/60 bg-bg-2/30 px-2.5 py-2">
+      <div className="flex items-center gap-1.5">
+        <input value={host} onChange={(e) => setHost(e.target.value)} onBlur={save} placeholder="host（IP/域名）"
+          className="w-36 rounded border border-line bg-bg px-1.5 py-0.5 font-mono text-[11px] text-ink outline-none focus:border-accent" />
+        <input value={port} onChange={(e) => setPort(e.target.value)} onBlur={save} placeholder="22"
+          className="w-14 rounded border border-line bg-bg px-1.5 py-0.5 font-mono text-[11px] text-ink outline-none focus:border-accent" />
+        <input value={user} onChange={(e) => setUser(e.target.value)} onBlur={save} placeholder="root"
+          className="w-20 rounded border border-line bg-bg px-1.5 py-0.5 font-mono text-[11px] text-ink outline-none focus:border-accent" />
+        <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="密码（仅首连装公钥，不保存）"
+          className="min-w-0 flex-1 rounded border border-line bg-bg px-1.5 py-0.5 font-mono text-[11px] text-ink outline-none focus:border-accent" />
+      </div>
+      <div className="flex items-center gap-2">
+        <Button variant="secondary" size="sm" className="!text-[11px]" disabled={busy || !host.trim()} onClick={test}>测试连接{password.trim() ? '并装公钥' : ''}</Button>
+        <Button variant="secondary" size="sm" className="!text-[11px]" disabled={busy || !host.trim()} onClick={restart}>重启 runner</Button>
+        <span className="text-[10px] text-faint">运维通道：引导/挡救；执行面仍走 runner 长连接</span>
+      </div>
+    </div>
+  );
+}
+
+function InstanceKeyBlock() {
+  const [pub, setPub] = useState<string | null>(null);
+  useEffect(() => { api.sshKey().then((r) => setPub(r.publicKey)).catch(() => {}); }, []);
+  if (!pub) return null;
+  return (
+    <details className="mb-2">
+      <summary className="cursor-pointer text-xs text-dim hover:text-ink-2">实例 SSH 公钥（无密码机器手动放入 authorized_keys）</summary>
+      <div className="mt-1.5 flex items-center gap-2">
+        <pre className="min-w-0 flex-1 overflow-x-auto rounded-md border border-line bg-bg p-2 font-mono text-[10px] text-ink-2">{pub}</pre>
+        <span className="flex shrink-0 flex-col gap-1">
+          <Button variant="secondary" size="sm" className="!text-[11px]" onClick={() => { void navigator.clipboard.writeText(pub); toast.success('已复制'); }}>复制</Button>
+          <Button variant="ghost" size="sm" className="!text-[11px]" onClick={() => {
+            if (!confirm('轮换后旧公钥全部失效，需逐机重装。继续？')) return;
+            api.rotateSshKey().then((r) => { setPub(r.publicSsh); toast.success('已轮换——记得逐机重装'); }).catch((e) => toast.error(String(e)));
+          }}>轮换</Button>
+        </span>
+      </div>
+    </details>
+  );
+}
+
 function MachineRow({ m }: { m: AllMachineRow }) {
   const [showCmd, setShowCmd] = useState(false);
+  const [showSsh, setShowSsh] = useState(false);
   const [editing, setEditing] = useState(false);
   const [labelsText, setLabelsText] = useState(m.labels.join(','));
 
@@ -725,6 +800,9 @@ function MachineRow({ m }: { m: AllMachineRow }) {
           {m.status === 'online' ? '在线' : pending ? '待接入' : '离线'}
           {m.lastActiveAt && ` · ${relTime(m.lastActiveAt)}`}
         </span>
+        <button className="shrink-0 text-[11px] text-dim hover:text-accent hover:underline" onClick={() => setShowSsh(!showSsh)}>
+          SSH
+        </button>
         {m.status !== 'online' && (
           <>
             <button className="shrink-0 text-[11px] text-accent hover:underline" onClick={() => (m.enrollToken ? setShowCmd(!showCmd) : regen())}>
@@ -736,6 +814,7 @@ function MachineRow({ m }: { m: AllMachineRow }) {
           </>
         )}
       </div>
+      {showSsh && <SshOpsBlock m={m} />}
       {showCmd && (
         <div className="mt-2">
           <pre className="overflow-x-auto rounded-md border border-line bg-bg p-2 font-mono text-[11px] leading-relaxed text-ink-2">{installCommand(m)}</pre>
@@ -796,6 +875,7 @@ export function MachinesSection() {
         </div>
       )}
       {createdId && <p className="mb-2 text-[11px] text-ok">✓ 已创建，点该行「接入命令」复制到目标机执行</p>}
+      <InstanceKeyBlock />
       {isLoading ? (
         <p className="text-xs text-dim">加载中…</p>
       ) : machines.length === 0 ? (

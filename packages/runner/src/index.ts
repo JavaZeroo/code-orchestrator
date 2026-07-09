@@ -24,19 +24,27 @@ function scanComponentCache(): Record<string, string[]> | undefined {
   if (!config.dataRoot) return undefined;
   const root = join(config.dataRoot, 'co', 'cache');
   const out: Record<string, string[]> = {};
-  try {
-    for (const comp of readdirSync(root, { withFileTypes: true })) {
-      if (!comp.isDirectory() || comp.name.startsWith('.')) continue;
-      const versions = readdirSync(join(root, comp.name), { withFileTypes: true })
-        .filter((v) => v.isDirectory() && !v.name.startsWith('.'))
-        .map((v) => v.name)
-        .sort();
-      if (versions.length) out[comp.name] = versions;
+  const listDirs = (p: string) => {
+    try {
+      return readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith('.'));
+    } catch {
+      return [];
     }
-  } catch {
-    return undefined; // cache 目录不存在 = 无缓存
+  };
+  for (const comp of listDirs(root)) {
+    // wheels/ 是三层布局（wheels/<组件>/<key>/），下钻一层按真实组件名归类
+    if (comp.name === 'wheels') {
+      for (const sub of listDirs(join(root, 'wheels'))) {
+        const keys = listDirs(join(root, 'wheels', sub.name)).map((d) => d.name).sort();
+        if (keys.length) out[sub.name] = [...(out[sub.name] ?? []), ...keys];
+      }
+      continue;
+    }
+    const versions = listDirs(join(root, comp.name)).map((d) => d.name).sort();
+    if (versions.length) out[comp.name] = versions;
   }
-  return Object.keys(out).length ? out : undefined;
+  // 空对象也要上报——否则删掉缓存后 DB 里的旧值永远清不掉
+  return out;
 }
 
 const ctx: RunnerContext = { conn: null };
