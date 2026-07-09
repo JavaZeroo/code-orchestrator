@@ -44,22 +44,8 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, co-host]
     needs: unit
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: co
-          POSTGRES_PASSWORD: co
-          POSTGRES_DB: co
-        ports:
-          - 55432:5432
-        options: >-
-          --health-cmd "pg_isready -U co"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
     env:
-      DATABASE_URL: postgres://co:co@127.0.0.1:55432/co
+      DATABASE_URL: ${{ secrets.CI_DATABASE_URL }}
       RUNNER_SHARED_TOKEN: st-runner-token
       AUTH_SECRET: ""
     steps:
@@ -69,6 +55,7 @@ jobs:
       - name: Install deps (warm store, offline)
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Apply database schema
+        if: env.DATABASE_URL != ''
         run: pnpm --filter @co/server exec drizzle-kit push --force
       - name: System tests
         run: pnpm test:st

@@ -117,12 +117,18 @@ importers:
       '@types/ssh2':
         specifier: ^1.15.5
         version: 1.15.5
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       drizzle-kit:
         specifier: ^0.31.0
         version: 0.31.10
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.0
 
   packages/web:
     dependencies:
