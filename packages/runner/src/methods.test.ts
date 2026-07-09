@@ -1,0 +1,57 @@
+import { describe, expect, it } from 'vitest';
+import { createRunnerMethodHandler } from './methods';
+
+function handler() {
+  return createRunnerMethodHandler({ conn: null });
+}
+
+describe('createRunnerMethodHandler', () => {
+  it('executes machine.exec and returns stdout plus exit code', async () => {
+    const result = await handler()('machine.exec', {
+      cmd: 'node -e "process.stdout.write(\'runner-ok\')"',
+    });
+
+    expect(result).toEqual({ exitCode: 0, stdout: 'runner-ok', stderr: '' });
+  });
+
+  it('maps non-zero machine.exec failures without throwing', async () => {
+    const result = await handler()('machine.exec', {
+      cmd: 'node -e "process.stderr.write(\'bad\'); process.exit(7)"',
+    });
+
+    expect(result).toEqual({ exitCode: 7, stdout: '', stderr: 'bad' });
+  });
+
+  it('rejects unsupported opencode session spawn without creating a session', async () => {
+    const result = await handler()('session.spawn', {
+      sessionId: 's-opencode',
+      agent: 'opencode',
+      cwd: '/tmp',
+    });
+
+    expect(result).toEqual({ ok: false, error: 'agent "opencode" not supported yet' });
+  });
+
+  it('reports missing sessions for send, interrupt, and approval decisions', async () => {
+    await expect(handler()('session.send', { sessionId: 'missing', text: 'hello' })).resolves.toEqual({
+      ok: false,
+      error: 'session not running: missing',
+    });
+    await expect(handler()('session.interrupt', { sessionId: 'missing' })).resolves.toEqual({
+      ok: false,
+      error: 'session not running: missing',
+    });
+    await expect(
+      handler()('approval.decide', {
+        sessionId: 'missing',
+        approvalId: 'a1',
+        decision: { behavior: 'allow' },
+      }),
+    ).resolves.toEqual({ ok: false, error: 'session not found: missing' });
+  });
+
+  it('throws for unknown methods and invalid params', async () => {
+    await expect(handler()('nope', {})).rejects.toThrow('unknown method: nope');
+    await expect(handler()('machine.exec', { timeoutMs: 10 })).rejects.toThrow();
+  });
+});

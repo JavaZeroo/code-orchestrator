@@ -7,7 +7,7 @@ on:
 
 # self-hosted runner 安全：只跑同仓 PR（不执行外部 fork 的代码）
 jobs:
-  check:
+  unit:
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
@@ -27,6 +27,48 @@ jobs:
       - name: Install deps (warm store, offline)
         run: pnpm install --frozen-lockfile --prefer-offline
       - name: Typecheck
-        run: pnpm -r typecheck
-      - name: Test
-        run: pnpm -r test
+        run: pnpm typecheck
+      - name: Unit tests with coverage
+        run: pnpm test:coverage
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage
+          path: packages/*/coverage
+          if-no-files-found: ignore
+
+  st:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, co-host]
+    needs: unit
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: co
+          POSTGRES_PASSWORD: co
+          POSTGRES_DB: co
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U co"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://co:co@127.0.0.1:55432/co
+      RUNNER_SHARED_TOKEN: st-runner-token
+      AUTH_SECRET: ""
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure node/pnpm on PATH
+        run: echo "/root/.nvm/versions/node/v24.15.0/bin" >> "$GITHUB_PATH"
+      - name: Install deps (warm store, offline)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      - name: Apply database schema
+        run: pnpm --filter @co/server exec drizzle-kit push --force
+      - name: System tests
+        run: pnpm test:st
