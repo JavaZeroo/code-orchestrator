@@ -4,9 +4,11 @@ import {
   listQueuedTasks,
   reconcileQueueOnce,
   reprioritizeQueuedTask,
+  retryFailedQueuedTask,
   type QueuedTask,
   type TaskQueueStatus,
   type TaskQueueStore,
+  type VisibleQueuedTask,
 } from './taskQueue';
 
 interface MemoryRow extends QueuedTask {
@@ -32,6 +34,13 @@ class MemoryQueueStore implements TaskQueueStore {
     return result;
   }
 
+  async listVisible(projectId: string): Promise<VisibleQueuedTask[]> {
+    return [...this.rows.values()]
+      .filter((row) => (row.status === 'pending' || row.status === 'failed') && row.projectId === projectId)
+      .sort((a, b) => b.priority - a.priority || a.enqueuedAt.getTime() - b.enqueuedAt.getTime())
+      .map((task) => ({ ...task, status: task.status as VisibleQueuedTask['status'] }));
+  }
+
   async transition(
     id: string,
     from: TaskQueueStatus,
@@ -48,6 +57,14 @@ class MemoryQueueStore implements TaskQueueStore {
     const row = this.rows.get(id);
     if (!row || row.status !== 'pending' || (projectId && row.projectId !== projectId)) return false;
     row.priority = priority;
+    return true;
+  }
+
+  async requeueFailed(id: string, projectId: string, enqueuedAt: Date): Promise<boolean> {
+    const row = this.rows.get(id);
+    if (!row || row.status !== 'failed' || row.projectId !== projectId) return false;
+    row.status = 'pending';
+    row.enqueuedAt = enqueuedAt;
     return true;
   }
 
@@ -168,5 +185,54 @@ describe('queued task cancellation', () => {
 
     expect(cancellation).toEqual({ outcome: 'conflict', status: 'scheduled' });
     expect(store.rows.get('task-1')?.status).toBe('running');
+  });
+});
+
+describe('failed queued task retry', () => {
+  it('requeues a failed task with a fresh enqueue time while preserving payload and priority', async () => {
+    const row = pending();
+    const payload = { prompt: 'resume training', env: { RUN_ID: 'run-1' } };
+    row.status = 'failed';
+    row.payload = payload;
+    row.priority = 17;
+    const store = new MemoryQueueStore([row]);
+    const retriedAt = new Date('2026-07-11T02:00:00Z');
+
+    await expect(retryFailedQueuedTask('project-1', row.id, store, retriedAt)).resolves.toEqual({
+      outcome: 'retried',
+    });
+
+    expect(store.rows.get(row.id)).toMatchObject({
+      status: 'pending',
+      priority: 17,
+      enqueuedAt: retriedAt,
+    });
+    expect(store.rows.get(row.id)?.payload).toBe(payload);
+    await expect(listQueuedTasks('project-1', store)).resolves.toMatchObject([
+      { id: row.id, status: 'pending', payload, priority: 17, enqueuedAt: retriedAt },
+    ]);
+  });
+
+  it('isolates projects and rejects unknown or non-failed tasks', async () => {
+    const otherProject = pending('other-project-task');
+    otherProject.projectId = 'project-2';
+    otherProject.status = 'failed';
+    const pendingTask = pending('pending-task');
+    const store = new MemoryQueueStore([otherProject, pendingTask]);
+
+    await expect(retryFailedQueuedTask('project-1', 'missing', store)).resolves.toEqual({
+      outcome: 'not-found',
+    });
+    await expect(retryFailedQueuedTask('project-1', otherProject.id, store)).resolves.toEqual({
+      outcome: 'not-found',
+    });
+    await expect(retryFailedQueuedTask('project-1', pendingTask.id, store)).resolves.toEqual({
+      outcome: 'conflict',
+      status: 'pending',
+    });
+    expect(otherProject.status).toBe('failed');
+    await expect(listQueuedTasks('project-1', store)).resolves.toMatchObject([
+      { id: pendingTask.id, status: 'pending' },
+    ]);
   });
 });

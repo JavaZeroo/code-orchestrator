@@ -5,7 +5,7 @@ import WebSocket from 'ws';
 import { createApp } from './app';
 import { closeDb, getDb, schema } from './db/index';
 import { eq } from 'drizzle-orm';
-import { markTaskDone, reconcileQueueOnce } from './services/taskQueue';
+import { markTaskDone, reconcileQueueOnce, type QueuedTask } from './services/taskQueue';
 
 const runSt = Boolean(process.env.DATABASE_URL);
 const describeSt = runSt ? describe : describe.skip;
@@ -366,5 +366,105 @@ describeSt('server ST: API + runner websocket', () => {
     });
     expect(terminalUpdate.statusCode).toBe(409);
     expect(terminalUpdate.json()).toMatchObject({ status: 'done' });
+  });
+
+  it('retries a failed queued session through REST and dispatches its original payload', async () => {
+    const project = await app!.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: {
+        name: 'Retry Queue ST',
+        forge: 'github',
+        repo: 'example/retry-queue-st',
+        baseImage: 'example/train:latest',
+        accel: { kind: 'ascend-npu' },
+      },
+    });
+    expect(project.statusCode).toBe(201);
+    const { id: projectId } = project.json() as { id: string };
+
+    const spawn = await app!.inject({
+      method: 'POST',
+      url: '/api/container-sessions',
+      payload: { projectId, prompt: 'retry this training run', agent: 'claude', model: 'test-model' },
+    });
+    expect(spawn.statusCode).toBe(202);
+    const { taskId } = spawn.json() as { queued: true; taskId: string };
+
+    const reprioritized = await app!.inject({
+      method: 'PATCH',
+      url: `/api/projects/${projectId}/queued-sessions/${taskId}`,
+      payload: { priority: 17 },
+    });
+    expect(reprioritized.statusCode).toBe(200);
+
+    const originalRows = await getDb()
+      .select({ payload: schema.taskQueue.payload, priority: schema.taskQueue.priority })
+      .from(schema.taskQueue)
+      .where(eq(schema.taskQueue.id, taskId));
+    expect(originalRows).toHaveLength(1);
+    const original = originalRows[0]!;
+    const failedEnqueuedAt = new Date('2026-07-10T00:00:00Z');
+    await getDb()
+      .update(schema.taskQueue)
+      .set({ status: 'failed', enqueuedAt: failedEnqueuedAt })
+      .where(eq(schema.taskQueue.id, taskId));
+
+    const listed = await app!.inject({ method: 'GET', url: `/api/projects/${projectId}/queued-sessions` });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({
+      tasks: [{ id: taskId, status: 'failed', priority: 17, prompt: 'retry this training run' }],
+    });
+
+    const missing = await app!.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/queued-sessions/missing-task/retry`,
+    });
+    expect(missing.statusCode).toBe(404);
+
+    const retryStartedAt = Date.now();
+    const retried = await app!.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/queued-sessions/${taskId}/retry`,
+    });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.json()).toEqual({ ok: true });
+
+    const retriedRows = await getDb()
+      .select({
+        status: schema.taskQueue.status,
+        payload: schema.taskQueue.payload,
+        priority: schema.taskQueue.priority,
+        enqueuedAt: schema.taskQueue.enqueuedAt,
+      })
+      .from(schema.taskQueue)
+      .where(eq(schema.taskQueue.id, taskId));
+    expect(retriedRows).toHaveLength(1);
+    expect(retriedRows[0]).toMatchObject({ status: 'pending', payload: original.payload, priority: original.priority });
+    expect(retriedRows[0]!.enqueuedAt.getTime()).toBeGreaterThanOrEqual(retryStartedAt - 1_000);
+
+    const repeated = await app!.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/queued-sessions/${taskId}/retry`,
+    });
+    expect(repeated.statusCode).toBe(409);
+    expect(repeated.json()).toMatchObject({ status: 'pending' });
+
+    let dispatchedTask: QueuedTask | undefined;
+    await reconcileQueueOnce(async (task) => {
+      dispatchedTask = task;
+      return 'started';
+    });
+
+    expect(dispatchedTask).toMatchObject({
+      id: taskId,
+      payload: original.payload,
+      priority: original.priority,
+    });
+    const finalRows = await getDb()
+      .select({ status: schema.taskQueue.status })
+      .from(schema.taskQueue)
+      .where(eq(schema.taskQueue.id, taskId));
+    expect(finalRows).toEqual([{ status: 'running' }]);
   });
 });
