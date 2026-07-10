@@ -3,7 +3,12 @@
 import type { FastifyInstance } from 'fastify';
 import * as z from 'zod';
 import { hasDb } from '../db/index';
-import { cancelQueuedTask, listQueuedTasks, reprioritizeQueuedTask } from '../services/taskQueue';
+import {
+  cancelQueuedTask,
+  listQueuedTasks,
+  reprioritizeQueuedTask,
+  retryFailedQueuedTask,
+} from '../services/taskQueue';
 
 interface ProjectParams {
   projectId: string;
@@ -29,6 +34,7 @@ export async function registerTaskQueueRoutes(app: FastifyInstance): Promise<voi
         projectId: task.projectId,
         kind: task.kind,
         priority: task.priority,
+        status: task.status,
         enqueuedAt: task.enqueuedAt,
         prompt: typeof task.payload.prompt === 'string' ? task.payload.prompt : null,
         agent: typeof task.payload.agent === 'string' ? task.payload.agent : null,
@@ -52,6 +58,23 @@ export async function registerTaskQueueRoutes(app: FastifyInstance): Promise<voi
         return reply.code(409).send({ error: 'queued session is no longer pending', status: result.status });
       }
       return { ok: true, priority: result.priority };
+    },
+  );
+
+  app.post<{ Params: QueuedSessionParams }>(
+    '/api/projects/:projectId/queued-sessions/:taskId/retry',
+    async (req, reply) => {
+      if (!hasDb()) {
+        return reply.code(503).send({ error: 'database not available' });
+      }
+      const result = await retryFailedQueuedTask(req.params.projectId, req.params.taskId);
+      if (result.outcome === 'not-found') {
+        return reply.code(404).send({ error: 'queued session not found' });
+      }
+      if (result.outcome === 'conflict') {
+        return reply.code(409).send({ error: 'queued session is not failed', status: result.status });
+      }
+      return { ok: true };
     },
   );
 

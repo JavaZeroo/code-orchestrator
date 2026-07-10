@@ -47,6 +47,7 @@ export interface QueuedSessionRow {
   projectId: string;
   kind: string | null;
   priority: number;
+  status: 'pending' | 'failed';
   enqueuedAt: string;
   prompt: string | null;
   agent: string | null;
@@ -345,6 +346,10 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ priority }),
     }).then((r) => j<{ ok: boolean; priority: number }>(r)),
+  retryQueuedSession: (projectId: string, taskId: string) =>
+    fetch(`/api/projects/${encodeURIComponent(projectId)}/queued-sessions/${encodeURIComponent(taskId)}/retry`, {
+      method: 'POST',
+    }).then((r) => j<{ ok: boolean }>(r)),
   cancelQueuedSession: (projectId: string, taskId: string) =>
     fetch(`/api/projects/${encodeURIComponent(projectId)}/queued-sessions/${encodeURIComponent(taskId)}`, { method: 'DELETE' })
       .then((r) => j<{ ok: boolean }>(r)),

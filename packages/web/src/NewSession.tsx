@@ -1,4 +1,4 @@
-import { ChevronDown, SendHorizonal, X } from 'lucide-react';
+import { ChevronDown, RotateCcw, SendHorizonal, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type Effort, type QueuedSessionRow, type SessionAgent } from './api';
@@ -117,6 +117,7 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
   const [advancedCwd, setAdvancedCwd] = useState('');
   const [busy, setBusy] = useState(false);
   const [cancellingTaskId, setCancellingTaskId] = useState<string | null>(null);
+  const [retryingTaskId, setRetryingTaskId] = useState<string | null>(null);
   const [updatingPriorityTaskId, setUpdatingPriorityTaskId] = useState<string | null>(null);
   const [priorityDrafts, setPriorityDrafts] = useState<Record<string, string>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -242,6 +243,22 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
       })
       .catch((e) => toast.error(String(e instanceof Error ? e.message : e)))
       .finally(() => setCancellingTaskId(null));
+  };
+
+  const retryQueuedSession = (taskId: string) => {
+    if (!projectId || retryingTaskId) return;
+    setRetryingTaskId(taskId);
+    api.retryQueuedSession(projectId, taskId)
+      .then(() => {
+        toast.success('失败会话已重新排队');
+        invalidate('queued-sessions');
+        invalidate('resources');
+      })
+      .catch((e) => {
+        toast.error(String(e instanceof Error ? e.message : e));
+        void refetchQueuedSessions();
+      })
+      .finally(() => setRetryingTaskId(null));
   };
 
   const reprioritizeQueuedSession = async (task: QueuedSessionRow) => {
@@ -429,11 +446,11 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
               </div>
             )}
 
-            {/* 当前项目待资源的容器会话：可在 reconciler claim 前改优先级或取消。 */}
+            {/* 当前项目可操作的资源队列：pending 可改优先级/取消，failed 可按原参数重试。 */}
             {queuedSessions.length > 0 && (
               <div className="mt-4 overflow-hidden rounded-lg border border-line/70 bg-panel/70 text-left shadow-[var(--shadow-panel)]">
                 <div className="border-b border-line/60 px-3 py-2 text-[11px] font-medium text-dim">
-                  等待资源 · {queuedSessions.length}
+                  资源队列 · {queuedSessions.length}
                 </div>
                 <div className="max-h-48 overflow-y-auto">
                   {queuedSessions.map((task) => {
@@ -442,49 +459,69 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
                       <div key={task.id} className="flex items-center gap-3 border-b border-line/40 px-3 py-2 last:border-b-0">
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-xs text-ink-2">{task.prompt || '容器会话'}</p>
-                          <p className="mt-0.5 truncate text-[10px] text-faint">
-                            {[task.agent, task.model, new Date(task.enqueuedAt).toLocaleString()].filter(Boolean).join(' · ')}
-                          </p>
+                          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-faint">
+                            <span className={task.status === 'failed' ? 'shrink-0 text-danger' : 'shrink-0 text-warn'}>
+                              {task.status === 'failed' ? '派发失败' : '等待资源'}
+                            </span>
+                            <span className="truncate">
+                              {[task.agent, task.model, new Date(task.enqueuedAt).toLocaleString()].filter(Boolean).join(' · ')}
+                            </span>
+                          </div>
                         </div>
-                        <form
-                          className="flex shrink-0 items-center gap-1"
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            void reprioritizeQueuedSession(task);
-                          }}
-                        >
-                          <label htmlFor={`queue-priority-${task.id}`} className="text-[10px] text-faint">
-                            优先级
-                          </label>
-                          <input
-                            id={`queue-priority-${task.id}`}
-                            type="number"
-                            min={-2_147_483_648}
-                            max={2_147_483_647}
-                            step={1}
-                            value={priorityDraft}
-                            onChange={(event) => setPriorityDrafts((current) => ({ ...current, [task.id]: event.target.value }))}
-                            className="mono-nums h-7 w-16 rounded-md border border-line bg-bg-2/60 px-1.5 text-right text-[11px] text-ink outline-none focus:border-accent/60"
-                          />
+                        {task.status === 'failed' ? (
                           <button
-                            type="submit"
-                            disabled={updatingPriorityTaskId !== null || priorityDraft === String(task.priority)}
-                            className="rounded-md px-2 py-1 text-[11px] text-accent transition-colors hover:bg-accent/10 disabled:opacity-40"
-                            aria-label={`更新排队会话 ${task.id} 的优先级`}
+                            type="button"
+                            disabled={retryingTaskId !== null}
+                            onClick={() => retryQueuedSession(task.id)}
+                            className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-accent transition-colors hover:bg-accent/10 disabled:opacity-40"
+                            aria-label={`重试失败的排队会话 ${task.id}`}
                           >
-                            {updatingPriorityTaskId === task.id ? '更新中…' : '更新'}
+                            <RotateCcw size={12} />
+                            {retryingTaskId === task.id ? '重试中…' : '重试'}
                           </button>
-                        </form>
-                        <button
-                          type="button"
-                          disabled={cancellingTaskId !== null}
-                          onClick={() => cancelQueuedSession(task.id)}
-                          className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
-                          aria-label={`取消排队会话 ${task.id}`}
-                        >
-                          <X size={12} />
-                          {cancellingTaskId === task.id ? '取消中…' : '取消'}
-                        </button>
+                        ) : (
+                          <>
+                            <form
+                              className="flex shrink-0 items-center gap-1"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                void reprioritizeQueuedSession(task);
+                              }}
+                            >
+                              <label htmlFor={`queue-priority-${task.id}`} className="text-[10px] text-faint">
+                                优先级
+                              </label>
+                              <input
+                                id={`queue-priority-${task.id}`}
+                                type="number"
+                                min={-2_147_483_648}
+                                max={2_147_483_647}
+                                step={1}
+                                value={priorityDraft}
+                                onChange={(event) => setPriorityDrafts((current) => ({ ...current, [task.id]: event.target.value }))}
+                                className="mono-nums h-7 w-16 rounded-md border border-line bg-bg-2/60 px-1.5 text-right text-[11px] text-ink outline-none focus:border-accent/60"
+                              />
+                              <button
+                                type="submit"
+                                disabled={updatingPriorityTaskId !== null || priorityDraft === String(task.priority)}
+                                className="rounded-md px-2 py-1 text-[11px] text-accent transition-colors hover:bg-accent/10 disabled:opacity-40"
+                                aria-label={`更新排队会话 ${task.id} 的优先级`}
+                              >
+                                {updatingPriorityTaskId === task.id ? '更新中…' : '更新'}
+                              </button>
+                            </form>
+                            <button
+                              type="button"
+                              disabled={cancellingTaskId !== null}
+                              onClick={() => cancelQueuedSession(task.id)}
+                              className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
+                              aria-label={`取消排队会话 ${task.id}`}
+                            >
+                              <X size={12} />
+                              {cancellingTaskId === task.id ? '取消中…' : '取消'}
+                            </button>
+                          </>
+                        )}
                       </div>
                     );
                   })}

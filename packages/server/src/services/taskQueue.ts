@@ -4,7 +4,7 @@
  * dispatch 由 #31（spawn 集成）注入：真正去 schedule+物化+起容器+起 agent。
  */
 
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { getDb, hasDb, schema } from '../db/index';
 
@@ -28,11 +28,14 @@ export interface QueuedTask {
 }
 
 export type TaskQueueStatus = 'pending' | 'scheduled' | 'running' | 'done' | 'failed' | 'cancelled';
+export type VisibleQueuedTask = QueuedTask & { status: 'pending' | 'failed' };
 
 export interface TaskQueueStore {
   listPending(projectId?: string): Promise<QueuedTask[]>;
+  listVisible(projectId: string): Promise<VisibleQueuedTask[]>;
   transition(id: string, from: TaskQueueStatus, to: TaskQueueStatus, projectId?: string): Promise<boolean>;
   updatePriority(id: string, priority: number, projectId?: string): Promise<boolean>;
+  requeueFailed(id: string, projectId: string, enqueuedAt: Date): Promise<boolean>;
   find(id: string, projectId?: string): Promise<{ status: TaskQueueStatus } | null>;
 }
 
@@ -75,6 +78,31 @@ const databaseQueueStore: TaskQueueStore = {
     }));
   },
 
+  async listVisible(projectId) {
+    if (!hasDb()) {
+      return [];
+    }
+    const rows = await getDb()
+      .select()
+      .from(schema.taskQueue)
+      .where(
+        and(
+          eq(schema.taskQueue.projectId, projectId),
+          inArray(schema.taskQueue.status, ['pending', 'failed']),
+        ),
+      )
+      .orderBy(desc(schema.taskQueue.priority), asc(schema.taskQueue.enqueuedAt));
+    return rows.map((r) => ({
+      id: r.id,
+      projectId: r.projectId,
+      kind: r.kind,
+      payload: r.payload,
+      priority: r.priority,
+      status: r.status as VisibleQueuedTask['status'],
+      enqueuedAt: r.enqueuedAt,
+    }));
+  },
+
   async transition(id, from, to, projectId) {
     if (!hasDb()) {
       return false;
@@ -109,6 +137,24 @@ const databaseQueueStore: TaskQueueStore = {
     return rows.length === 1;
   },
 
+  async requeueFailed(id, projectId, enqueuedAt) {
+    if (!hasDb()) {
+      return false;
+    }
+    const rows = await getDb()
+      .update(schema.taskQueue)
+      .set({ status: 'pending', enqueuedAt })
+      .where(
+        and(
+          eq(schema.taskQueue.id, id),
+          eq(schema.taskQueue.projectId, projectId),
+          eq(schema.taskQueue.status, 'failed'),
+        ),
+      )
+      .returning({ id: schema.taskQueue.id });
+    return rows.length === 1;
+  },
+
   async find(id, projectId) {
     if (!hasDb()) {
       return null;
@@ -126,8 +172,11 @@ const databaseQueueStore: TaskQueueStore = {
   },
 };
 
-export async function listQueuedTasks(projectId: string, store: TaskQueueStore = databaseQueueStore): Promise<QueuedTask[]> {
-  return store.listPending(projectId);
+export async function listQueuedTasks(
+  projectId: string,
+  store: TaskQueueStore = databaseQueueStore,
+): Promise<VisibleQueuedTask[]> {
+  return store.listVisible(projectId);
 }
 
 export type ReprioritizeQueuedTaskResult =
@@ -162,6 +211,25 @@ export async function cancelQueuedTask(
 ): Promise<CancelQueuedTaskResult> {
   if (await store.transition(id, 'pending', 'cancelled', projectId)) {
     return { outcome: 'cancelled' };
+  }
+  const existing = await store.find(id, projectId);
+  return existing ? { outcome: 'conflict', status: existing.status } : { outcome: 'not-found' };
+}
+
+export type RetryFailedQueuedTaskResult =
+  | { outcome: 'retried' }
+  | { outcome: 'not-found' }
+  | { outcome: 'conflict'; status: TaskQueueStatus };
+
+/** failed→pending 的项目级 compare-and-set；只重置排队时间，保留原 payload 与 priority。 */
+export async function retryFailedQueuedTask(
+  projectId: string,
+  id: string,
+  store: TaskQueueStore = databaseQueueStore,
+  enqueuedAt = new Date(),
+): Promise<RetryFailedQueuedTaskResult> {
+  if (await store.requeueFailed(id, projectId, enqueuedAt)) {
+    return { outcome: 'retried' };
   }
   const existing = await store.find(id, projectId);
   return existing ? { outcome: 'conflict', status: existing.status } : { outcome: 'not-found' };
