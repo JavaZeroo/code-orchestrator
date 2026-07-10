@@ -1,13 +1,13 @@
 import { ArrowDown, Code2, GitCompare, Send, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, type ApprovalRequest, type MachineRow, type SessionRow, type SessionUsage } from './api';
+import { api, type ApprovalRequest, type MachineRow, type SessionRow, type SessionUsage, type UserInputAnswers } from './api';
 import { UnifiedDiff } from './components/DiffView';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
 import { Button } from './components/ui/button';
 import { Badge, StatusDot, Textarea, type BadgeTone } from './components/ui/primitives';
 import { useSessionEvents } from './useEvents';
-import { Timeline, type ApprovalItem } from './Timeline';
+import { isCodexUserInputRequest, Timeline, type ApprovalItem } from './Timeline';
 import { fmtCost, fmtTokens, shortModel } from './lib/utils';
 
 const STATE_META: Record<string, { label: string; tone: BadgeTone; live?: boolean }> = {
@@ -122,14 +122,21 @@ export function SessionView({ session }: { session: SessionRow }) {
   const dead = state === 'dead';
   const busy = state === 'thinking' || state === 'starting';
   const meta = STATE_META[state] ?? { label: state, tone: 'neutral' as BadgeTone };
-  const pendingApprovals = useMemo(() => [...approvals.values()].filter((a) => a.status === 'pending'), [approvals]);
+  const pendingApprovals = useMemo(
+    () => [...approvals.values()].filter((item) => item.status === 'pending' && !isCodexUserInputRequest(item.request)),
+    [approvals],
+  );
 
-  const decide = (id: string, b: 'allow' | 'deny') =>
-    api.decide(id, b).catch((e) => {
-      // 已被处理（其他端/自动决策）：降级为提示，等增量轮询把 decided 事件补回来
-      if (String(e).includes('already')) toast.info('该审批已被处理，状态稍后同步');
-      else toast.error(String(e));
-    });
+  const handleApprovalError = (error: unknown) => {
+    // 已被处理（其他端/自动决策）：降级为提示，等增量轮询把 decided 事件补回来
+    if (String(error).includes('already')) toast.info('该请求已被处理，状态稍后同步');
+    else toast.error(String(error));
+  };
+
+  const decide = (id: string, behavior: 'allow' | 'deny') =>
+    api.decide(id, behavior).catch(handleApprovalError);
+
+  const answer = (id: string, answers: UserInputAnswers) => api.answer(id, answers).catch(handleApprovalError);
 
   const doSend = () => {
     const t = text.trim();
@@ -186,7 +193,7 @@ export function SessionView({ session }: { session: SessionRow }) {
 
       <div className="relative flex-1 min-h-0 overflow-hidden">
         <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">
-          <Timeline events={events} approvals={approvals} cwd={session.cwd} onDecide={decide} />
+          <Timeline events={events} approvals={approvals} cwd={session.cwd} onDecide={decide} onAnswer={answer} />
           <div ref={bottomRef} />
         </div>
         {showJump && (

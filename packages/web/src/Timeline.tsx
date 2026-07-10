@@ -1,10 +1,10 @@
 import { ChevronRight, Paperclip } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import type { ApprovalRequest, EventRow, SessionEnvelope } from './api';
+import type { ApprovalRequest, EventRow, SessionEnvelope, UserInputAnswers } from './api';
 import { Markdown } from './components/Markdown';
 import { TextDiff } from './components/DiffView';
 import { Button } from './components/ui/button';
-import { Badge } from './components/ui/primitives';
+import { Badge, Input } from './components/ui/primitives';
 import { cn } from './lib/utils';
 
 const fmtHm = (ms: number) => {
@@ -26,6 +26,54 @@ export interface ApprovalItem {
   request: ApprovalRequest;
   status: 'pending' | 'approved' | 'denied';
   decidedBy?: string;
+}
+
+interface UserInputOption {
+  label: string;
+  description: string;
+}
+
+interface UserInputQuestion {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options: UserInputOption[] | null;
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+export function isCodexUserInputRequest(request: ApprovalRequest): boolean {
+  const payload = record(request.payload);
+  return payload.backend === 'codex' && payload.method === 'item/tool/requestUserInput';
+}
+
+function userInputQuestions(request: ApprovalRequest): UserInputQuestion[] {
+  const params = record(record(request.payload).params);
+  if (!Array.isArray(params.questions)) return [];
+  return params.questions.flatMap((value) => {
+    const question = record(value);
+    if (typeof question.id !== 'string' || typeof question.question !== 'string') return [];
+    const options = Array.isArray(question.options)
+      ? question.options.flatMap((optionValue) => {
+          const option = record(optionValue);
+          return typeof option.label === 'string' && typeof option.description === 'string'
+            ? [{ label: option.label, description: option.description }]
+            : [];
+        })
+      : null;
+    return [{
+      id: question.id,
+      header: typeof question.header === 'string' ? question.header : question.id,
+      question: question.question,
+      isOther: question.isOther === true,
+      isSecret: question.isSecret === true,
+      options,
+    }];
+  });
 }
 
 interface ToolCall {
@@ -125,7 +173,108 @@ export function ToolRow({ tool, cwd }: { tool: ToolCall; cwd?: string }) {
   );
 }
 
-export function ApprovalCard({ item, onDecide }: { item: ApprovalItem; onDecide: (id: string, b: 'allow' | 'deny') => void }) {
+function UserInputCard({
+  item,
+  onAnswer,
+  onDismiss,
+}: {
+  item: ApprovalItem;
+  onAnswer: (id: string, answers: UserInputAnswers) => void;
+  onDismiss: (id: string) => void;
+}) {
+  const { request, status } = item;
+  const questions = userInputQuestions(request);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const allAnswered = questions.length > 0 && questions.every((question) => Boolean(values[question.id]?.trim()));
+
+  const submit = () => {
+    if (!allAnswered) return;
+    const answers: UserInputAnswers = {};
+    for (const question of questions) {
+      answers[question.id] = { answers: [values[question.id]!.trim()] };
+    }
+    onAnswer(request.id, answers);
+  };
+
+  return (
+    <div
+      className={cn(
+        'self-stretch rounded-lg border p-3',
+        status === 'pending' && 'border-human/50 bg-human/5',
+        status === 'approved' && 'border-ok/40 bg-ok/5 opacity-80',
+        status === 'denied' && 'border-line bg-panel/40 opacity-80',
+      )}
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <Badge tone="human">提问</Badge>
+        <b className="text-sm">{request.title}</b>
+        {status === 'approved' && <Badge tone="ok">已回答</Badge>}
+        {status === 'denied' && <Badge tone="neutral">已忽略</Badge>}
+      </div>
+      <div className="flex flex-col gap-4">
+        {questions.map((question) => (
+          <fieldset key={question.id} disabled={status !== 'pending'} className="flex flex-col gap-2">
+            <legend className="text-xs font-medium text-dim">{question.header}</legend>
+            <div className="text-sm text-ink">{question.question}</div>
+            {question.options && question.options.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                {question.options.map((option) => (
+                  <label key={option.label} className="flex cursor-pointer items-start gap-2 rounded-md border border-line px-2.5 py-2 hover:bg-panel/60">
+                    <input
+                      type="radio"
+                      name={`${request.id}-${question.id}`}
+                      value={option.label}
+                      checked={values[question.id] === option.label}
+                      onChange={() => setValues((current) => ({ ...current, [question.id]: option.label }))}
+                      className="mt-0.5 accent-[var(--color-accent)]"
+                    />
+                    <span>
+                      <span className="block text-xs font-medium text-ink">{option.label}</span>
+                      <span className="block text-[11px] text-dim">{option.description}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+            {(!question.options?.length || question.isOther) && (
+              <Input
+                type={question.isSecret ? 'password' : 'text'}
+                value={values[question.id] ?? ''}
+                aria-label={question.question}
+                autoComplete="off"
+                placeholder={question.options?.length ? '其他回答' : '请输入回答'}
+                onChange={(event) => setValues((current) => ({ ...current, [question.id]: event.target.value }))}
+              />
+            )}
+          </fieldset>
+        ))}
+      </div>
+      {status === 'pending' && (
+        <div className="mt-3 flex gap-2">
+          <Button variant="default" size="sm" disabled={!allAnswered} onClick={submit}>
+            提交回答
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => onDismiss(request.id)}>
+            忽略
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ApprovalCard({
+  item,
+  onDecide,
+  onAnswer,
+}: {
+  item: ApprovalItem;
+  onDecide: (id: string, b: 'allow' | 'deny') => void;
+  onAnswer: (id: string, answers: UserInputAnswers) => void;
+}) {
+  if (isCodexUserInputRequest(item.request)) {
+    return <UserInputCard item={item} onAnswer={onAnswer} onDismiss={(id) => onDecide(id, 'deny')} />;
+  }
   const { request, status } = item;
   const payload = request.payload as Record<string, unknown>;
   const input = (payload.input ?? payload) as Record<string, unknown>;
@@ -278,11 +427,13 @@ export function Timeline({
   events,
   approvals,
   onDecide,
+  onAnswer,
   cwd,
 }: {
   events: EventRow[];
   approvals: Map<string, ApprovalItem>;
   onDecide: (id: string, b: 'allow' | 'deny') => void;
+  onAnswer: (id: string, answers: UserInputAnswers) => void;
   cwd?: string;
 }) {
   const items = useMemo(() => {
@@ -294,12 +445,12 @@ export function Timeline({
       if (row.type === 'approval.requested') {
         const req = row.payload as ApprovalRequest;
         const item = approvals.get(req.id) ?? { request: req, status: 'pending' as const };
-        approvalsItems.push({ key: `ap-${req.id}`, seq: row.seq, el: <ApprovalCard item={item} onDecide={onDecide} /> });
+        approvalsItems.push({ key: `ap-${req.id}`, seq: row.seq, el: <ApprovalCard item={item} onDecide={onDecide} onAnswer={onAnswer} /> });
       }
     }
     // ③ 合并后按 seq 排序
     return [...rendered, ...approvalsItems].sort((a, b) => a.seq - b.seq);
-  }, [events, approvals, onDecide, cwd]);
+  }, [events, approvals, onDecide, onAnswer, cwd]);
 
   return <div className="flex flex-col gap-1 px-4 py-4">{items.map((it) => it.el && <div key={it.key} className="flex flex-col">{it.el}</div>)}</div>;
 }
