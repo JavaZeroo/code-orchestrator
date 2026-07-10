@@ -32,6 +32,7 @@ export type TaskQueueStatus = 'pending' | 'scheduled' | 'running' | 'done' | 'fa
 export interface TaskQueueStore {
   listPending(projectId?: string): Promise<QueuedTask[]>;
   transition(id: string, from: TaskQueueStatus, to: TaskQueueStatus, projectId?: string): Promise<boolean>;
+  updatePriority(id: string, priority: number, projectId?: string): Promise<boolean>;
   find(id: string, projectId?: string): Promise<{ status: TaskQueueStatus } | null>;
 }
 
@@ -91,6 +92,23 @@ const databaseQueueStore: TaskQueueStore = {
     return rows.length === 1;
   },
 
+  async updatePriority(id, priority, projectId) {
+    if (!hasDb()) {
+      return false;
+    }
+    const match = and(
+      eq(schema.taskQueue.id, id),
+      eq(schema.taskQueue.status, 'pending'),
+      ...(projectId ? [eq(schema.taskQueue.projectId, projectId)] : []),
+    );
+    const rows = await getDb()
+      .update(schema.taskQueue)
+      .set({ priority })
+      .where(match)
+      .returning({ id: schema.taskQueue.id });
+    return rows.length === 1;
+  },
+
   async find(id, projectId) {
     if (!hasDb()) {
       return null;
@@ -110,6 +128,25 @@ const databaseQueueStore: TaskQueueStore = {
 
 export async function listQueuedTasks(projectId: string, store: TaskQueueStore = databaseQueueStore): Promise<QueuedTask[]> {
   return store.listPending(projectId);
+}
+
+export type ReprioritizeQueuedTaskResult =
+  | { outcome: 'updated'; priority: number }
+  | { outcome: 'not-found' }
+  | { outcome: 'conflict'; status: TaskQueueStatus };
+
+/** 只更新 pending 行；若 reconciler 已完成 claim，则不覆盖其调度决定。 */
+export async function reprioritizeQueuedTask(
+  projectId: string,
+  id: string,
+  priority: number,
+  store: TaskQueueStore = databaseQueueStore,
+): Promise<ReprioritizeQueuedTaskResult> {
+  if (await store.updatePriority(id, priority, projectId)) {
+    return { outcome: 'updated', priority };
+  }
+  const existing = await store.find(id, projectId);
+  return existing ? { outcome: 'conflict', status: existing.status } : { outcome: 'not-found' };
 }
 
 export type CancelQueuedTaskResult =

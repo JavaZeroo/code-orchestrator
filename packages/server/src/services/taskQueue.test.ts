@@ -3,6 +3,7 @@ import {
   cancelQueuedTask,
   listQueuedTasks,
   reconcileQueueOnce,
+  reprioritizeQueuedTask,
   type QueuedTask,
   type TaskQueueStatus,
   type TaskQueueStore,
@@ -23,6 +24,7 @@ class MemoryQueueStore implements TaskQueueStore {
   async listPending(projectId?: string): Promise<QueuedTask[]> {
     const result = [...this.rows.values()]
       .filter((row) => row.status === 'pending' && (!projectId || row.projectId === projectId))
+      .sort((a, b) => b.priority - a.priority || a.enqueuedAt.getTime() - b.enqueuedAt.getTime())
       .map(({ status: _status, ...task }) => ({ ...task }));
     const afterList = this.afterList;
     this.afterList = undefined;
@@ -39,6 +41,13 @@ class MemoryQueueStore implements TaskQueueStore {
     const row = this.rows.get(id);
     if (!row || row.status !== from || (projectId && row.projectId !== projectId)) return false;
     row.status = to;
+    return true;
+  }
+
+  async updatePriority(id: string, priority: number, projectId?: string): Promise<boolean> {
+    const row = this.rows.get(id);
+    if (!row || row.status !== 'pending' || (projectId && row.projectId !== projectId)) return false;
+    row.priority = priority;
     return true;
   }
 
@@ -59,6 +68,61 @@ function pending(id = 'task-1'): MemoryRow {
     enqueuedAt: new Date('2026-07-11T00:00:00Z'),
   };
 }
+
+describe('queued task priority', () => {
+  it('moves a reprioritized pending task ahead while equal priorities stay FIFO', async () => {
+    const older = pending('older');
+    const newer = pending('newer');
+    newer.enqueuedAt = new Date('2026-07-11T00:01:00Z');
+    const store = new MemoryQueueStore([older, newer]);
+
+    await expect(reprioritizeQueuedTask('project-1', 'newer', 10, store)).resolves.toEqual({
+      outcome: 'updated',
+      priority: 10,
+    });
+    await expect(listQueuedTasks('project-1', store)).resolves.toMatchObject([
+      { id: 'newer', priority: 10 },
+      { id: 'older', priority: 0 },
+    ]);
+
+    await expect(reprioritizeQueuedTask('project-1', 'older', 10, store)).resolves.toEqual({
+      outcome: 'updated',
+      priority: 10,
+    });
+    await expect(listQueuedTasks('project-1', store)).resolves.toMatchObject([
+      { id: 'older', priority: 10 },
+      { id: 'newer', priority: 10 },
+    ]);
+  });
+
+  it('returns not found for an unknown task and a conflict for a terminal task', async () => {
+    const completed = pending('completed');
+    completed.status = 'done';
+    const store = new MemoryQueueStore([completed]);
+
+    await expect(reprioritizeQueuedTask('project-1', 'missing', 5, store)).resolves.toEqual({
+      outcome: 'not-found',
+    });
+    await expect(reprioritizeQueuedTask('project-1', 'completed', 5, store)).resolves.toEqual({
+      outcome: 'conflict',
+      status: 'done',
+    });
+    expect(store.rows.get('completed')?.priority).toBe(0);
+  });
+
+  it('returns a conflict when the reconciler claim wins the reprioritization race', async () => {
+    const store = new MemoryQueueStore([pending()]);
+    let reprioritization: Awaited<ReturnType<typeof reprioritizeQueuedTask>> | undefined;
+
+    await reconcileQueueOnce(async () => {
+      reprioritization = await reprioritizeQueuedTask('project-1', 'task-1', 50, store);
+      return 'started';
+    }, store, Date.parse('2026-07-11T01:00:00Z'));
+
+    expect(reprioritization).toEqual({ outcome: 'conflict', status: 'scheduled' });
+    expect(store.rows.get('task-1')).toMatchObject({ priority: 0, status: 'running' });
+  });
+});
 
 describe('queued task cancellation', () => {
   it('atomically cancels a pending task and removes it from the project pending list', async () => {
