@@ -11,6 +11,7 @@ import type { Accelerator, MachineInfo } from '@co/protocol';
 import { getDb, hasDb, schema } from '../db/index';
 import { listMachines } from '../ws/runnerHub';
 import { getAccelerator, type BindFlags } from '../resources/accelerators';
+import { schedulableMachines } from './machineScheduling';
 
 export interface ScheduleOpts {
   /** 需要的加速器 kind；null/undefined = 无需加速器（可与他人共机） */
@@ -38,17 +39,18 @@ export function cardIndices(machine: MachineInfo, kind: string): number[] {
   return (machine.resources ?? []).filter((r: Accelerator) => r.kind === kind).map((r) => r.index);
 }
 
-/** 纯放置：从在线机中挑候选（满足 label + kind），free 集合由调用方给（便于单测）。 */
+/** 纯放置：从未暂停的在线机中挑候选（满足 label + kind），free 集合由调用方给（便于单测）。 */
 export function chooseMachine(
   online: MachineInfo[],
   opts: { accelKind?: string | null; labels?: string[]; id?: string; readyMachineIds?: string[]; busyMachineIds?: string[]; components?: Record<string, string>; componentCache?: Record<string, Record<string, string[]>> },
 ): string | null {
+  const schedulable = schedulableMachines(online);
   if (opts.id) {
-    return online.some((m) => m.id === opts.id) ? opts.id : null;
+    return schedulable.some((m) => m.id === opts.id) ? opts.id : null;
   }
   const labels = opts.labels ?? [];
   const busy = new Set(opts.busyMachineIds ?? []);
-  let candidates = online.filter((m) => labels.every((l) => m.labels.includes(l)));
+  let candidates = schedulable.filter((m) => labels.every((l) => m.labels.includes(l)));
   if (opts.accelKind) {
     // 需加速器：机器须有该 kind 且当前空闲（一机一任务）
     candidates = candidates.filter(

@@ -43,4 +43,14 @@ describe('resolveInteractiveMachine', () => {
     ];
     expect(resolveInteractiveMachine(online, [])).toBeNull();
   });
+
+  it('跳过暂停调度机，且恢复后可再次命中', () => {
+    const sticky = machine('sticky', { schedulingPaused: true });
+    const dev = machine('dev', { labels: ['dev'] });
+
+    expect(resolveInteractiveMachine([sticky, dev], ['sticky'])).toBe('dev');
+    expect(resolveInteractiveMachine([sticky], ['sticky'])).toBeNull();
+    sticky.schedulingPaused = false;
+    expect(resolveInteractiveMachine([sticky], ['sticky'])).toBe('sticky');
+  });
 });

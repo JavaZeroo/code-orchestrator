@@ -9,8 +9,9 @@ import type { MessageMeta, SessionAgent } from '@co/protocol';
 import { getDb, schema } from '../db/index';
 import { env } from '../env';
 import { publish } from '../events';
-import { callRunner } from '../ws/runnerHub';
+import { callRunner, listMachines } from '../ws/runnerHub';
 import { decryptSecret } from './crypto';
+import { isMachineSchedulable } from './machineScheduling';
 import { buildInjectedEnv, planModel, SpawnError } from './modelResolve';
 
 // Re-export SpawnError for callers importing from './spawn'
@@ -122,6 +123,11 @@ export interface SpawnRequest {
 }
 
 export async function spawnSession(req: SpawnRequest): Promise<{ sessionId: string }> {
+  const target = listMachines().find((machine) => machine.id === req.machineId);
+  if (target && !isMachineSchedulable(target)) {
+    throw new SpawnError(409, `机器 ${req.machineId} 已暂停新任务调度`);
+  }
+
   const sessionId = req.sessionId ?? createId();
   const agent = req.agent ?? 'claude';
   const resolved = await resolveModel(req.model, req.createdBy);

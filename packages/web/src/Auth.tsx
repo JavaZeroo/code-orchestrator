@@ -754,6 +754,7 @@ function MachineRow({ m }: { m: AllMachineRow }) {
   const [showCmd, setShowCmd] = useState(false);
   const [showSsh, setShowSsh] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [schedulingBusy, setSchedulingBusy] = useState(false);
   const [labelsText, setLabelsText] = useState(m.labels.join(','));
 
   const saveLabels = () => {
@@ -775,6 +776,17 @@ function MachineRow({ m }: { m: AllMachineRow }) {
       .then(() => { toast.success('已重发凭证'); invalidate('machines-all'); setShowCmd(true); })
       .catch((e) => toast.error(String(e)));
   };
+  const toggleScheduling = () => {
+    if (schedulingBusy) return;
+    setSchedulingBusy(true);
+    api.patchMachine(m.id, { schedulingPaused: !m.schedulingPaused })
+      .then(() => {
+        toast.success(m.schedulingPaused ? '已恢复新任务调度' : '已暂停新任务调度；现有会话不受影响');
+        invalidate('machines-all');
+      })
+      .catch((e) => toast.error(String(e instanceof Error ? e.message : e)))
+      .finally(() => setSchedulingBusy(false));
+  };
   const pending = m.status === 'offline' && !m.lastActiveAt;
 
   return (
@@ -782,6 +794,7 @@ function MachineRow({ m }: { m: AllMachineRow }) {
       <div className="flex items-center gap-2">
         <StatusDot tone={m.status === 'online' ? 'ok' : pending ? 'human' : 'neutral'} live={m.status === 'online'} />
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-ink-2">{m.name}</span>
+        {m.schedulingPaused && <Badge tone="human">暂停调度</Badge>}
         {editing ? (
           <input
             autoFocus
@@ -808,6 +821,14 @@ function MachineRow({ m }: { m: AllMachineRow }) {
           {m.status === 'online' ? '在线' : pending ? '待接入' : '离线'}
           {m.lastActiveAt && ` · ${relTime(m.lastActiveAt)}`}
         </span>
+        <button
+          className="shrink-0 text-[11px] text-dim hover:text-accent hover:underline disabled:opacity-50"
+          disabled={schedulingBusy}
+          onClick={toggleScheduling}
+          title="只影响新任务，现有会话继续运行"
+        >
+          {m.schedulingPaused ? '恢复调度' : '暂停调度'}
+        </button>
         <button className="shrink-0 text-[11px] text-dim hover:text-accent hover:underline" onClick={() => setShowSsh(!showSsh)}>
           SSH
         </button>

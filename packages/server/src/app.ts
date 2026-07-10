@@ -67,6 +67,7 @@ async function registerMachineRoutes(app: FastifyInstance): Promise<void> {
     const body = z.object({
       name: z.string().trim().min(1).max(64).optional(),
       labels: z.array(z.string().trim().min(1)).optional(),
+      schedulingPaused: z.boolean().optional(),
     }).parse(req.body);
     if (Object.keys(body).length === 0) return reply.code(400).send({ error: '无更新字段' });
     const { getDb, schema } = await import('./db/index');

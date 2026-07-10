@@ -44,6 +44,17 @@ describe('api client', () => {
     });
   });
 
+  it('persists machine scheduling pause through the machine API', async () => {
+    const fetch = mockFetch(Response.json({ ok: true }));
+
+    await expect(api.patchMachine('m1', { schedulingPaused: true })).resolves.toEqual({ ok: true });
+    expect(fetch).toHaveBeenCalledWith('/api/machines/m1', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ schedulingPaused: true }),
+    });
+  });
+
   it('lists, reprioritizes, retries, and cancels project queued sessions', async () => {
     const task = {
       id: 'task/1',

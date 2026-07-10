@@ -256,6 +256,8 @@ export const machines = pgTable('machines', {
   labels: jsonb('labels').$type<string[]>().notNull().default([]),
   info: jsonb('info').$type<Record<string, unknown>>(),
   status: text('status', { enum: ['online', 'offline'] }).notNull().default('offline'),
+  /** 管理员暂停新任务调度；不改变 runner 在线态，也不终止存量会话 */
+  schedulingPaused: boolean('scheduling_paused').notNull().default(false),
   /** 该机数据盘根（design-v2 Q6）：co 在 <dataRoot>/co/ 下铺物化目录。每机自报，如 /data1、/data2 */
   dataRoot: text('data_root'),
   /** 加速器清单（design-v2 Q4）：[{kind,index,model?}]。由 accelerator 适配器 detect 上报（M2），替代死字段 npu */

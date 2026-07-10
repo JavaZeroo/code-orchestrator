@@ -214,6 +214,105 @@ describeSt('server ST: API + runner websocket', () => {
     );
   });
 
+  it('persists scheduling pause, blocks new placement, and leaves existing sessions running', async () => {
+    const runner = await FakeRunner.connect(baseUrl, {
+      'session.spawn': () => ({ ok: true, nativeSessionId: 'native-pause' }),
+      'session.send': () => ({ ok: true }),
+    });
+    runners.push(runner);
+
+    await expect(
+      runner.callServer('machine.register', {
+        info: {
+          id: 'm-pause',
+          name: 'Maintenance Runner',
+          labels: ['dev'],
+          resources: [{ kind: 'ascend-npu', index: 0 }],
+          runnerVersion: 'st',
+          startedAt: Date.now(),
+        },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    const existing = await app!.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { machineId: 'm-pause', cwd: '/tmp/existing', prompt: 'keep running', agent: 'claude' },
+    });
+    expect(existing.statusCode).toBe(200);
+    const { sessionId } = existing.json() as { sessionId: string };
+
+    const pause = await app!.inject({
+      method: 'PATCH',
+      url: '/api/machines/m-pause',
+      payload: { schedulingPaused: true },
+    });
+    expect(pause.statusCode).toBe(200);
+
+    const persisted = await app!.inject({ method: 'GET', url: '/api/machines/all' });
+    expect(persisted.json()).toMatchObject({
+      machines: [{ id: 'm-pause', status: 'online', schedulingPaused: true }],
+    });
+    const live = await app!.inject({ method: 'GET', url: '/api/machines' });
+    expect(live.json()).toMatchObject({
+      machines: [{ id: 'm-pause', schedulingPaused: true }],
+    });
+
+    const continued = await app!.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/send`,
+      payload: { text: 'continue existing work' },
+    });
+    expect(continued.statusCode).toBe(200);
+    expect(runner.calls.find((call) => call.method === 'session.send')).toMatchObject({
+      params: { sessionId, text: 'continue existing work' },
+    });
+
+    const blocked = await app!.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { machineId: 'm-pause', cwd: '/tmp/new', prompt: 'new work', agent: 'claude' },
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toMatchObject({ error: expect.stringContaining('已暂停新任务调度') });
+
+    const project = await app!.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: {
+        name: 'Paused Capacity ST',
+        forge: 'github',
+        repo: 'example/paused-capacity',
+        baseImage: 'example/train:latest',
+        accel: { kind: 'ascend-npu' },
+      },
+    });
+    expect(project.statusCode).toBe(201);
+    const { id: projectId } = project.json() as { id: string };
+    const queued = await app!.inject({
+      method: 'POST',
+      url: '/api/container-sessions',
+      payload: { projectId, machineId: 'm-pause', prompt: 'wait until maintenance ends' },
+    });
+    expect(queued.statusCode).toBe(202);
+    expect(queued.json()).toMatchObject({ queued: true, taskId: expect.any(String) });
+
+    const resume = await app!.inject({
+      method: 'PATCH',
+      url: '/api/machines/m-pause',
+      payload: { schedulingPaused: false },
+    });
+    expect(resume.statusCode).toBe(200);
+
+    const resumed = await app!.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { machineId: 'm-pause', cwd: '/tmp/resumed', prompt: 'new work after maintenance', agent: 'claude' },
+    });
+    expect(resumed.statusCode).toBe(200);
+    expect(runner.calls.filter((call) => call.method === 'session.spawn')).toHaveLength(2);
+  });
+
   it('cancels a queued container session before the background reconciler can dispatch it', async () => {
     const project = await app!.inject({
       method: 'POST',

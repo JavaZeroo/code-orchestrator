@@ -99,13 +99,22 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
           throw new Error(`enroll token mismatch for machine ${p.info.id}`);
         }
       }
-      conn.machine = p.info;
-      runners.set(p.info.id, conn);
+      // schedulingPaused 是 server 管理态，绝不接受 runner 自报值。
+      conn.machine = { ...p.info, schedulingPaused: false };
       if (hasDb()) {
-        // 行已存在时 name/labels 以 DB 为准（UI 可编辑），回填内存供调度读取
-        const existing = await getDb().select({ name: schema.machines.name, labels: schema.machines.labels }).from(schema.machines).where(eq(schema.machines.id, p.info.id)).limit(1);
+        // 行已存在时 name/labels/调度态以 DB 为准，回填内存供调度读取。
+        const existing = await getDb().select({
+          name: schema.machines.name,
+          labels: schema.machines.labels,
+          schedulingPaused: schema.machines.schedulingPaused,
+        }).from(schema.machines).where(eq(schema.machines.id, p.info.id)).limit(1);
         if (existing[0]) {
-          conn.machine = { ...p.info, name: existing[0].name, labels: existing[0].labels };
+          conn.machine = {
+            ...p.info,
+            name: existing[0].name,
+            labels: existing[0].labels,
+            schedulingPaused: existing[0].schedulingPaused,
+          };
         }
         await getDb()
           .insert(schema.machines)
@@ -131,7 +140,9 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
             },
           });
       }
-      await publish({ type: 'machine.online', payload: p.info });
+      // DB 调度态回填完成后才暴露给放置路径，避免重连瞬间把暂停机当成可用。
+      runners.set(p.info.id, conn);
+      await publish({ type: 'machine.online', payload: conn.machine });
       return { ok: true, serverTime: Date.now() };
     }
     case 'machine.heartbeat': {
