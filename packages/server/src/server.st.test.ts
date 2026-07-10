@@ -3,7 +3,9 @@ import type { FastifyInstance } from 'fastify';
 import postgres from 'postgres';
 import WebSocket from 'ws';
 import { createApp } from './app';
-import { closeDb } from './db/index';
+import { closeDb, getDb, schema } from './db/index';
+import { eq } from 'drizzle-orm';
+import { reconcileQueueOnce } from './services/taskQueue';
 
 const runSt = Boolean(process.env.DATABASE_URL);
 const describeSt = runSt ? describe : describe.skip;
@@ -98,7 +100,7 @@ const runners: FakeRunner[] = [];
 
 async function truncateDb() {
   const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
-  await sql`TRUNCATE TABLE events, approvals, sessions, machines, llm_providers RESTART IDENTITY CASCADE`;
+  await sql`TRUNCATE TABLE events, approvals, sessions, machines, llm_providers, task_queue, projects RESTART IDENTITY CASCADE`;
   await sql.end({ timeout: 1 });
 }
 
@@ -210,5 +212,68 @@ describeSt('server ST: API + runner websocket', () => {
     expect((events.json() as { events: Array<{ type: string }> }).events.map((event) => event.type)).toEqual(
       expect.arrayContaining(['session.created', 'session.state', 'approval.requested', 'approval.decided']),
     );
+  });
+
+  it('cancels a queued container session before the background reconciler can dispatch it', async () => {
+    const project = await app!.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: {
+        name: 'Queued ST',
+        forge: 'github',
+        repo: 'example/queued-st',
+        baseImage: 'example/train:latest',
+        accel: { kind: 'ascend-npu' },
+      },
+    });
+    expect(project.statusCode).toBe(201);
+    const { id: projectId } = project.json() as { id: string };
+
+    const spawn = await app!.inject({
+      method: 'POST',
+      url: '/api/container-sessions',
+      payload: { projectId, prompt: 'wait for an NPU', agent: 'claude' },
+    });
+    expect(spawn.statusCode).toBe(202);
+    const { taskId } = spawn.json() as { queued: true; taskId: string };
+
+    const listed = await app!.inject({ method: 'GET', url: `/api/projects/${projectId}/queued-sessions` });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({
+      tasks: [{ id: taskId, projectId, prompt: 'wait for an NPU', agent: 'claude' }],
+    });
+
+    const before = await app!.inject({ method: 'GET', url: '/api/resources' });
+    expect(before.json()).toMatchObject({ queued: 1 });
+
+    const cancelled = await app!.inject({
+      method: 'DELETE',
+      url: `/api/projects/${projectId}/queued-sessions/${taskId}`,
+    });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json()).toEqual({ ok: true });
+
+    const rows = await getDb()
+      .select({ status: schema.taskQueue.status })
+      .from(schema.taskQueue)
+      .where(eq(schema.taskQueue.id, taskId));
+    expect(rows).toEqual([{ status: 'cancelled' }]);
+
+    const after = await app!.inject({ method: 'GET', url: '/api/resources' });
+    expect(after.json()).toMatchObject({ queued: 0 });
+
+    const repeatedCancel = await app!.inject({
+      method: 'DELETE',
+      url: `/api/projects/${projectId}/queued-sessions/${taskId}`,
+    });
+    expect(repeatedCancel.statusCode).toBe(409);
+    expect(repeatedCancel.json()).toMatchObject({ status: 'cancelled' });
+
+    let dispatchCount = 0;
+    await reconcileQueueOnce(async () => {
+      dispatchCount += 1;
+      return 'started';
+    });
+    expect(dispatchCount).toBe(0);
   });
 });

@@ -194,7 +194,7 @@ export const taskQueue = pgTable(
     kind: text('kind'),
     payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default({}),
     priority: integer('priority').notNull().default(0),
-    status: text('status', { enum: ['pending', 'scheduled', 'running', 'done', 'failed'] }).notNull().default('pending'),
+    status: text('status', { enum: ['pending', 'scheduled', 'running', 'done', 'failed', 'cancelled'] }).notNull().default('pending'),
     enqueuedAt: timestamp('enqueued_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('task_queue_status_idx').on(t.status)],

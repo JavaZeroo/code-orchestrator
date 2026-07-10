@@ -44,6 +44,21 @@ describe('api client', () => {
     });
   });
 
+  it('lists and cancels project queued sessions', async () => {
+    const task = { id: 'task/1', projectId: 'project/1', prompt: 'train', enqueuedAt: '2026-07-11T00:00:00Z' };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ tasks: [task] }))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.queuedSessions('project/1')).resolves.toEqual([task]);
+    await expect(api.cancelQueuedSession('project/1', 'task/1')).resolves.toEqual({ ok: true });
+
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/projects/project%2F1/queued-sessions');
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/projects/project%2F1/queued-sessions/task%2F1', { method: 'DELETE' });
+  });
+
   it('dispatches unauthorized events on 401', async () => {
     const dispatchEvent = vi.fn();
     vi.stubGlobal('window', { dispatchEvent });

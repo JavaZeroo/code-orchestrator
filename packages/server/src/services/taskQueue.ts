@@ -4,7 +4,7 @@
  * dispatch 由 #31（spawn 集成）注入：真正去 schedule+物化+起容器+起 agent。
  */
 
-import { asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { getDb, hasDb, schema } from '../db/index';
 
@@ -27,6 +27,14 @@ export interface QueuedTask {
   enqueuedAt: Date;
 }
 
+export type TaskQueueStatus = 'pending' | 'scheduled' | 'running' | 'done' | 'failed' | 'cancelled';
+
+export interface TaskQueueStore {
+  listPending(projectId?: string): Promise<QueuedTask[]>;
+  transition(id: string, from: TaskQueueStatus, to: TaskQueueStatus, projectId?: string): Promise<boolean>;
+  find(id: string, projectId?: string): Promise<{ status: TaskQueueStatus } | null>;
+}
+
 /** dispatch 结果：'started'=已起；'no-capacity'=当前无机（保持 pending，本轮停）；'failed'=派发失败 */
 export type DispatchResult = 'started' | 'no-capacity' | 'failed';
 
@@ -45,19 +53,84 @@ export async function enqueueTask(opts: EnqueueOpts): Promise<string> {
   return id;
 }
 
-async function listPending(): Promise<QueuedTask[]> {
-  if (!hasDb()) {
-    return [];
-  }
-  const rows = await getDb()
-    .select()
-    .from(schema.taskQueue)
-    .where(eq(schema.taskQueue.status, 'pending'))
-    .orderBy(desc(schema.taskQueue.priority), asc(schema.taskQueue.enqueuedAt));
-  return rows.map((r) => ({ id: r.id, projectId: r.projectId, kind: r.kind, payload: r.payload, priority: r.priority, enqueuedAt: r.enqueuedAt }));
+const databaseQueueStore: TaskQueueStore = {
+  async listPending(projectId) {
+    if (!hasDb()) {
+      return [];
+    }
+    const pending = eq(schema.taskQueue.status, 'pending');
+    const rows = await getDb()
+      .select()
+      .from(schema.taskQueue)
+      .where(projectId ? and(pending, eq(schema.taskQueue.projectId, projectId)) : pending)
+      .orderBy(desc(schema.taskQueue.priority), asc(schema.taskQueue.enqueuedAt));
+    return rows.map((r) => ({
+      id: r.id,
+      projectId: r.projectId,
+      kind: r.kind,
+      payload: r.payload,
+      priority: r.priority,
+      enqueuedAt: r.enqueuedAt,
+    }));
+  },
+
+  async transition(id, from, to, projectId) {
+    if (!hasDb()) {
+      return false;
+    }
+    const match = and(
+      eq(schema.taskQueue.id, id),
+      eq(schema.taskQueue.status, from),
+      ...(projectId ? [eq(schema.taskQueue.projectId, projectId)] : []),
+    );
+    const rows = await getDb()
+      .update(schema.taskQueue)
+      .set({ status: to })
+      .where(match)
+      .returning({ id: schema.taskQueue.id });
+    return rows.length === 1;
+  },
+
+  async find(id, projectId) {
+    if (!hasDb()) {
+      return null;
+    }
+    const match = and(
+      eq(schema.taskQueue.id, id),
+      ...(projectId ? [eq(schema.taskQueue.projectId, projectId)] : []),
+    );
+    const rows = await getDb()
+      .select({ status: schema.taskQueue.status })
+      .from(schema.taskQueue)
+      .where(match)
+      .limit(1);
+    return rows[0] ?? null;
+  },
+};
+
+export async function listQueuedTasks(projectId: string, store: TaskQueueStore = databaseQueueStore): Promise<QueuedTask[]> {
+  return store.listPending(projectId);
 }
 
-async function setStatus(id: string, status: 'pending' | 'scheduled' | 'running' | 'done' | 'failed'): Promise<void> {
+export type CancelQueuedTaskResult =
+  | { outcome: 'cancelled' }
+  | { outcome: 'not-found' }
+  | { outcome: 'conflict'; status: TaskQueueStatus };
+
+/** pending→cancelled 的 compare-and-set：与 reconciler 的 pending→scheduled claim 只能有一个成功。 */
+export async function cancelQueuedTask(
+  projectId: string,
+  id: string,
+  store: TaskQueueStore = databaseQueueStore,
+): Promise<CancelQueuedTaskResult> {
+  if (await store.transition(id, 'pending', 'cancelled', projectId)) {
+    return { outcome: 'cancelled' };
+  }
+  const existing = await store.find(id, projectId);
+  return existing ? { outcome: 'conflict', status: existing.status } : { outcome: 'not-found' };
+}
+
+async function setStatus(id: string, status: TaskQueueStatus): Promise<void> {
   if (hasDb()) {
     await getDb().update(schema.taskQueue).set({ status }).where(eq(schema.taskQueue.id, id));
   }
@@ -66,6 +139,46 @@ async function setStatus(id: string, status: 'pending' | 'scheduled' | 'running'
 export const markTaskRunning = (id: string) => setStatus(id, 'running');
 export const markTaskDone = (id: string) => setStatus(id, 'done');
 export const markTaskFailed = (id: string) => setStatus(id, 'failed');
+
+/** 单次后台 tick，单独导出以便用真实 Postgres 做确定性的 ST。 */
+export async function reconcileQueueOnce(
+  dispatch: (task: QueuedTask) => Promise<DispatchResult>,
+  store: TaskQueueStore = databaseQueueStore,
+  now = Date.now(),
+): Promise<void> {
+  const pending = await store.listPending();
+  // 过期回收：排队超 24h 的任务多半已失去意义（用户早走了/需求变了），标 failed 防止永久占着「排队中」
+  const MAX_PENDING_AGE_MS = 24 * 3600_000;
+  const fresh: typeof pending = [];
+  for (const task of pending) {
+    if (now - new Date(task.enqueuedAt).getTime() > MAX_PENDING_AGE_MS) {
+      if (await store.transition(task.id, 'pending', 'failed')) {
+        console.warn(`[queue] 任务 ${task.id} 排队超 24h，标记过期`);
+      }
+    } else {
+      fresh.push(task);
+    }
+  }
+  for (const task of fresh) {
+    // stale list 不足以派发；必须先原子 claim。若取消先赢，这里返回 false 且绝不调用 dispatch。
+    if (!(await store.transition(task.id, 'pending', 'scheduled'))) {
+      continue;
+    }
+    let res: DispatchResult;
+    try {
+      res = await dispatch(task);
+    } catch (err) {
+      await store.transition(task.id, 'scheduled', 'failed');
+      console.error('[taskQueue] dispatch failed:', err instanceof Error ? err.message : err);
+      continue;
+    }
+    if (res === 'no-capacity') {
+      await store.transition(task.id, 'scheduled', 'pending');
+      break; // 机器满，保持其余 pending，下轮再试
+    }
+    await store.transition(task.id, 'scheduled', res === 'started' ? 'running' : 'failed');
+  }
+}
 
 let timer: NodeJS.Timeout | null = null;
 
@@ -79,26 +192,7 @@ export function startQueueReconciler(dispatch: (task: QueuedTask) => Promise<Dis
   }
   const tick = async () => {
     try {
-      const pending = await listPending();
-      // 过期回收：排队超 24h 的任务多半已失去意义（用户早走了/需求变了），标 failed 防止永久占着「排队中」
-      const MAX_PENDING_AGE_MS = 24 * 3600_000;
-      const now = Date.now();
-      const fresh: typeof pending = [];
-      for (const task of pending) {
-        if (now - new Date(task.enqueuedAt).getTime() > MAX_PENDING_AGE_MS) {
-          console.warn(`[queue] 任务 ${task.id} 排队超 24h，标记过期`);
-          await setStatus(task.id, 'failed');
-        } else {
-          fresh.push(task);
-        }
-      }
-      for (const task of fresh) {
-        const res = await dispatch(task);
-        if (res === 'no-capacity') {
-          break; // 机器满，保持其余 pending，下轮再试
-        }
-        await setStatus(task.id, res === 'started' ? 'running' : 'failed');
-      }
+      await reconcileQueueOnce(dispatch);
     } catch (err) {
       console.error('[taskQueue] reconcile failed:', err instanceof Error ? err.message : err);
     }

@@ -42,6 +42,17 @@ export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface MaterializationRow { machineId: string; basePath: string; status: 'materializing' | 'ready' | 'failed'; }
 
+export interface QueuedSessionRow {
+  id: string;
+  projectId: string;
+  kind: string | null;
+  priority: number;
+  enqueuedAt: string;
+  prompt: string | null;
+  agent: string | null;
+  model: string | null;
+}
+
 export interface AllMachineRow {
   id: string;
   name: string;
@@ -325,6 +336,12 @@ export const api = {
   resources: () =>
     fetch('/api/resources').then((r) =>
       j<{ machines: { id: string; labels: string[]; accels: { kind: string; total: number }[]; used: number }[]; queued: number }>(r)),
+  queuedSessions: (projectId: string) =>
+    fetch(`/api/projects/${encodeURIComponent(projectId)}/queued-sessions`)
+      .then((r) => j<{ tasks: QueuedSessionRow[] }>(r)).then((d) => d.tasks),
+  cancelQueuedSession: (projectId: string, taskId: string) =>
+    fetch(`/api/projects/${encodeURIComponent(projectId)}/queued-sessions/${encodeURIComponent(taskId)}`, { method: 'DELETE' })
+      .then((r) => j<{ ok: boolean }>(r)),
   dispatchPipeline: (projectId: string, body: { text: string; defId?: string }) =>
     post(`/api/projects/${projectId}/dispatch`, body).then((r) =>
       j<{ runId: string; issueNumber: string; issueUrl?: string }>(r)),
