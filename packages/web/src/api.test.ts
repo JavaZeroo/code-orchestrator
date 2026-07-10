@@ -55,6 +55,18 @@ describe('api client', () => {
     });
   });
 
+  it('submits Codex interactive answers through the approval endpoint', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, status: 'approved' }));
+    const answers = { scope: { answers: ['Runner'] } };
+
+    await expect(api.answer('input-1', answers)).resolves.toEqual({ ok: true, status: 'approved' });
+    expect(fetch).toHaveBeenCalledWith('/api/approvals/input-1/decide', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: { behavior: 'allow', updatedInput: { answers } } }),
+    });
+  });
+
   it('lists, reprioritizes, retries, and cancels project queued sessions', async () => {
     const task = {
       id: 'task/1',

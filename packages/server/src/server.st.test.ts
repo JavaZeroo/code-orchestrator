@@ -94,6 +94,56 @@ class FakeRunner {
   }
 }
 
+interface ClientEvent {
+  type: string;
+  sessionId?: string;
+  payload: unknown;
+}
+
+async function connectClientEvents(baseUrl: string, sessionId: string): Promise<WebSocket> {
+  const ws = new WebSocket(`${baseUrl.replace(/^http/, 'ws')}/ws/client?sessionId=${sessionId}`);
+  await new Promise<void>((resolve, reject) => {
+    ws.once('open', resolve);
+    ws.once('error', reject);
+  });
+  return ws;
+}
+
+function waitForClientEvent(ws: WebSocket, predicate: (event: ClientEvent) => boolean): Promise<ClientEvent> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('timed out waiting for client event'));
+    }, 3_000);
+    const onMessage = (data: WebSocket.RawData) => {
+      const event = JSON.parse(data.toString()) as ClientEvent;
+      if (predicate(event)) {
+        cleanup();
+        resolve(event);
+      }
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error('client websocket closed while waiting for event'));
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off('message', onMessage);
+      ws.off('close', onClose);
+    };
+    ws.on('message', onMessage);
+    ws.on('close', onClose);
+  });
+}
+
+async function closeWebSocket(ws: WebSocket): Promise<void> {
+  if (ws.readyState === WebSocket.CLOSED) return;
+  await new Promise<void>((resolve) => {
+    ws.once('close', resolve);
+    ws.close();
+  });
+}
+
 let app: FastifyInstance | null = null;
 let baseUrl = '';
 const runners: FakeRunner[] = [];
@@ -212,6 +262,108 @@ describeSt('server ST: API + runner websocket', () => {
     expect((events.json() as { events: Array<{ type: string }> }).events.map((event) => event.type)).toEqual(
       expect.arrayContaining(['session.created', 'session.state', 'approval.requested', 'approval.decided']),
     );
+  });
+
+  it('forwards Codex interactive answers across REST and runner/client websockets', async () => {
+    const runner = await FakeRunner.connect(baseUrl, {
+      'session.spawn': () => ({ ok: true, nativeSessionId: 'codex-thread-1' }),
+      'approval.decide': () => ({ ok: true }),
+    });
+    runners.push(runner);
+
+    await runner.callServer('machine.register', {
+      info: {
+        id: 'm-codex-input',
+        name: 'Codex Input Runner',
+        labels: ['dev'],
+        resources: [],
+        runnerVersion: 'st',
+        startedAt: Date.now(),
+      },
+    });
+    const spawn = await app!.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { machineId: 'm-codex-input', cwd: '/tmp/codex-input', agent: 'codex' },
+    });
+    expect(spawn.statusCode).toBe(200);
+    const { sessionId } = spawn.json() as { sessionId: string };
+    const client = await connectClientEvents(baseUrl, sessionId);
+
+    try {
+      const waitingEvent = waitForClientEvent(
+        client,
+        (event) => event.type === 'session.state' && (event.payload as { state?: string }).state === 'waiting_input',
+      );
+      await expect(runner.callServer('session.state', { sessionId, state: 'waiting_input' })).resolves.toEqual({ ok: true });
+      await expect(waitingEvent).resolves.toMatchObject({
+        type: 'session.state',
+        sessionId,
+        payload: { state: 'waiting_input' },
+      });
+
+      const questions = [
+        {
+          id: 'scope',
+          header: 'Scope',
+          question: 'Which area should be changed?',
+          isOther: true,
+          isSecret: false,
+          options: [{ label: 'Runner', description: 'Only update the runner package.' }],
+        },
+      ];
+      const requestedEvent = waitForClientEvent(client, (event) => event.type === 'approval.requested');
+      await expect(
+        runner.callServer('approval.request', {
+          request: {
+            id: 'codex-input-1',
+            kind: 'tool',
+            sessionId,
+            title: 'Scope',
+            payload: {
+              backend: 'codex',
+              method: 'item/tool/requestUserInput',
+              params: { threadId: 'codex-thread-1', turnId: 'turn-1', itemId: 'item-1', questions, autoResolutionMs: null },
+            },
+            requestedAt: Date.now(),
+          },
+        }),
+      ).resolves.toEqual({ ok: true });
+      await expect(requestedEvent).resolves.toMatchObject({
+        type: 'approval.requested',
+        sessionId,
+        payload: { id: 'codex-input-1', payload: { method: 'item/tool/requestUserInput', params: { questions } } },
+      });
+
+      const answers = { scope: { answers: ['Runner'] } };
+      const decidedEvent = waitForClientEvent(client, (event) => event.type === 'approval.decided');
+      const response = await app!.inject({
+        method: 'POST',
+        url: '/api/approvals/codex-input-1/decide',
+        payload: { decision: { behavior: 'allow', updatedInput: { answers } }, decidedBy: 'st' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ ok: true, status: 'approved' });
+      expect(runner.calls.find((call) => call.method === 'approval.decide')).toMatchObject({
+        params: {
+          approvalId: 'codex-input-1',
+          sessionId,
+          decision: { behavior: 'allow', updatedInput: { answers } },
+        },
+      });
+      const persisted = await app!.inject({ method: 'GET', url: '/api/approvals?status=approved' });
+      expect(persisted.statusCode).toBe(200);
+      expect(persisted.json()).toMatchObject({
+        approvals: [{ id: 'codex-input-1', decision: { behavior: 'allow', updatedInput: { answers } } }],
+      });
+      await expect(decidedEvent).resolves.toMatchObject({
+        type: 'approval.decided',
+        sessionId,
+        payload: { approvalId: 'codex-input-1', status: 'approved' },
+      });
+    } finally {
+      await closeWebSocket(client);
+    }
   });
 
   it('persists scheduling pause, blocks new placement, and leaves existing sessions running', async () => {

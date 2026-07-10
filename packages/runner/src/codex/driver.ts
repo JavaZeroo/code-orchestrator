@@ -122,6 +122,10 @@ function commandTitle(item: Record<string, unknown>): string {
 }
 
 function codexRequestTitle(method: string, params: Record<string, unknown>): string {
+  if (method === 'item/tool/requestUserInput') {
+    const firstQuestion = Array.isArray(params.questions) ? obj(params.questions[0]) : {};
+    return str(firstQuestion.header) ?? str(firstQuestion.question) ?? 'Codex needs input';
+  }
   if (method === 'item/commandExecution/requestApproval') {
     return str(params.command) ?? 'Codex command approval';
   }
@@ -404,7 +408,7 @@ export class CodexSession {
         this.sendResponse(req.id, { permissions: {}, scope: 'turn' });
         return;
       case 'item/tool/requestUserInput':
-        this.sendResponse(req.id, { answers: {} });
+        this.requestApproval(req.id, req.method, params, 'waiting_input');
         return;
       case 'mcpServer/elicitation/request':
         this.sendResponse(req.id, { action: 'decline', content: null, _meta: null });
@@ -421,7 +425,12 @@ export class CodexSession {
     }
   }
 
-  private requestApproval(requestId: RpcId, method: string, params: Record<string, unknown>): void {
+  private requestApproval(
+    requestId: RpcId,
+    method: string,
+    params: Record<string, unknown>,
+    state: 'waiting_approval' | 'waiting_input' = 'waiting_approval',
+  ): void {
     const approvalId = createId();
     const request: ApprovalRequest = {
       id: approvalId,
@@ -432,7 +441,7 @@ export class CodexSession {
       requestedAt: Date.now(),
     };
     this.pendingApprovals.set(approvalId, { requestId, method });
-    this.setState('waiting_approval');
+    this.setState(state);
     this.emit.approval(request);
   }
 
@@ -443,7 +452,10 @@ export class CodexSession {
     }
     this.pendingApprovals.delete(approvalId);
     const allow = decision.behavior === 'allow';
-    if (pending.method === 'item/commandExecution/requestApproval') {
+    if (pending.method === 'item/tool/requestUserInput') {
+      const answers = decision.behavior === 'allow' ? obj(decision.updatedInput?.answers) : {};
+      this.sendResponse(pending.requestId, { answers });
+    } else if (pending.method === 'item/commandExecution/requestApproval') {
       this.sendResponse(pending.requestId, { decision: allow ? 'accept' : 'decline' });
     } else if (pending.method === 'item/fileChange/requestApproval') {
       this.sendResponse(pending.requestId, { decision: allow ? 'accept' : 'decline' });

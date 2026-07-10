@@ -126,6 +126,8 @@ export interface ApprovalRow {
   status: string;
 }
 
+export type UserInputAnswers = Record<string, { answers: string[] }>;
+
 export type ForgeKind = 'gitcode' | 'github';
 
 export interface ForgeRefRow {
@@ -295,6 +297,10 @@ export const api = {
   decide: (approvalId: string, behavior: 'allow' | 'deny', message?: string) =>
     post(`/api/approvals/${approvalId}/decide`, {
       decision: behavior === 'allow' ? { behavior } : { behavior, message },
+    }).then((r) => j(r)),
+  answer: (approvalId: string, answers: UserInputAnswers) =>
+    post(`/api/approvals/${approvalId}/decide`, {
+      decision: { behavior: 'allow', updatedInput: { answers } },
     }).then((r) => j(r)),
   triggers: () => fetch('/api/triggers').then((r) => j<{ triggers: TriggerRow[] }>(r)).then((d) => d.triggers),
   createTrigger: (body: CreateTriggerBody) => post('/api/triggers', body).then((r) => j<{ id: string }>(r)),
