@@ -22,6 +22,8 @@ export const machineInfoSchema = z.object({
   runnerVersion: z.string().optional(),
   /** 该机器上 code-server 的访问地址（网页"在编辑器打开"深链用） */
   codeServerUrl: z.string().optional(),
+  /** server 管理的调度暂停态；runner 注册值会被忽略，在线列表由持久化机器状态回填 */
+  schedulingPaused: z.boolean().optional(),
   startedAt: z.number(),
 });
 export type MachineInfo = z.infer<typeof machineInfoSchema>;

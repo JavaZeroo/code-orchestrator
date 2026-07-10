@@ -18,6 +18,7 @@ import { readyMachineIds } from './scheduler';
 import type { SpawnRequest } from './spawn';
 import { spawnSession, SpawnError } from './spawn';
 import { spawnContainerSession, ContainerSpawnQueued } from './spawnContainer';
+import { schedulableMachines } from './machineScheduling';
 
 export interface AutoSpawnRequest {
   machineId?: string;
@@ -50,24 +51,25 @@ async function loadProject(projectId: string) {
 /**
  * 无轮盘赌机器解析。
  * 严格实现 docs/design-sessions-ui.md:51 的顺序：
- *   1) 黏性：ready 物化机且在线
- *   2) 标签：labels 含 'dev' 的在线机
- *   3) 唯一在线机
+ *   1) 黏性：ready 物化机且在线、未暂停调度
+ *   2) 标签：labels 含 'dev' 的可调度在线机
+ *   3) 唯一可调度在线机
  *   4) 多台不命中 → null（不赌）
  */
 export function resolveInteractiveMachine(online: MachineInfo[], readyIds: string[]): string | null {
-  if (online.length === 0) return null;
+  const schedulable = schedulableMachines(online);
+  if (schedulable.length === 0) return null;
 
   // 黏性：ready 物化且在线
-  const sticky = online.find((m) => readyIds.includes(m.id));
+  const sticky = schedulable.find((m) => readyIds.includes(m.id));
   if (sticky) return sticky.id;
 
   // labels 含 dev
-  const dev = online.find((m) => m.labels.includes('dev'));
+  const dev = schedulable.find((m) => m.labels.includes('dev'));
   if (dev) return dev.id;
 
   // 唯一在线机
-  if (online.length === 1) return online[0]!.id;
+  if (schedulable.length === 1) return schedulable[0]!.id;
 
   // 多台且不命中 → 需要显式选择
   return null;
@@ -91,6 +93,13 @@ export async function resolveAndSpawn(req: AutoSpawnRequest): Promise<{
   queued?: boolean;
   taskId?: string;
 }> {
+  const requestedMachine = req.machineId
+    ? listMachines().find((machine) => machine.id === req.machineId)
+    : undefined;
+  if (requestedMachine?.schedulingPaused) {
+    throw new SpawnError(409, `机器 ${req.machineId} 已暂停新任务调度`);
+  }
+
   // ── 1) 显式透传（向后兼容）──
   if (req.machineId && req.cwd) {
     const r = await spawnSession(req as SpawnRequest);
@@ -127,14 +136,14 @@ export async function resolveAndSpawn(req: AutoSpawnRequest): Promise<{
   }
 
   // ── 4) 非加速器：按无轮盘赌规则定机 ──
-  const online = listMachines();
+  const online = schedulableMachines(listMachines());
   const readyIds = await readyMachineIds(project.id);
   const machineId = req.machineId ?? resolveInteractiveMachine(online, readyIds);
   if (!machineId) {
     const msg =
       online.length === 0
-        ? '当前无在线机器，无法创建会话'
-        : '有多台在线机器且无法自动判定（无 dev 标签、无就绪物化），请在「高级」中显式选择机器';
+        ? '当前无可调度的在线机器，无法创建会话'
+        : '有多台可调度在线机器且无法自动判定（无 dev 标签、无就绪物化），请在「高级」中显式选择机器';
     throw new SpawnError(400, msg);
   }
 

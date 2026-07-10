@@ -26,7 +26,7 @@ import { bus, publish } from '../events';
 import { parseForgeUrl } from '../forge/registry';
 import { callRunner, listMachines } from '../ws/runnerHub';
 import { spawnSession, SpawnError } from '../services/spawn';
-import { machineForRun } from './runMachine';
+import { machineForRun, matchMachine } from './runMachine';
 
 type RunContext = {
   vars: Record<string, string>;
@@ -187,13 +187,7 @@ async function finishRun(runId: string, status: 'done' | 'failed' | 'cancelled')
 // ---------- 节点执行 ----------
 
 function pickMachine(selector: AgentNode['machine']): string | null {
-  const online = listMachines();
-  if (selector?.id) {
-    return online.some((m) => m.id === selector.id) ? selector.id : null;
-  }
-  const labels = selector?.labels ?? [];
-  const match = online.find((m) => labels.every((l) => m.labels.includes(l)));
-  return match?.id ?? null;
+  return matchMachine(listMachines(), selector);
 }
 
 async function execAgent(runId: string, node: AgentNode, context: RunContext): Promise<void> {
@@ -211,7 +205,7 @@ async function execAgent(runId: string, node: AgentNode, context: RunContext): P
   };
 
   if (!machineId) {
-    await fail(`没有匹配的在线机器（selector: ${JSON.stringify(node.machine ?? {})}）`);
+    await fail(`没有匹配的可调度在线机器（selector: ${JSON.stringify(node.machine ?? {})}）`);
     return;
   }
   if (!cwdTpl) {

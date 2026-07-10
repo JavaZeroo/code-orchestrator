@@ -42,6 +42,17 @@ describe('chooseMachine', () => {
     const online = [npu8('npu1'), npu8('npu2')];
     expect(chooseMachine(online, { accelKind: 'ascend-npu', readyMachineIds: ['npu2'] })).toBe('npu2');
   });
+
+  it('暂停调度机不参与自动或显式放置，恢复后重新可用', () => {
+    const paused = npu8('paused');
+    paused.schedulingPaused = true;
+    const active = npu8('active');
+
+    expect(chooseMachine([paused, active], { accelKind: 'ascend-npu' })).toBe('active');
+    expect(chooseMachine([paused, active], { id: 'paused' })).toBeNull();
+    paused.schedulingPaused = false;
+    expect(chooseMachine([paused, active], { id: 'paused' })).toBe('paused');
+  });
 });
 
 describe('cardIndices', () => {

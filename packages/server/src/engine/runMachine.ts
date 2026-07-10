@@ -6,29 +6,32 @@
 import { desc, eq } from 'drizzle-orm';
 import { workflowDefSchema, type AgentNode, type MachineInfo } from '@co/protocol';
 import { getDb, schema } from '../db/index';
+import { schedulableMachines } from '../services/machineScheduling';
 import { listMachines } from '../ws/runnerHub';
 
-/** 纯：按 id / 全部 labels 命中在线机（与 engine.pickMachine 同语义）。 */
+/** 纯：按 id / 全部 labels 命中未暂停调度的在线机（与 engine.pickMachine 同语义）。 */
 export function matchMachine(online: MachineInfo[], selector: AgentNode['machine']): string | null {
+  const schedulable = schedulableMachines(online);
   if (selector?.id) {
-    return online.some((m) => m.id === selector.id) ? selector.id : null;
+    return schedulable.some((m) => m.id === selector.id) ? selector.id : null;
   }
   const labels = selector?.labels ?? [];
-  const match = online.find((m) => labels.every((l) => m.labels.includes(l)));
+  const match = schedulable.find((m) => labels.every((l) => m.labels.includes(l)));
   return match?.id ?? null;
 }
 
-/** 纯：① run 最新会话机仍在线 → 用它；② 回退首个命中 agent 选择器的在线机；③ null。 */
+/** 纯：① run 最新会话机仍可调度 → 用它；② 回退首个命中 agent 选择器的可调度在线机；③ null。 */
 export function resolveRunMachine(
   online: MachineInfo[],
   latestSessionMachineId: string | null,
   agentSelectors: Array<AgentNode['machine']>,
 ): string | null {
-  if (latestSessionMachineId && online.some((m) => m.id === latestSessionMachineId)) {
+  const schedulable = schedulableMachines(online);
+  if (latestSessionMachineId && schedulable.some((m) => m.id === latestSessionMachineId)) {
     return latestSessionMachineId;
   }
   for (const sel of agentSelectors) {
-    const m = matchMachine(online, sel);
+    const m = matchMachine(schedulable, sel);
     if (m) return m;
   }
   return null;

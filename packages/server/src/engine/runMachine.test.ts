@@ -21,4 +21,14 @@ describe('resolveRunMachine', () => {
   it('单机 + 会话在线 → 行为不变', () => {
     expect(resolveRunMachine([M('solo')], 'solo', [])).toBe('solo');
   });
+  it('最新会话机暂停调度 → 跳过并回退到可调度的 selector 机器', () => {
+    const paused = M('paused', ['dev']);
+    paused.schedulingPaused = true;
+    expect(resolveRunMachine([paused, M('active', ['dev'])], 'paused', [{ labels: ['dev'] }])).toBe('active');
+  });
+  it('显式 selector 指向暂停调度机 → null', () => {
+    const paused = M('paused');
+    paused.schedulingPaused = true;
+    expect(resolveRunMachine([paused], null, [{ id: 'paused' }])).toBeNull();
+  });
 });
