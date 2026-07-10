@@ -18,6 +18,7 @@ import { registerLlmRoutes } from './routes/llm';
 import { registerMeRoutes } from './routes/me';
 import { registerProjectRoutes } from './routes/projects';
 import { registerSessionRoutes } from './routes/sessions';
+import { registerTaskQueueRoutes } from './routes/taskQueue';
 import { registerComponentRoutes } from './routes/components';
 import { registerTriggerRoutes } from './routes/triggers';
 import { registerWorkRoutes } from './routes/work';
@@ -207,6 +208,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
   await registerRunnerHub(app);
   registerClientHub(app, authEnabled);
   await registerSessionRoutes(app);
+  await registerTaskQueueRoutes(app);
   await registerWorkflowRoutes(app);
   await registerForgeRoutes(app);
   await registerTriggerRoutes(app);

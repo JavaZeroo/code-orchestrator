@@ -52,4 +52,12 @@ export const useComponentSources = () =>
 export const useResources = () =>
   useQuery({ queryKey: ['resources'], queryFn: api.resources, refetchInterval: 15_000 });
 
+export const useQueuedSessions = (projectId?: string | null) =>
+  useQuery({
+    queryKey: ['queued-sessions', projectId],
+    queryFn: () => (projectId ? api.queuedSessions(projectId) : Promise.resolve([])),
+    enabled: !!projectId,
+    refetchInterval: 8_000,
+  });
+
 export const invalidate = (key: string) => void queryClient.invalidateQueries({ queryKey: [key] });

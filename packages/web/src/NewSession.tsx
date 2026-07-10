@@ -1,11 +1,11 @@
-import { ChevronDown, SendHorizonal } from 'lucide-react';
+import { ChevronDown, SendHorizonal, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type Effort, type SessionAgent } from './api';
 import { Input, Textarea } from './components/ui/primitives';
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { SelectContent, SelectGroup, SelectItem, SelectLabel } from './components/ui/select';
-import { useLlmProviders, useMachines, useProjects, useResources, useWorkflows } from './lib/queries';
+import { invalidate, useLlmProviders, useMachines, useProjects, useQueuedSessions, useResources, useWorkflows } from './lib/queries';
 import { useProjectScope } from './lib/project';
 import { cn } from './lib/utils';
 
@@ -101,6 +101,7 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
   const { data: allDefs = [] } = useWorkflows();
   const { data: resources } = useResources();
   const { projectId } = useProjectScope();
+  const { data: queuedSessions = [] } = useQueuedSessions(projectId);
 
   const project = projects.find((p) => p.id === projectId);
   const pipelines = allDefs.filter((d) => d.projectId === projectId && d.archived !== 'yes');
@@ -115,6 +116,7 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
   const [advancedMachine, setAdvancedMachine] = useState('');
   const [advancedCwd, setAdvancedCwd] = useState('');
   const [busy, setBusy] = useState(false);
+  const [cancellingTaskId, setCancellingTaskId] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // 流水线默认选项目默认；切项目重置
@@ -217,12 +219,27 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
           toast('无空闲机器，已排队；有资源自动派发');
           setPrompt('');
           setBusy(false);
+          invalidate('queued-sessions');
+          invalidate('resources');
         }
       })
       .catch((e) => {
         toast.error(String(e instanceof Error ? e.message : e));
         setBusy(false);
       });
+  };
+
+  const cancelQueuedSession = (taskId: string) => {
+    if (!projectId || cancellingTaskId) return;
+    setCancellingTaskId(taskId);
+    api.cancelQueuedSession(projectId, taskId)
+      .then(() => {
+        toast.success('已取消排队会话');
+        invalidate('queued-sessions');
+        invalidate('resources');
+      })
+      .catch((e) => toast.error(String(e instanceof Error ? e.message : e)))
+      .finally(() => setCancellingTaskId(null));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -380,6 +397,37 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
                   );
                 })}
                 {resources.queued > 0 && <span className="text-warn">排队 {resources.queued}</span>}
+              </div>
+            )}
+
+            {/* 当前项目待资源的容器会话：可在 reconciler claim 前取消。 */}
+            {queuedSessions.length > 0 && (
+              <div className="mt-4 overflow-hidden rounded-lg border border-line/70 bg-panel/70 text-left shadow-[var(--shadow-panel)]">
+                <div className="border-b border-line/60 px-3 py-2 text-[11px] font-medium text-dim">
+                  等待资源 · {queuedSessions.length}
+                </div>
+                <div className="max-h-48 overflow-y-auto">
+                  {queuedSessions.map((task) => (
+                    <div key={task.id} className="flex items-center gap-3 border-b border-line/40 px-3 py-2 last:border-b-0">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs text-ink-2">{task.prompt || '容器会话'}</p>
+                        <p className="mt-0.5 truncate text-[10px] text-faint">
+                          {[task.agent, task.model, new Date(task.enqueuedAt).toLocaleString()].filter(Boolean).join(' · ')}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={cancellingTaskId !== null}
+                        onClick={() => cancelQueuedSession(task.id)}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
+                        aria-label={`取消排队会话 ${task.id}`}
+                      >
+                        <X size={12} />
+                        {cancellingTaskId === task.id ? '取消中…' : '取消'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </>
