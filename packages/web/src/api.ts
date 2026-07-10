@@ -339,6 +339,12 @@ export const api = {
   queuedSessions: (projectId: string) =>
     fetch(`/api/projects/${encodeURIComponent(projectId)}/queued-sessions`)
       .then((r) => j<{ tasks: QueuedSessionRow[] }>(r)).then((d) => d.tasks),
+  reprioritizeQueuedSession: (projectId: string, taskId: string, priority: number) =>
+    fetch(`/api/projects/${encodeURIComponent(projectId)}/queued-sessions/${encodeURIComponent(taskId)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ priority }),
+    }).then((r) => j<{ ok: boolean; priority: number }>(r)),
   cancelQueuedSession: (projectId: string, taskId: string) =>
     fetch(`/api/projects/${encodeURIComponent(projectId)}/queued-sessions/${encodeURIComponent(taskId)}`, { method: 'DELETE' })
       .then((r) => j<{ ok: boolean }>(r)),

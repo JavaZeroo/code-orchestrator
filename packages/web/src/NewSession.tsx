@@ -1,7 +1,7 @@
 import { ChevronDown, SendHorizonal, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, type Effort, type SessionAgent } from './api';
+import { api, type Effort, type QueuedSessionRow, type SessionAgent } from './api';
 import { Input, Textarea } from './components/ui/primitives';
 import * as SelectPrimitive from '@radix-ui/react-select';
 import { SelectContent, SelectGroup, SelectItem, SelectLabel } from './components/ui/select';
@@ -101,7 +101,7 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
   const { data: allDefs = [] } = useWorkflows();
   const { data: resources } = useResources();
   const { projectId } = useProjectScope();
-  const { data: queuedSessions = [] } = useQueuedSessions(projectId);
+  const { data: queuedSessions = [], refetch: refetchQueuedSessions } = useQueuedSessions(projectId);
 
   const project = projects.find((p) => p.id === projectId);
   const pipelines = allDefs.filter((d) => d.projectId === projectId && d.archived !== 'yes');
@@ -117,6 +117,8 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
   const [advancedCwd, setAdvancedCwd] = useState('');
   const [busy, setBusy] = useState(false);
   const [cancellingTaskId, setCancellingTaskId] = useState<string | null>(null);
+  const [updatingPriorityTaskId, setUpdatingPriorityTaskId] = useState<string | null>(null);
+  const [priorityDrafts, setPriorityDrafts] = useState<Record<string, string>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // 流水线默认选项目默认；切项目重置
@@ -240,6 +242,33 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
       })
       .catch((e) => toast.error(String(e instanceof Error ? e.message : e)))
       .finally(() => setCancellingTaskId(null));
+  };
+
+  const reprioritizeQueuedSession = async (task: QueuedSessionRow) => {
+    if (!projectId || updatingPriorityTaskId) return;
+    const draft = priorityDrafts[task.id] ?? String(task.priority);
+    const priority = Number(draft);
+    if (!draft.trim() || !Number.isInteger(priority) || priority < -2_147_483_648 || priority > 2_147_483_647) {
+      toast.error('优先级必须是 32 位整数');
+      return;
+    }
+
+    setUpdatingPriorityTaskId(task.id);
+    try {
+      await api.reprioritizeQueuedSession(projectId, task.id, priority);
+      await refetchQueuedSessions();
+      setPriorityDrafts((current) => {
+        const next = { ...current };
+        delete next[task.id];
+        return next;
+      });
+      toast.success(`优先级已更新为 ${priority}`);
+    } catch (e) {
+      toast.error(String(e instanceof Error ? e.message : e));
+      void refetchQueuedSessions();
+    } finally {
+      setUpdatingPriorityTaskId(null);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -400,33 +429,65 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
               </div>
             )}
 
-            {/* 当前项目待资源的容器会话：可在 reconciler claim 前取消。 */}
+            {/* 当前项目待资源的容器会话：可在 reconciler claim 前改优先级或取消。 */}
             {queuedSessions.length > 0 && (
               <div className="mt-4 overflow-hidden rounded-lg border border-line/70 bg-panel/70 text-left shadow-[var(--shadow-panel)]">
                 <div className="border-b border-line/60 px-3 py-2 text-[11px] font-medium text-dim">
                   等待资源 · {queuedSessions.length}
                 </div>
                 <div className="max-h-48 overflow-y-auto">
-                  {queuedSessions.map((task) => (
-                    <div key={task.id} className="flex items-center gap-3 border-b border-line/40 px-3 py-2 last:border-b-0">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-xs text-ink-2">{task.prompt || '容器会话'}</p>
-                        <p className="mt-0.5 truncate text-[10px] text-faint">
-                          {[task.agent, task.model, new Date(task.enqueuedAt).toLocaleString()].filter(Boolean).join(' · ')}
-                        </p>
+                  {queuedSessions.map((task) => {
+                    const priorityDraft = priorityDrafts[task.id] ?? String(task.priority);
+                    return (
+                      <div key={task.id} className="flex items-center gap-3 border-b border-line/40 px-3 py-2 last:border-b-0">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs text-ink-2">{task.prompt || '容器会话'}</p>
+                          <p className="mt-0.5 truncate text-[10px] text-faint">
+                            {[task.agent, task.model, new Date(task.enqueuedAt).toLocaleString()].filter(Boolean).join(' · ')}
+                          </p>
+                        </div>
+                        <form
+                          className="flex shrink-0 items-center gap-1"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            void reprioritizeQueuedSession(task);
+                          }}
+                        >
+                          <label htmlFor={`queue-priority-${task.id}`} className="text-[10px] text-faint">
+                            优先级
+                          </label>
+                          <input
+                            id={`queue-priority-${task.id}`}
+                            type="number"
+                            min={-2_147_483_648}
+                            max={2_147_483_647}
+                            step={1}
+                            value={priorityDraft}
+                            onChange={(event) => setPriorityDrafts((current) => ({ ...current, [task.id]: event.target.value }))}
+                            className="mono-nums h-7 w-16 rounded-md border border-line bg-bg-2/60 px-1.5 text-right text-[11px] text-ink outline-none focus:border-accent/60"
+                          />
+                          <button
+                            type="submit"
+                            disabled={updatingPriorityTaskId !== null || priorityDraft === String(task.priority)}
+                            className="rounded-md px-2 py-1 text-[11px] text-accent transition-colors hover:bg-accent/10 disabled:opacity-40"
+                            aria-label={`更新排队会话 ${task.id} 的优先级`}
+                          >
+                            {updatingPriorityTaskId === task.id ? '更新中…' : '更新'}
+                          </button>
+                        </form>
+                        <button
+                          type="button"
+                          disabled={cancellingTaskId !== null}
+                          onClick={() => cancelQueuedSession(task.id)}
+                          className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
+                          aria-label={`取消排队会话 ${task.id}`}
+                        >
+                          <X size={12} />
+                          {cancellingTaskId === task.id ? '取消中…' : '取消'}
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        disabled={cancellingTaskId !== null}
-                        onClick={() => cancelQueuedSession(task.id)}
-                        className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
-                        aria-label={`取消排队会话 ${task.id}`}
-                      >
-                        <X size={12} />
-                        {cancellingTaskId === task.id ? '取消中…' : '取消'}
-                      </button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}

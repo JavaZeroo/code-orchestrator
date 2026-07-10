@@ -5,7 +5,7 @@ import WebSocket from 'ws';
 import { createApp } from './app';
 import { closeDb, getDb, schema } from './db/index';
 import { eq } from 'drizzle-orm';
-import { reconcileQueueOnce } from './services/taskQueue';
+import { markTaskDone, reconcileQueueOnce } from './services/taskQueue';
 
 const runSt = Boolean(process.env.DATABASE_URL);
 const describeSt = runSt ? describe : describe.skip;
@@ -275,5 +275,96 @@ describeSt('server ST: API + runner websocket', () => {
       return 'started';
     });
     expect(dispatchCount).toBe(0);
+  });
+
+  it('reprioritizes pending sessions and dispatches by priority with FIFO ties', async () => {
+    const project = await app!.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: {
+        name: 'Priority Queue ST',
+        forge: 'github',
+        repo: 'example/priority-queue-st',
+        baseImage: 'example/train:latest',
+        accel: { kind: 'ascend-npu' },
+      },
+    });
+    expect(project.statusCode).toBe(201);
+    const { id: projectId } = project.json() as { id: string };
+
+    const enqueue = async (prompt: string) => {
+      const response = await app!.inject({
+        method: 'POST',
+        url: '/api/container-sessions',
+        payload: { projectId, prompt, agent: 'claude' },
+      });
+      expect(response.statusCode).toBe(202);
+      return (response.json() as { queued: true; taskId: string }).taskId;
+    };
+
+    const oldestId = await enqueue('oldest normal task');
+    const firstUrgentId = await enqueue('first urgent task');
+    const secondUrgentId = await enqueue('second urgent task');
+    const enqueuedBase = Date.now() - 10_000;
+    await Promise.all([
+      getDb().update(schema.taskQueue).set({ enqueuedAt: new Date(enqueuedBase) }).where(eq(schema.taskQueue.id, oldestId)),
+      getDb().update(schema.taskQueue).set({ enqueuedAt: new Date(enqueuedBase + 1_000) }).where(eq(schema.taskQueue.id, firstUrgentId)),
+      getDb().update(schema.taskQueue).set({ enqueuedAt: new Date(enqueuedBase + 2_000) }).where(eq(schema.taskQueue.id, secondUrgentId)),
+    ]);
+
+    const missing = await app!.inject({
+      method: 'PATCH',
+      url: `/api/projects/${projectId}/queued-sessions/missing-task`,
+      payload: { priority: 10 },
+    });
+    expect(missing.statusCode).toBe(404);
+
+    for (const taskId of [firstUrgentId, secondUrgentId]) {
+      const reprioritized = await app!.inject({
+        method: 'PATCH',
+        url: `/api/projects/${projectId}/queued-sessions/${taskId}`,
+        payload: { priority: 10 },
+      });
+      expect(reprioritized.statusCode).toBe(200);
+      expect(reprioritized.json()).toEqual({ ok: true, priority: 10 });
+    }
+
+    const listed = await app!.inject({ method: 'GET', url: `/api/projects/${projectId}/queued-sessions` });
+    expect(listed.statusCode).toBe(200);
+    expect((listed.json() as { tasks: Array<{ id: string; priority: number }> }).tasks).toMatchObject([
+      { id: firstUrgentId, priority: 10 },
+      { id: secondUrgentId, priority: 10 },
+      { id: oldestId, priority: 0 },
+    ]);
+
+    const dispatchOrder: string[] = [];
+    let claimedUpdateStatus: number | undefined;
+    let claimedUpdateBody: unknown;
+    await reconcileQueueOnce(async (task) => {
+      dispatchOrder.push(task.id);
+      if (task.id === firstUrgentId) {
+        const claimedUpdate = await app!.inject({
+          method: 'PATCH',
+          url: `/api/projects/${projectId}/queued-sessions/${task.id}`,
+          payload: { priority: 20 },
+        });
+        claimedUpdateStatus = claimedUpdate.statusCode;
+        claimedUpdateBody = claimedUpdate.json();
+      }
+      return 'started';
+    });
+
+    expect(dispatchOrder).toEqual([firstUrgentId, secondUrgentId, oldestId]);
+    expect(claimedUpdateStatus).toBe(409);
+    expect(claimedUpdateBody).toMatchObject({ status: 'scheduled' });
+
+    await markTaskDone(firstUrgentId);
+    const terminalUpdate = await app!.inject({
+      method: 'PATCH',
+      url: `/api/projects/${projectId}/queued-sessions/${firstUrgentId}`,
+      payload: { priority: 20 },
+    });
+    expect(terminalUpdate.statusCode).toBe(409);
+    expect(terminalUpdate.json()).toMatchObject({ status: 'done' });
   });
 });
