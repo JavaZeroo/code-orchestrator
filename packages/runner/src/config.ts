@@ -16,16 +16,44 @@ const envSchema = z.object({
   ACCEL_KIND: z.string().optional(),
   /** 加速器张数（配合 ACCEL_KIND）：生成 resources=[{kind,index:0..count-1}]，M2 换真 detect */
   ACCEL_COUNT: z.coerce.number().int().nonnegative().default(0),
-  /** 显式卡号（逗号分隔，如 "6,7"）；设了就覆盖 ACCEL_COUNT——共享机上只声明空闲卡 */
+  /** 显式卡号（逗号或范围，如 "0-3,6"）；设了就覆盖 ACCEL_COUNT——共享机上只声明空闲卡 */
   ACCEL_INDICES: z.string().optional(),
 });
 
 const raw = envSchema.parse(process.env);
 
+/** 将 ACCEL_INDICES 展开为去重后的设备序号；无效配置直接失败，避免误报可调度资源。 */
+export function parseAccelIndices(value: string): number[] {
+  const indices = new Set<number>();
+
+  for (const rawSegment of value.split(',')) {
+    const segment = rawSegment.trim();
+    const match = /^(\d+)(?:\s*-\s*(\d+))?$/.exec(segment);
+    if (!match) {
+      throw new Error(`invalid ACCEL_INDICES segment: "${segment}"`);
+    }
+
+    const start = Number(match[1]);
+    const end = Number(match[2] ?? match[1]);
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) {
+      throw new Error(`invalid ACCEL_INDICES segment: "${segment}"`);
+    }
+    if (end < start) {
+      throw new Error(`ACCEL_INDICES range must be ascending: "${segment}"`);
+    }
+
+    for (let index = start; index <= end; index += 1) {
+      indices.add(index);
+    }
+  }
+
+  return [...indices];
+}
+
 /** v1 静态加速器清单：优先 ACCEL_INDICES（显式空闲卡），否则 ACCEL_COUNT（0..count-1）；M2 换真 detect */
 const accelIndices = raw.ACCEL_KIND
   ? raw.ACCEL_INDICES
-    ? raw.ACCEL_INDICES.split(',').map((s) => Number.parseInt(s.trim(), 10)).filter((n) => Number.isInteger(n))
+    ? parseAccelIndices(raw.ACCEL_INDICES)
     : Array.from({ length: raw.ACCEL_COUNT }, (_, i) => i)
   : [];
 const resources = raw.ACCEL_KIND ? accelIndices.map((index) => ({ kind: raw.ACCEL_KIND!, index })) : [];
