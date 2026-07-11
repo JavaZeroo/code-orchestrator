@@ -19,18 +19,22 @@ describe('api client', () => {
     expect(fetch).toHaveBeenCalledWith('/api/machines');
   });
 
-  it('adds since only for incremental event polling', async () => {
+  it('constructs initial, forward, and backward session event cursors', async () => {
+    const initialPage = { events: [], page: { hasEarlier: true, before: 8 } };
     const fetch = vi
       .fn()
-      .mockResolvedValueOnce(Response.json({ events: [] }))
-      .mockResolvedValueOnce(Response.json({ events: [] }));
+      .mockResolvedValueOnce(Response.json(initialPage))
+      .mockResolvedValueOnce(Response.json({ events: [], page: { hasEarlier: false, before: null } }))
+      .mockResolvedValueOnce(Response.json({ events: [], page: { hasEarlier: false, before: null } }));
     vi.stubGlobal('fetch', fetch);
 
-    await api.events('s1');
-    await api.events('s1', 12);
+    await expect(api.events('s1')).resolves.toEqual(initialPage);
+    await api.events('s1', { since: 12 });
+    await api.events('s1', { before: 8 });
 
     expect(fetch).toHaveBeenNthCalledWith(1, '/api/sessions/s1/events');
     expect(fetch).toHaveBeenNthCalledWith(2, '/api/sessions/s1/events?since=12');
+    expect(fetch).toHaveBeenNthCalledWith(3, '/api/sessions/s1/events?before=8');
   });
 
   it('fetches one session by its encoded ID', async () => {

@@ -4,7 +4,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
-import { and, asc, desc, eq, gt, isNotNull, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNotNull, isNull, lt } from 'drizzle-orm';
 import * as z from 'zod';
 import { approvalDecisionSchema, MessageMetaSchema, sessionAgentSchema } from '@co/protocol';
 import { getDb, hasDb, schema } from '../db/index';
@@ -48,6 +48,7 @@ const sendBodySchema = z.object({ text: z.string().min(1), meta: MessageMetaSche
 const renameBodySchema = z.object({ title: z.string().trim().min(1).max(120) }).strict();
 const listSessionsQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
 const decideBodySchema = z.object({ decision: approvalDecisionSchema, decidedBy: z.string().optional() });
+const EVENT_PAGE_SIZE = 2000;
 
 function requireDb() {
   if (!hasDb()) {
@@ -249,29 +250,46 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     return { ok: true, stat: stat.trim(), diff: diff.slice(0, 200_000) };
   });
 
-  app.get<{ Params: { id: string }; Querystring: { since?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { before?: string; since?: string } }>(
     '/api/sessions/:id/events',
     async (req) => {
       const db = requireDb();
       const since = Number(req.query.since ?? 0);
+      const before = Number(req.query.before ?? 0);
+      if (since > 0 && before > 0) {
+        throw new HttpError(400, 'since and before cursors cannot be combined');
+      }
       // 首次加载返回最新 2000 条（desc+limit+reverse，长会话不能截断尾部——
-      // 否则 approval.decided / tool-call-end 永远到不了前端）；since>0 增量拉取
+      // 否则 approval.decided / tool-call-end 永远到不了前端）；since>0 增量拉取。
+      // before>0 从当前最早事件向前翻页，额外取一条用于判断是否已到开头。
       if (since > 0) {
         const rows = await db
           .select()
           .from(schema.events)
           .where(and(eq(schema.events.sessionId, req.params.id), gt(schema.events.seq, since)))
           .orderBy(asc(schema.events.seq))
-          .limit(2000);
-        return { events: rows };
+          .limit(EVENT_PAGE_SIZE);
+        return { events: rows, page: { hasEarlier: false, before: null } };
       }
       const latest = await db
         .select()
         .from(schema.events)
-        .where(eq(schema.events.sessionId, req.params.id))
+        .where(
+          before > 0
+            ? and(eq(schema.events.sessionId, req.params.id), lt(schema.events.seq, before))
+            : eq(schema.events.sessionId, req.params.id),
+        )
         .orderBy(desc(schema.events.seq))
-        .limit(2000);
-      return { events: latest.reverse() };
+        .limit(EVENT_PAGE_SIZE + 1);
+      const hasEarlier = latest.length > EVENT_PAGE_SIZE;
+      const events = latest.slice(0, EVENT_PAGE_SIZE).reverse();
+      return {
+        events,
+        page: {
+          hasEarlier,
+          before: hasEarlier ? (events[0]?.seq ?? null) : null,
+        },
+      };
     },
   );
 
