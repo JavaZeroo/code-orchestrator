@@ -360,7 +360,7 @@ function HomeScreen({
     if (typeof selected === 'object' && 'session' in selected) {
       const s = allSessions.find((s) => s.id === selected.session);
       if (!s) return <div className="p-6 text-sm text-dim">会话未找到</div>;
-      return <SessionView key={s.id} session={s} />;
+      return <SessionView key={s.id} session={s} onForked={(id) => setSelected({ session: id })} />;
     }
     if (typeof selected === 'object' && 'run' in selected) {
       return <RunView runId={selected.run} onOpenSession={(id) => setSelected({ session: id })} onBack={() => setSelected('new')} />;

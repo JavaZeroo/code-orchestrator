@@ -1,6 +1,6 @@
 import { exec } from 'node:child_process';
 import { runnerMethods, type RunnerMethodName, type RunnerParams } from '@co/protocol';
-import { ClaudeSession, type DriverEmit } from './claude/driver';
+import { ClaudeSession, forkClaudeNativeSession, type DriverEmit } from './claude/driver';
 import { CodexSession } from './codex/driver';
 import type { ServerConnection } from './connection';
 import { addSession, getSession, listSessionStates, removeSession, type RunnerSession } from './sessions';
@@ -39,6 +39,8 @@ export interface RunnerContext {
 export { listSessionStates };
 
 export function createRunnerMethodHandler(ctx: RunnerContext) {
+  const sessionsBeingForked = new Set<string>();
+
   function createHostSession(
     p: RunnerParams<'session.spawn'>,
     emit: DriverEmit,
@@ -169,8 +171,60 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
       }
+      case 'session.fork': {
+        const p = runnerMethods['session.fork'].params.parse(params);
+        if (getSession(p.sessionId)) {
+          return { ok: false, error: `session already exists: ${p.sessionId}` };
+        }
+        const source = getSession(p.sourceSessionId);
+        if (source && source.state !== 'idle' && source.state !== 'dead') {
+          return { ok: false, error: `source session is busy: ${p.sourceSessionId}` };
+        }
+        if (sessionsBeingForked.has(p.sourceSessionId)) {
+          return { ok: false, error: `source session fork already in progress: ${p.sourceSessionId}` };
+        }
+
+        sessionsBeingForked.add(p.sourceSessionId);
+        let forkedSession: RunnerSession | undefined;
+        try {
+          const emit = makeEmit(p.sessionId);
+          const spawnParams: RunnerParams<'session.spawn'> = {
+            sessionId: p.sessionId,
+            agent: p.agent,
+            cwd: p.cwd,
+            meta: p.meta,
+            env: p.env,
+          };
+          let nativeSessionId: string;
+          if (p.agent === 'claude') {
+            nativeSessionId = await forkClaudeNativeSession(p.nativeSessionId, p.cwd);
+            forkedSession = createHostSession(spawnParams, emit, nativeSessionId);
+            addSession(forkedSession);
+            forkedSession.start();
+          } else {
+            const codex = new CodexSession(spawnParams, emit, undefined, p.nativeSessionId);
+            forkedSession = codex;
+            codex.start();
+            nativeSessionId = await codex.waitUntilReady();
+            addSession(codex);
+          }
+          if (nativeSessionId === p.nativeSessionId) {
+            throw new Error('native fork did not create a distinct session ID');
+          }
+          return { ok: true, nativeSessionId };
+        } catch (err) {
+          forkedSession?.kill();
+          removeSession(p.sessionId);
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        } finally {
+          sessionsBeingForked.delete(p.sourceSessionId);
+        }
+      }
       case 'session.send': {
         const p = runnerMethods['session.send'].params.parse(params);
+        if (sessionsBeingForked.has(p.sessionId)) {
+          return { ok: false, error: `session fork in progress: ${p.sessionId}` };
+        }
         const session = getSession(p.sessionId);
         if (!session || session.state === 'dead') {
           return { ok: false, error: `session not running: ${p.sessionId}` };

@@ -1,4 +1,4 @@
-import { ArrowDown, Check, Code2, GitCompare, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
+import { ArrowDown, Check, Code2, GitCompare, GitFork, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type ApprovalRequest, type SessionRow, type SessionUsage, type UserInputAnswers } from './api';
@@ -156,7 +156,35 @@ export function ResumeAction({
   );
 }
 
-export function SessionView({ session }: { session: SessionRow }) {
+export function isSessionForkable(session: SessionRow, state: string, runnerOnline: boolean): boolean {
+  return (
+    (state === 'idle' || state === 'dead') &&
+    runnerOnline &&
+    session.runId == null &&
+    session.containerId == null &&
+    Boolean(session.nativeSessionId) &&
+    (session.agent === 'claude' || session.agent === 'codex')
+  );
+}
+
+export function ForkAction({
+  visible,
+  forking,
+  onFork,
+}: {
+  visible: boolean;
+  forking: boolean;
+  onFork: () => void;
+}) {
+  if (!visible) return null;
+  return (
+    <Button variant="secondary" size="sm" disabled={forking} onClick={onFork}>
+      <GitFork size={12} /> {forking ? '分叉中…' : '分叉会话'}
+    </Button>
+  );
+}
+
+export function SessionView({ session, onForked }: { session: SessionRow; onForked?: (sessionId: string) => void }) {
   const events = useSessionEvents(session.id);
   const { data: machines = [] } = useMachines();
   const [text, setText] = useState('');
@@ -167,6 +195,7 @@ export function SessionView({ session }: { session: SessionRow }) {
   const [savingTitle, setSavingTitle] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [forking, setForking] = useState(false);
   const resumeAfterSeqRef = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -260,7 +289,7 @@ export function SessionView({ session }: { session: SessionRow }) {
 
   const doSend = () => {
     const t = text.trim();
-    if (!t || dead || resuming) {
+    if (!t || dead || resuming || forking) {
       return;
     }
     setText('');
@@ -278,6 +307,19 @@ export function SessionView({ session }: { session: SessionRow }) {
       });
   };
 
+  const doFork = () => {
+    if (!onForked) return;
+    setForking(true);
+    api.fork(session.id)
+      .then(({ sessionId }) => {
+        invalidate('sessions');
+        toast('已创建独立分叉会话');
+        onForked(sessionId);
+      })
+      .catch((e) => toast.error(`分叉失败：${e}`))
+      .finally(() => setForking(false));
+  };
+
   const doRename = (title: string) => {
     setSavingTitle(true);
     api.renameSession(session.id, title)
@@ -293,6 +335,7 @@ export function SessionView({ session }: { session: SessionRow }) {
   };
 
   const resumable = isSessionResumable(session, state, machine?.id === session.machineId);
+  const forkable = Boolean(onForked) && isSessionForkable(session, state, machine?.id === session.machineId);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -336,6 +379,7 @@ export function SessionView({ session }: { session: SessionRow }) {
             <GitCompare size={13} /> 变更
           </Button>
           <Badge tone={meta.tone}>{meta.label}</Badge>
+          <ForkAction visible={forkable} forking={forking} onFork={doFork} />
           <ResumeAction visible={resumable} resuming={resuming} onResume={doResume} />
           {busy && (
             <Button
@@ -395,8 +439,8 @@ export function SessionView({ session }: { session: SessionRow }) {
         <Textarea
           value={text}
           rows={2}
-          placeholder={resuming ? '正在恢复原会话…' : dead ? '会话已结束' : '输入消息，Enter 发送，Shift+Enter 换行'}
-          disabled={dead || resuming}
+          placeholder={forking ? '正在创建分叉会话…' : resuming ? '正在恢复原会话…' : dead ? '会话已结束' : '输入消息，Enter 发送，Shift+Enter 换行'}
+          disabled={dead || resuming || forking}
           className="resize-none"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -406,7 +450,7 @@ export function SessionView({ session }: { session: SessionRow }) {
             }
           }}
         />
-        <Button variant="default" size="icon" className="h-auto w-11 shrink-0" disabled={dead || resuming || !text.trim()} onClick={doSend}>
+        <Button variant="default" size="icon" className="h-auto w-11 shrink-0" disabled={dead || resuming || forking || !text.trim()} onClick={doSend}>
           <Send size={15} />
         </Button>
       </footer>

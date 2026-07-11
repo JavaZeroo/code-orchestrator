@@ -161,18 +161,36 @@ export class CodexSession {
     private readonly params: RunnerParams<'session.spawn'>,
     private readonly emit: DriverEmit,
     private readonly resumeNativeSessionId?: string,
+    private readonly forkNativeSessionId?: string,
   ) {
+    if (resumeNativeSessionId && forkNativeSessionId) {
+      throw new Error('Codex session cannot resume and fork at the same time');
+    }
     this.sessionId = params.sessionId;
     this.nativeSessionId = resumeNativeSessionId;
   }
 
   start(): void {
-    this.ready = this.run().catch((err) => {
+    if (this.ready) return;
+    this.ready = this.run();
+    void this.ready.catch((err) => {
       this.emit.event(
         createEnvelope('agent', { t: 'service', text: `codex session crashed: ${err instanceof Error ? err.message : String(err)}` }),
       );
       this.setState('dead');
     });
+  }
+
+  /** session.fork 需要等 app-server 返回新 thread id 后才能向 server 确认成功。 */
+  async waitUntilReady(): Promise<string> {
+    if (!this.ready) {
+      throw new Error('Codex session has not been started');
+    }
+    await this.ready;
+    if (!this.nativeSessionId) {
+      throw new Error('Codex app-server did not return a native thread ID');
+    }
+    return this.nativeSessionId;
   }
 
   send(text: string, meta?: MessageMeta): void {
@@ -205,15 +223,17 @@ export class CodexSession {
   }
 
   kill(): void {
-    if (this.dead) return;
+    const alreadyDead = this.dead;
     for (const approvalId of [...this.pendingApprovals.keys()]) {
       this.respondApproval(approvalId, { behavior: 'deny', message: 'session killed' });
     }
     this.pendingApprovals.clear();
     this.child?.kill('SIGTERM');
     setTimeout(() => this.child?.kill('SIGKILL'), 1500);
-    this.emit.event(createEnvelope('agent', { t: 'stop' }));
-    this.setState('dead');
+    if (!alreadyDead) {
+      this.emit.event(createEnvelope('agent', { t: 'stop' }));
+      this.setState('dead');
+    }
   }
 
   decideApproval(approvalId: string, decision: ApprovalDecision): boolean {
@@ -255,11 +275,16 @@ export class CodexSession {
     rl.on('line', (line) => this.onLine(line));
 
     await this.initialize();
-    const thread = this.resumeNativeSessionId
-      ? await this.sendRequest('thread/resume', this.threadResumeParams(this.resumeNativeSessionId))
-      : await this.sendRequest('thread/start', this.threadStartParams());
+    const thread = this.forkNativeSessionId
+      ? await this.sendRequest('thread/fork', this.threadForkParams(this.forkNativeSessionId))
+      : this.resumeNativeSessionId
+        ? await this.sendRequest('thread/resume', this.threadResumeParams(this.resumeNativeSessionId))
+        : await this.sendRequest('thread/start', this.threadStartParams());
     const threadObj = obj(obj(thread).thread);
     const native = str(threadObj.id) ?? this.resumeNativeSessionId;
+    if (this.forkNativeSessionId && (!native || native === this.forkNativeSessionId)) {
+      throw new Error('Codex app-server did not create a distinct forked thread');
+    }
     if (native) {
       this.threadId = native;
       this.nativeSessionId = native;
@@ -310,6 +335,13 @@ export class CodexSession {
       sandbox: mapSandbox(meta.permissionMode),
       ...(meta.customSystemPrompt ? { baseInstructions: meta.customSystemPrompt } : {}),
       ...(appendParts.length > 0 ? { developerInstructions: appendParts.join('\n\n') } : {}),
+    };
+  }
+
+  private threadForkParams(threadId: string): Record<string, unknown> {
+    return {
+      ...this.threadResumeParams(threadId),
+      ephemeral: false,
     };
   }
 

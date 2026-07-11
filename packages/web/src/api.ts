@@ -305,6 +305,8 @@ export const api = {
   send: (sessionId: string, text: string) => post(`/api/sessions/${sessionId}/send`, { text }).then((r) => j(r)),
   resume: (sessionId: string) =>
     post(`/api/sessions/${sessionId}/resume`, {}).then((r) => j<{ ok: true; sessionId: string }>(r)),
+  fork: (sessionId: string) =>
+    post(`/api/sessions/${sessionId}/fork`, {}).then((r) => j<{ ok: true; sessionId: string }>(r)),
   kill: (sessionId: string) => post(`/api/sessions/${sessionId}/kill`, {}).then((r) => j(r)),
   interrupt: (sessionId: string) => post(`/api/sessions/${sessionId}/interrupt`, {}).then((r) => j(r)),
   sessionDiff: (sessionId: string) =>

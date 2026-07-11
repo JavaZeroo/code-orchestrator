@@ -26,7 +26,7 @@ class FakeCodexProcess extends EventEmitter {
   readonly kill = vi.fn();
 }
 
-function createFixture(resumeNativeSessionId?: string) {
+function createFixture(resumeNativeSessionId?: string, forkNativeSessionId?: string) {
   const child = new FakeCodexProcess();
   const outbound: RpcMessage[] = [];
   let buffered = '';
@@ -50,6 +50,10 @@ function createFixture(resumeNativeSessionId?: string) {
         setImmediate(() =>
           child.stdout.write(`${JSON.stringify({ id: message.id, result: { thread: { id: threadId } } })}\n`),
         );
+      } else if (message.method === 'thread/fork') {
+        setImmediate(() =>
+          child.stdout.write(`${JSON.stringify({ id: message.id, result: { thread: { id: 'thread-forked' } } })}\n`),
+        );
       }
     }
   });
@@ -67,6 +71,7 @@ function createFixture(resumeNativeSessionId?: string) {
     { sessionId: 'session-1', agent: 'codex', cwd: '/tmp/work' },
     emit,
     resumeNativeSessionId,
+    forkNativeSessionId,
   );
 
   return {
@@ -96,6 +101,32 @@ describe('CodexSession resume', () => {
     );
     expect(fixture.outbound).not.toContainEqual(expect.objectContaining({ method: 'thread/start' }));
     expect(fixture.session.nativeSessionId).toBe('thread-existing');
+  });
+});
+
+describe('CodexSession fork', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uses thread/fork and exposes the distinct native thread before returning ready', async () => {
+    const fixture = createFixture(undefined, 'thread-source');
+    fixture.session.start();
+
+    await expect(fixture.session.waitUntilReady()).resolves.toBe('thread-forked');
+    expect(fixture.outbound).toContainEqual(
+      expect.objectContaining({
+        method: 'thread/fork',
+        params: expect.objectContaining({
+          threadId: 'thread-source',
+          cwd: '/tmp/work',
+          ephemeral: false,
+        }),
+      }),
+    );
+    expect(fixture.outbound).not.toContainEqual(expect.objectContaining({ method: 'thread/resume' }));
+    expect(fixture.outbound).not.toContainEqual(expect.objectContaining({ method: 'thread/start' }));
+    expect(fixture.session.nativeSessionId).toBe('thread-forked');
   });
 });
 

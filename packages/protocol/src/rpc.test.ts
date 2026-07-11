@@ -66,6 +66,31 @@ describe('runnerMethods contracts', () => {
       }),
     ).toThrow();
   });
+
+  it('validates full-history host session fork parameters', () => {
+    expect(
+      runnerMethods['session.fork'].params.parse({
+        sourceSessionId: 'source-1',
+        sessionId: 'fork-1',
+        agent: 'claude',
+        cwd: '/workspace',
+        nativeSessionId: 'native-source-1',
+      }),
+    ).toMatchObject({
+      sourceSessionId: 'source-1',
+      sessionId: 'fork-1',
+      nativeSessionId: 'native-source-1',
+    });
+    expect(() =>
+      runnerMethods['session.fork'].params.parse({
+        sourceSessionId: 'same-session',
+        sessionId: 'same-session',
+        agent: 'codex',
+        cwd: '/workspace',
+        nativeSessionId: 'thread-1',
+      }),
+    ).toThrow();
+  });
 });
 
 describe('serverMethods contracts', () => {
