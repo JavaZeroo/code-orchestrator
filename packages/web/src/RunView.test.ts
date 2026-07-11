@@ -2,9 +2,13 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  isRunRetryEligible,
   runArchiveMode,
   RunArchiveAction,
+  runRetryAction,
+  RunRetryAction,
   runRetestAction,
+  type RunRetryActionDependencies,
   type RunRetestActionDependencies,
 } from './RunView';
 
@@ -16,6 +20,20 @@ function dependencies(overrides: Partial<RunRetestActionDependencies> = {}) {
     refresh: vi.fn(),
     ...overrides,
   } satisfies RunRetestActionDependencies;
+}
+
+function retryDependencies(overrides: Partial<RunRetryActionDependencies> = {}) {
+  return {
+    request: vi.fn().mockResolvedValue({
+      ok: true,
+      run: { id: 'run-1', status: 'running', endedAt: null },
+      retriedNodeIds: ['deploy'],
+    }),
+    success: vi.fn(),
+    error: vi.fn(),
+    refresh: vi.fn(),
+    ...overrides,
+  } satisfies RunRetryActionDependencies;
 }
 
 describe('runRetestAction', () => {
@@ -63,5 +81,58 @@ describe('RunView archive action', () => {
     const markup = renderToStaticMarkup(createElement(RunArchiveAction, { mode: 'archive', updating: true, onChange: vi.fn() }));
     expect(markup).toContain('disabled=""');
     expect(markup).toContain('归档中…');
+  });
+});
+
+describe('RunView retry action', () => {
+  it('offers Retry only for an unarchived failed run', () => {
+    expect(isRunRetryEligible({ status: 'failed', archivedAt: null })).toBe(true);
+    expect(isRunRetryEligible({ status: 'failed', archivedAt: '2026-07-11T05:00:00Z' })).toBe(false);
+    expect(isRunRetryEligible({ status: 'running', archivedAt: null })).toBe(false);
+    expect(isRunRetryEligible({ status: 'done', archivedAt: null })).toBe(false);
+
+    const visible = renderToStaticMarkup(createElement(RunRetryAction, {
+      eligible: true,
+      retrying: false,
+      onRetry: vi.fn(),
+    }));
+    const hidden = renderToStaticMarkup(createElement(RunRetryAction, {
+      eligible: false,
+      retrying: false,
+      onRetry: vi.fn(),
+    }));
+    expect(visible).toContain('重试');
+    expect(hidden).toBe('');
+  });
+
+  it('disables Retry while the request is pending', () => {
+    const markup = renderToStaticMarkup(createElement(RunRetryAction, {
+      eligible: true,
+      retrying: true,
+      onRetry: vi.fn(),
+    }));
+    expect(markup).toContain('disabled=""');
+    expect(markup).toContain('重试中…');
+  });
+
+  it('reports retry failures without refreshing stale run state', async () => {
+    const failure = new Error('409: run is no longer eligible to retry');
+    const deps = retryDependencies({ request: vi.fn().mockRejectedValue(failure) });
+
+    await expect(runRetryAction('run-1', deps)).rejects.toBe(failure);
+    expect(deps.error).toHaveBeenCalledWith('运行重试失败：409: run is no longer eligible to retry');
+    expect(deps.success).not.toHaveBeenCalled();
+    expect(deps.refresh).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the existing run after retry succeeds', async () => {
+    const deps = retryDependencies();
+
+    const result = await runRetryAction('run-1', deps);
+
+    expect(deps.request).toHaveBeenCalledWith('run-1');
+    expect(deps.success).toHaveBeenCalledWith('运行已重新开始');
+    expect(deps.refresh).toHaveBeenCalledWith(result);
+    expect(deps.error).not.toHaveBeenCalled();
   });
 });

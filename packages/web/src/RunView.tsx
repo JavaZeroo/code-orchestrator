@@ -1,7 +1,7 @@
-import { Archive, ArchiveRestore, ArrowLeft, ExternalLink } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, ExternalLink, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, type ApprovalRow, type ForgeRefRow, type NodeStateRow, type RunRow, type WorkflowDefRow } from './api';
+import { api, type ApprovalRow, type ForgeRefRow, type NodeStateRow, type RunRetryResult, type RunRow, type WorkflowDefRow } from './api';
 import { FlowGraph } from './FlowGraph';
 import { RunTimeline } from './RunTimeline';
 import { Markdown } from './components/Markdown';
@@ -46,6 +46,51 @@ export async function runRetestAction(refId: string, deps: RunRetestActionDepend
   }
 }
 
+export interface RunRetryActionDependencies {
+  request(runId: string): Promise<RunRetryResult>;
+  success(message: string): void;
+  error(message: string): void;
+  refresh(result: RunRetryResult): void;
+}
+
+export function isRunRetryEligible(run: Pick<RunRow, 'status' | 'archivedAt'> | null): boolean {
+  return run?.status === 'failed' && run.archivedAt === null;
+}
+
+export async function runRetryAction(
+  runId: string,
+  deps: RunRetryActionDependencies,
+): Promise<RunRetryResult> {
+  try {
+    const result = await deps.request(runId);
+    deps.success('运行已重新开始');
+    deps.refresh(result);
+    return result;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    deps.error(`运行重试失败：${detail}`);
+    throw err;
+  }
+}
+
+export function RunRetryAction({
+  eligible,
+  retrying,
+  onRetry,
+}: {
+  eligible: boolean;
+  retrying: boolean;
+  onRetry: () => void;
+}) {
+  if (!eligible) return null;
+  return (
+    <Button variant="secondary" size="sm" disabled={retrying} onClick={onRetry}>
+      <RefreshCw size={12} className={retrying ? 'animate-spin' : undefined} />
+      {retrying ? '重试中…' : '重试'}
+    </Button>
+  );
+}
+
 export type RunArchiveMode = 'archive' | 'restore';
 
 export function runArchiveMode(run: Pick<RunRow, 'status' | 'archivedAt'> | null): RunArchiveMode | null {
@@ -75,6 +120,7 @@ export function RunArchiveAction({
 
 export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpenSession: (id: string) => void; onBack: () => void }) {
   const [mode, setMode] = useState<'thread' | 'graph'>('thread');
+  const [retrying, setRetrying] = useState(false);
   const [updatingArchive, setUpdatingArchive] = useState(false);
 
   // ---- 共享数据（graph 模式用）----
@@ -177,6 +223,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
   }, [def, interpTitle]);
   const gate = pending.find((a) => a.kind === 'gate' && a.runId === runId && a.nodeId === selected);
   const runMeta = RUN_META[effectiveRun?.status ?? ''] ?? { label: effectiveRun?.status ?? '', tone: 'neutral' as const };
+  const retryEligible = isRunRetryEligible(effectiveRun);
   const archiveMode = runArchiveMode(effectiveRun);
 
   // 共享的 decide 处理
@@ -205,6 +252,28 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
     error: toast.error,
     refresh: refreshThread,
   }), [refreshThread]);
+
+  const handleRetry = useCallback(() => {
+    if (!retryEligible || retrying) return;
+    setRetrying(true);
+    void runRetryAction(runId, {
+      request: api.retryRun,
+      success: toast.success,
+      error: toast.error,
+      refresh: ({ run: changed }) => {
+        const applyRetryState = (current: RunRow | null) => current
+          ? { ...current, status: changed.status, endedAt: changed.endedAt }
+          : null;
+        setRun(applyRetryState);
+        setThreadRun(applyRetryState);
+        invalidate('runs');
+        refreshThread();
+        refreshGraph();
+      },
+    })
+      .catch(() => {})
+      .finally(() => setRetrying(false));
+  }, [refreshGraph, refreshThread, retryEligible, retrying, runId]);
 
   const handleArchiveChange = useCallback(() => {
     if (!archiveMode) return;
@@ -251,6 +320,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
           </div>
           <StatusDot tone={runMeta.tone} live={runMeta.live} />
           <Badge tone={runMeta.tone}>{runMeta.label}</Badge>
+          <RunRetryAction eligible={retryEligible} retrying={retrying} onRetry={handleRetry} />
           <RunArchiveAction mode={archiveMode} updating={updatingArchive} onChange={handleArchiveChange} />
           {(effectiveRun?.status === 'running' || effectiveRun?.status === 'waiting_human') && (
             <Button

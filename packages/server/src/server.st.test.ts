@@ -753,6 +753,153 @@ describeSt('server ST: API + runner websocket', () => {
     expect(emptyArchive.json()).toEqual({ runs: [] });
   });
 
+  it('atomically retries failed workflow nodes in place and reschedules the engine once', async () => {
+    const runner = await FakeRunner.connect(baseUrl, {
+      'session.spawn': () => ({ ok: true, nativeSessionId: 'native-retry-1' }),
+    });
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: {
+        id: 'm-run-retry',
+        name: 'Run Retry Runner',
+        labels: ['dev'],
+        resources: [],
+        runnerVersion: 'st',
+        startedAt: Date.now(),
+      },
+    });
+
+    const db = getDb();
+    const defId = 'workflow-run-retry-def';
+    const runId = 'workflow-run-retry-st';
+    const endedAt = new Date('2026-07-11T06:00:00Z');
+    const graph = {
+      name: 'Retry release pipeline',
+      nodes: [
+        { id: 'prepare', type: 'agent', prompt: 'Prepare the release', machine: { labels: ['dev'] }, cwd: '/tmp/run-retry' },
+        { id: 'deploy', type: 'agent', prompt: 'Deploy {{outputs.prepare}}', machine: { labels: ['dev'] }, cwd: '/tmp/run-retry' },
+        { id: 'announce', type: 'agent', prompt: 'Announce the release', machine: { labels: ['dev'] }, cwd: '/tmp/run-retry' },
+      ],
+      edges: [['prepare', 'deploy']],
+    };
+    await db.insert(schema.workflowDefs).values({ id: defId, name: graph.name, graph });
+    await db.insert(schema.workflowRuns).values({
+      id: runId,
+      defId,
+      status: 'failed',
+      context: {
+        vars: { release: '1.0' },
+        outputs: { prepare: 'artifact ready', deploy: 'stale failed output', announce: 'intentionally skipped' },
+      },
+      endedAt,
+    });
+    await db.insert(schema.sessions).values([
+      {
+        id: 'run-retry-prepare-session',
+        machineId: 'm-run-retry',
+        agent: 'claude',
+        cwd: '/tmp/run-retry',
+        state: 'dead',
+        runId,
+        nodeId: 'prepare',
+      },
+      {
+        id: 'run-retry-failed-session',
+        machineId: 'm-run-retry',
+        agent: 'claude',
+        cwd: '/tmp/run-retry',
+        state: 'dead',
+        runId,
+        nodeId: 'deploy',
+      },
+    ]);
+    await db.insert(schema.nodeStates).values([
+      {
+        runId,
+        nodeId: 'prepare',
+        status: 'done',
+        sessionId: 'run-retry-prepare-session',
+        output: { summary: 'artifact ready' },
+        updatedAt: new Date('2026-07-11T05:55:00Z'),
+      },
+      {
+        runId,
+        nodeId: 'deploy',
+        status: 'failed',
+        sessionId: 'run-retry-failed-session',
+        output: { error: 'registry unavailable', summary: 'stale failed output' },
+        updatedAt: new Date('2026-07-11T06:00:00Z'),
+      },
+      {
+        runId,
+        nodeId: 'announce',
+        status: 'skipped',
+        output: { reason: 'not required for this release' },
+        updatedAt: new Date('2026-07-11T05:56:00Z'),
+      },
+    ]);
+    await db.insert(schema.events).values({
+      runId,
+      type: 'run.finished',
+      payload: { status: 'failed', marker: 'retained timeline' },
+    });
+    const retainedBefore = (await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, runId)))
+      .filter((node) => node.nodeId !== 'deploy')
+      .sort((a, b) => a.nodeId.localeCompare(b.nodeId));
+
+    const responses = await Promise.all([
+      app!.inject({ method: 'POST', url: `/api/runs/${runId}/retry` }),
+      app!.inject({ method: 'POST', url: `/api/runs/${runId}/retry` }),
+    ]);
+    expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+    const accepted = responses.find((response) => response.statusCode === 200)!;
+    expect(accepted.json()).toEqual({
+      ok: true,
+      run: { id: runId, status: 'running', endedAt: null },
+      retriedNodeIds: ['deploy'],
+    });
+
+    await vi.waitFor(async () => {
+      const [retried] = await db
+        .select()
+        .from(schema.nodeStates)
+        .where(eq(schema.nodeStates.nodeId, 'deploy'));
+      expect(retried).toMatchObject({ status: 'running', output: null });
+      expect(retried?.sessionId).not.toBe('run-retry-failed-session');
+      expect(runner.calls.filter((call) => call.method === 'session.spawn')).toHaveLength(1);
+    });
+
+    const [persistedRun] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+    expect(persistedRun).toMatchObject({
+      status: 'running',
+      endedAt: null,
+      context: {
+        vars: { release: '1.0' },
+        outputs: { prepare: 'artifact ready', announce: 'intentionally skipped' },
+      },
+    });
+    const retainedAfter = (await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, runId)))
+      .filter((node) => node.nodeId !== 'deploy')
+      .sort((a, b) => a.nodeId.localeCompare(b.nodeId));
+    expect(retainedAfter).toEqual(retainedBefore);
+
+    const retryEvents = (await db.select().from(schema.events).where(eq(schema.events.runId, runId)))
+      .filter((event) => event.type === 'run.retried');
+    expect(retryEvents).toEqual([
+      expect.objectContaining({
+        runId,
+        payload: { by: 'ui', retriedNodeIds: ['deploy'] },
+      }),
+    ]);
+    const thread = await app!.inject({ method: 'GET', url: `/api/runs/${runId}/thread` });
+    expect(thread.json()).toMatchObject({
+      events: expect.arrayContaining([
+        expect.objectContaining({ type: 'run.finished', payload: { status: 'failed', marker: 'retained timeline' } }),
+        expect.objectContaining({ type: 'run.retried', payload: { by: 'ui', retriedNodeIds: ['deploy'] } }),
+      ]),
+    });
+  });
+
   it('binds allocated NVIDIA GPUs to a container while keeping the runner exclusively reserved', async () => {
     const runner = await FakeRunner.connect(baseUrl, {
       'workspace.provision': () => ({

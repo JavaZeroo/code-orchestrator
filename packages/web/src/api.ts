@@ -108,6 +108,12 @@ export interface RunRow {
   archivedAt: string | null;
 }
 
+export interface RunRetryResult {
+  ok: true;
+  run: Pick<RunRow, 'id' | 'status' | 'endedAt'>;
+  retriedNodeIds: string[];
+}
+
 export interface NodeStateRow {
   runId: string;
   nodeId: string;
@@ -298,6 +304,7 @@ export const api = {
   run: (runId: string) =>
     fetch(`/api/runs/${runId}`).then((r) => j<{ run: RunRow; def: WorkflowDefRow; nodes: NodeStateRow[] }>(r)),
   cancelRun: (runId: string) => post(`/api/runs/${runId}/cancel`, {}).then((r) => j<{ ok: boolean }>(r)),
+  retryRun: (runId: string) => post(`/api/runs/${runId}/retry`, {}).then((r) => j<RunRetryResult>(r)),
   archiveRun: (runId: string) =>
     post(`/api/runs/${runId}/archive`, {}).then((r) =>
       j<{ ok: true; run: Pick<RunRow, 'id' | 'archivedAt'> }>(r)),

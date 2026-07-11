@@ -129,6 +129,14 @@ export function scheduleTick(runId: string): void {
   tickChains.set(runId, next);
 }
 
+/** 用户重试已在 DB 原子重置失败节点；清理瞬时重试计数并接回同一 run 的串行 tick 链。 */
+export function scheduleRetriedRun(runId: string, retriedNodeIds: string[]): void {
+  for (const nodeId of retriedNodeIds) {
+    agentAttempts.delete(`${runId}:${nodeId}`);
+  }
+  scheduleTick(runId);
+}
+
 async function tick(runId: string): Promise<void> {
   const db = getDb();
   const runRows = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId)).limit(1);

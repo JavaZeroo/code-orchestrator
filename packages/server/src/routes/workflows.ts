@@ -8,6 +8,7 @@ import { publish } from '../events';
 import { callRunner } from '../ws/runnerHub';
 import { EngineError, startRun } from '../engine/engine';
 import { archiveWorkflowRun, restoreWorkflowRun, WorkflowRunArchiveError } from '../services/workflowRunArchive';
+import { retryWorkflowRun, WorkflowRunRetryError } from '../services/workflowRunRetry';
 import { reviseWorkflowDefinition, WorkflowRevisionError } from '../services/workflowRevision';
 
 const createBodySchema = z.object({
@@ -119,6 +120,23 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       return { runId };
     } catch (err) {
       if (err instanceof EngineError) {
+        void reply.code(err.statusCode);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/api/runs/:id/retry', async (req, reply) => {
+    try {
+      const result = await retryWorkflowRun(req.params.id, req.user?.email ?? 'ui');
+      return {
+        ok: true,
+        run: { id: result.run.id, status: result.run.status, endedAt: result.run.endedAt },
+        retriedNodeIds: result.retriedNodeIds,
+      };
+    } catch (err) {
+      if (err instanceof WorkflowRunRetryError) {
         void reply.code(err.statusCode);
         return { error: err.message };
       }
