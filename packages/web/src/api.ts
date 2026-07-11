@@ -266,6 +266,12 @@ export const api = {
   machines: () => fetch('/api/machines').then((r) => j<{ machines: MachineRow[] }>(r)).then((d) => d.machines),
   allMachines: () => fetch('/api/machines/all').then((r) => j<{ machines: AllMachineRow[] }>(r)).then((d) => d.machines),
   sessions: () => fetch('/api/sessions').then((r) => j<{ sessions: SessionRow[] }>(r)).then((d) => d.sessions),
+  renameSession: (sessionId: string, title: string) =>
+    fetch(`/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title }),
+    }).then((r) => j<{ ok: true; session: Pick<SessionRow, 'id' | 'title'> }>(r)),
   events: (sessionId: string, since?: number) =>
     fetch(`/api/sessions/${sessionId}/events${since ? `?since=${since}` : ''}`)
       .then((r) => j<{ events: EventRow[] }>(r)).then((d) => d.events),

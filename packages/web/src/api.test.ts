@@ -55,6 +55,20 @@ describe('api client', () => {
     });
   });
 
+  it('renames a session through its existing resource', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, session: { id: 's1', title: 'Release follow-up' } }));
+
+    await expect(api.renameSession('s1', 'Release follow-up')).resolves.toEqual({
+      ok: true,
+      session: { id: 's1', title: 'Release follow-up' },
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/s1', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Release follow-up' }),
+    });
+  });
+
   it('persists machine scheduling pause through the machine API', async () => {
     const fetch = mockFetch(Response.json({ ok: true }));
 
