@@ -43,6 +43,7 @@ const spawnBodySchema = z.object({
 });
 
 const sendBodySchema = z.object({ text: z.string().min(1), meta: MessageMetaSchema.optional() });
+const renameBodySchema = z.object({ title: z.string().trim().min(1).max(120) }).strict();
 const decideBodySchema = z.object({ decision: approvalDecisionSchema, decidedBy: z.string().optional() });
 
 function requireDb() {
@@ -145,6 +146,20 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     const db = requireDb();
     const rows = await db.select().from(schema.sessions).orderBy(desc(schema.sessions.createdAt)).limit(100);
     return { sessions: rows };
+  });
+
+  app.patch<{ Params: { id: string } }>('/api/sessions/:id', async (req) => {
+    const db = requireDb();
+    const body = renameBodySchema.parse(req.body);
+    const [session] = await db
+      .update(schema.sessions)
+      .set({ title: body.title })
+      .where(eq(schema.sessions.id, req.params.id))
+      .returning({ id: schema.sessions.id, title: schema.sessions.title });
+    if (!session) {
+      throw new HttpError(404, `session not found: ${req.params.id}`);
+    }
+    return { ok: true, session };
   });
 
   app.post<{ Params: { id: string } }>('/api/sessions/:id/resume', async (req) => {

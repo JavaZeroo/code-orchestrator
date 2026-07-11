@@ -1,4 +1,4 @@
-import { ArrowDown, Code2, GitCompare, RotateCcw, Send, Square, X } from 'lucide-react';
+import { ArrowDown, Check, Code2, GitCompare, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type ApprovalRequest, type SessionRow, type SessionUsage, type UserInputAnswers } from './api';
@@ -8,7 +8,7 @@ import { Button } from './components/ui/button';
 import { Badge, StatusDot, Textarea, type BadgeTone } from './components/ui/primitives';
 import { useSessionEvents } from './useEvents';
 import { isCodexUserInputRequest, Timeline, type ApprovalItem } from './Timeline';
-import { useMachines } from './lib/queries';
+import { invalidate, useMachines } from './lib/queries';
 import { fmtCost, fmtTokens, shortModel } from './lib/utils';
 
 const STATE_META: Record<string, { label: string; tone: BadgeTone; live?: boolean }> = {
@@ -19,6 +19,79 @@ const STATE_META: Record<string, { label: string; tone: BadgeTone; live?: boolea
   waiting_approval: { label: '等待审批', tone: 'human' },
   dead: { label: '已结束', tone: 'neutral' },
 };
+
+export const SESSION_TITLE_MAX_LENGTH = 120;
+
+export function normalizeSessionTitle(value: string): string | null {
+  const title = value.trim();
+  return title.length > 0 && title.length <= SESSION_TITLE_MAX_LENGTH ? title : null;
+}
+
+export function SessionTitleEditor({
+  title,
+  draft,
+  editing,
+  saving,
+  onEdit,
+  onDraftChange,
+  onCancel,
+  onSave,
+}: {
+  title: string;
+  draft: string;
+  editing: boolean;
+  saving: boolean;
+  onEdit: () => void;
+  onDraftChange: (value: string) => void;
+  onCancel: () => void;
+  onSave: (title: string) => void;
+}) {
+  const normalized = normalizeSessionTitle(draft);
+  if (!editing) {
+    return (
+      <div className="group flex min-w-0 items-center gap-1">
+        <div className="truncate text-[13px] font-medium text-ink" title={title}>{title}</div>
+        <button
+          type="button"
+          aria-label="重命名会话"
+          title="重命名会话"
+          className="shrink-0 rounded p-1 text-faint opacity-0 transition-opacity hover:bg-panel-2 hover:text-ink group-hover:opacity-100 focus:opacity-100"
+          onClick={onEdit}
+        >
+          <Pencil size={12} />
+        </button>
+      </div>
+    );
+  }
+  return (
+    <form
+      className="flex min-w-0 items-center gap-1"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (normalized) onSave(normalized);
+      }}
+    >
+      <input
+        autoFocus
+        aria-label="会话标题"
+        value={draft}
+        maxLength={SESSION_TITLE_MAX_LENGTH}
+        disabled={saving}
+        className="h-7 min-w-48 rounded-md border border-accent bg-bg-2 px-2 text-[13px] text-ink outline-none"
+        onChange={(event) => onDraftChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') onCancel();
+        }}
+      />
+      <Button type="submit" variant="ghost" size="icon-sm" aria-label="保存会话标题" title="保存" disabled={!normalized || saving}>
+        <Check size={13} />
+      </Button>
+      <Button type="button" variant="ghost" size="icon-sm" aria-label="取消重命名" title="取消" disabled={saving} onClick={onCancel}>
+        <X size={13} />
+      </Button>
+    </form>
+  );
+}
 
 function CostBadge({ usage }: { usage: SessionUsage }) {
   return (
@@ -87,6 +160,11 @@ export function SessionView({ session }: { session: SessionRow }) {
   const events = useSessionEvents(session.id);
   const { data: machines = [] } = useMachines();
   const [text, setText] = useState('');
+  const fallbackTitle = session.cwd.split('/').pop() || session.cwd;
+  const [displayTitle, setDisplayTitle] = useState(session.title ?? fallbackTitle);
+  const [titleDraft, setTitleDraft] = useState(displayTitle);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [savingTitle, setSavingTitle] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
   const [resuming, setResuming] = useState(false);
   const resumeAfterSeqRef = useRef(0);
@@ -96,6 +174,12 @@ export function SessionView({ session }: { session: SessionRow }) {
   const [showJump, setShowJump] = useState(false);
   const NEAR_BOTTOM = 80;
   const machine = machines.find((item) => item.id === session.machineId) ?? null;
+
+  useEffect(() => {
+    const title = session.title ?? fallbackTitle;
+    setDisplayTitle(title);
+    setTitleDraft(title);
+  }, [fallbackTitle, session.title]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -194,6 +278,20 @@ export function SessionView({ session }: { session: SessionRow }) {
       });
   };
 
+  const doRename = (title: string) => {
+    setSavingTitle(true);
+    api.renameSession(session.id, title)
+      .then(() => {
+        setDisplayTitle(title);
+        setTitleDraft(title);
+        setEditingTitle(false);
+        invalidate('sessions');
+        toast('会话标题已更新');
+      })
+      .catch((error) => toast.error(`重命名失败：${error}`))
+      .finally(() => setSavingTitle(false));
+  };
+
   const resumable = isSessionResumable(session, state, machine?.id === session.machineId);
 
   return (
@@ -202,9 +300,24 @@ export function SessionView({ session }: { session: SessionRow }) {
         <div className="flex min-w-0 items-center gap-2.5">
           <StatusDot tone={meta.tone} live={meta.live} />
           <div className="min-w-0">
-            <div className="truncate text-[13px] font-medium text-ink">{session.cwd}</div>
-            <div className="mono-nums truncate text-[11px] text-faint">
-              {session.machineId} · <span className="text-accent/70" title={shortModel(session.model).full}>{shortModel(session.model).display}</span> · {session.id.slice(0, 8)}
+            <SessionTitleEditor
+              title={displayTitle}
+              draft={titleDraft}
+              editing={editingTitle}
+              saving={savingTitle}
+              onEdit={() => {
+                setTitleDraft(displayTitle);
+                setEditingTitle(true);
+              }}
+              onDraftChange={setTitleDraft}
+              onCancel={() => {
+                setTitleDraft(displayTitle);
+                setEditingTitle(false);
+              }}
+              onSave={doRename}
+            />
+            <div className="mono-nums truncate text-[11px] text-faint" title={session.cwd}>
+              {session.cwd} · {session.machineId} · <span className="text-accent/70" title={shortModel(session.model).full}>{shortModel(session.model).display}</span> · {session.id.slice(0, 8)}
             </div>
           </div>
         </div>

@@ -488,6 +488,60 @@ describeSt('server ST: API + runner websocket', () => {
     );
   });
 
+  it('persists trimmed session titles and rejects invalid or unknown renames', async () => {
+    const db = getDb();
+    await db.insert(schema.machines).values({ id: 'm-rename', name: 'Rename Runner' });
+    await db.insert(schema.sessions).values({
+      id: 'session-rename-st',
+      machineId: 'm-rename',
+      agent: 'claude',
+      cwd: '/tmp/rename-work',
+      title: 'Original title',
+      state: 'idle',
+    });
+
+    const renamed = await app!.inject({
+      method: 'PATCH',
+      url: '/api/sessions/session-rename-st',
+      payload: { title: '  Incident follow-up  ' },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toEqual({
+      ok: true,
+      session: { id: 'session-rename-st', title: 'Incident follow-up' },
+    });
+
+    const [persisted] = await db
+      .select({ title: schema.sessions.title })
+      .from(schema.sessions)
+      .where(eq(schema.sessions.id, 'session-rename-st'));
+    expect(persisted?.title).toBe('Incident follow-up');
+    const listed = await app!.inject({ method: 'GET', url: '/api/sessions' });
+    expect(listed.json()).toMatchObject({
+      sessions: [{ id: 'session-rename-st', title: 'Incident follow-up' }],
+    });
+
+    const invalid = await app!.inject({
+      method: 'PATCH',
+      url: '/api/sessions/session-rename-st',
+      payload: { title: '   ' },
+    });
+    expect(invalid.statusCode).toBe(400);
+    const [unchanged] = await db
+      .select({ title: schema.sessions.title })
+      .from(schema.sessions)
+      .where(eq(schema.sessions.id, 'session-rename-st'));
+    expect(unchanged?.title).toBe('Incident follow-up');
+
+    const missing = await app!.inject({
+      method: 'PATCH',
+      url: '/api/sessions/missing-session',
+      payload: { title: 'Still valid' },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({ error: 'session not found: missing-session' });
+  });
+
   it('binds allocated NVIDIA GPUs to a container while keeping the runner exclusively reserved', async () => {
     const runner = await FakeRunner.connect(baseUrl, {
       'workspace.provision': () => ({

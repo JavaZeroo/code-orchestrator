@@ -1,7 +1,13 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionRow } from './api';
-import { isSessionResumable, ResumeAction } from './SessionView';
+import {
+  isSessionResumable,
+  normalizeSessionTitle,
+  ResumeAction,
+  SESSION_TITLE_MAX_LENGTH,
+  SessionTitleEditor,
+} from './SessionView';
 
 const session: SessionRow = {
   id: 'session-1',
@@ -39,5 +45,47 @@ describe('SessionView resume action', () => {
     const markup = renderToStaticMarkup(<ResumeAction visible resuming onResume={vi.fn()} />);
     expect(markup).toContain('disabled=""');
     expect(markup).toContain('恢复中…');
+  });
+});
+
+describe('SessionView title editor', () => {
+  const handlers = {
+    onEdit: vi.fn(),
+    onDraftChange: vi.fn(),
+    onCancel: vi.fn(),
+    onSave: vi.fn(),
+  };
+
+  it('shows the persisted title with an inline rename action', () => {
+    const markup = renderToStaticMarkup(
+      <SessionTitleEditor
+        title="Release follow-up"
+        draft="Release follow-up"
+        editing={false}
+        saving={false}
+        {...handlers}
+      />,
+    );
+
+    expect(markup).toContain('Release follow-up');
+    expect(markup).toContain('aria-label="重命名会话"');
+  });
+
+  it('renders a bounded title input and rejects empty or oversized values', () => {
+    const markup = renderToStaticMarkup(
+      <SessionTitleEditor
+        title="Release follow-up"
+        draft="  Incident review  "
+        editing
+        saving={false}
+        {...handlers}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="会话标题"');
+    expect(markup).toContain(`maxLength="${SESSION_TITLE_MAX_LENGTH}"`);
+    expect(normalizeSessionTitle('  Incident review  ')).toBe('Incident review');
+    expect(normalizeSessionTitle('   ')).toBeNull();
+    expect(normalizeSessionTitle('x'.repeat(SESSION_TITLE_MAX_LENGTH + 1))).toBeNull();
   });
 });
