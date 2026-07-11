@@ -542,6 +542,99 @@ describeSt('server ST: API + runner websocket', () => {
     expect(missing.json()).toEqual({ error: 'session not found: missing-session' });
   });
 
+  it('archives and restores a finished manual session without changing its transcript', async () => {
+    const db = getDb();
+    await db.insert(schema.machines).values({ id: 'm-archive', name: 'Archive Runner' });
+    await db.insert(schema.sessions).values([
+      {
+        id: 'session-archive-st',
+        machineId: 'm-archive',
+        agent: 'claude',
+        cwd: '/tmp/archive-work',
+        title: 'Finished conversation',
+        state: 'dead',
+      },
+      {
+        id: 'session-archive-active',
+        machineId: 'm-archive',
+        agent: 'claude',
+        cwd: '/tmp/active-work',
+        state: 'idle',
+      },
+      {
+        id: 'session-archive-workflow',
+        machineId: 'm-archive',
+        agent: 'claude',
+        cwd: '/tmp/workflow-work',
+        state: 'dead',
+        runId: 'run-archive-owner',
+      },
+    ]);
+    await db.insert(schema.events).values([
+      { sessionId: 'session-archive-st', type: 'session.created', payload: { marker: 'created' } },
+      { sessionId: 'session-archive-st', type: 'session.message', payload: { marker: 'retained transcript' } },
+    ]);
+
+    const archived = await app!.inject({ method: 'POST', url: '/api/sessions/session-archive-st/archive' });
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json()).toMatchObject({
+      ok: true,
+      session: { id: 'session-archive-st', archivedAt: expect.any(String) },
+    });
+
+    const [persisted] = await db
+      .select({ archivedAt: schema.sessions.archivedAt })
+      .from(schema.sessions)
+      .where(eq(schema.sessions.id, 'session-archive-st'));
+    expect(persisted?.archivedAt).toBeInstanceOf(Date);
+
+    const defaultList = await app!.inject({ method: 'GET', url: '/api/sessions' });
+    const defaultSessions = defaultList.json<{ sessions: Array<{ id: string }> }>().sessions;
+    expect(defaultSessions.map((session) => session.id)).not.toContain('session-archive-st');
+
+    const archivedList = await app!.inject({ method: 'GET', url: '/api/sessions?archived=true' });
+    expect(archivedList.statusCode).toBe(200);
+    expect(archivedList.json()).toMatchObject({
+      sessions: [{ id: 'session-archive-st', state: 'dead', archivedAt: expect.any(String) }],
+    });
+
+    const transcriptWhileArchived = await app!.inject({
+      method: 'GET',
+      url: '/api/sessions/session-archive-st/events',
+    });
+    expect(
+      transcriptWhileArchived
+        .json<{ events: Array<{ type: string; payload: unknown }> }>()
+        .events.map((event) => ({ type: event.type, payload: event.payload })),
+    ).toEqual([
+      { type: 'session.created', payload: { marker: 'created' } },
+      { type: 'session.message', payload: { marker: 'retained transcript' } },
+    ]);
+
+    const active = await app!.inject({ method: 'POST', url: '/api/sessions/session-archive-active/archive' });
+    const workflow = await app!.inject({ method: 'POST', url: '/api/sessions/session-archive-workflow/archive' });
+    expect(active.statusCode).toBe(409);
+    expect(active.json()).toMatchObject({ error: expect.stringContaining('still active') });
+    expect(workflow.statusCode).toBe(409);
+    expect(workflow.json()).toMatchObject({ error: expect.stringContaining('workflow') });
+
+    const restored = await app!.inject({ method: 'POST', url: '/api/sessions/session-archive-st/restore' });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json()).toEqual({
+      ok: true,
+      session: { id: 'session-archive-st', archivedAt: null },
+    });
+
+    const historyList = await app!.inject({ method: 'GET', url: '/api/sessions' });
+    expect(historyList.json()).toMatchObject({
+      sessions: expect.arrayContaining([
+        expect.objectContaining({ id: 'session-archive-st', state: 'dead', archivedAt: null }),
+      ]),
+    });
+    const emptyArchive = await app!.inject({ method: 'GET', url: '/api/sessions?archived=true' });
+    expect(emptyArchive.json()).toEqual({ sessions: [] });
+  });
+
   it('binds allocated NVIDIA GPUs to a container while keeping the runner exclusively reserved', async () => {
     const runner = await FakeRunner.connect(baseUrl, {
       'workspace.provision': () => ({

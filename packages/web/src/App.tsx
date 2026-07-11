@@ -1,17 +1,19 @@
-import { FolderGit2, type LucideIcon, LogOut, MessageSquareText, Settings } from 'lucide-react';
+import { Archive, ArchiveRestore, FolderGit2, type LucideIcon, LogOut, MessageSquareText, Settings } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { toast } from 'sonner';
+import { api } from './api';
 import { authApi, LoginPage, useMe, type Me } from './Auth';
 import { CreateProjectDialog } from './CreateProjectDialog';
 import { NewSession } from './NewSession';
 import { NotificationBell } from './Notifications';
 import { RunView } from './RunView';
 import { SettingsPage, type SettingsSection } from './Settings';
-import { SessionView } from './SessionView';
+import { sessionArchiveMode, SessionView } from './SessionView';
 import { Button } from './components/ui/button';
 import { Spinner, StatusDot } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { isWaitingRun, isWaitingSession, waitingCountByProject, type AttentionItem } from './lib/attention';
-import { invalidate, useProjects, useRuns, useSessions } from './lib/queries';
+import { invalidate, useArchivedSessions, useProjects, useRuns, useSessions } from './lib/queries';
 import { ProjectProvider, useCurrentProject, useProjectScope } from './lib/project';
 import { cn, relTime, fmtCost, shortModel } from './lib/utils';
 
@@ -239,6 +241,7 @@ function HomeScreen({
   setSelected: (v: Selected) => void;
 }) {
   const { data: allSessions = [] } = useSessions();
+  const { data: allArchivedSessions = [] } = useArchivedSessions();
   const { data: runs = [] } = useRuns();
   const { projectId, inScope } = useProjectScope();
 
@@ -248,6 +251,10 @@ function HomeScreen({
   const sessions = useMemo(
     () => allSessions.filter((s) => inScope(s.projectId ?? (s.runId ? runMap.get(s.runId)?.projectId ?? null : null))),
     [allSessions, inScope, runMap],
+  );
+  const archivedSessions = useMemo(
+    () => allArchivedSessions.filter((s) => inScope(s.projectId)),
+    [allArchivedSessions, inScope],
   );
   const scopedRuns = useMemo(() => runs.filter((r) => inScope(r.projectId)), [runs, inScope]);
 
@@ -263,6 +270,8 @@ function HomeScreen({
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'session' | 'run'>('all');
   const [showHistory, setShowHistory] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [updatingSessionArchive, setUpdatingSessionArchive] = useState<string | null>(null);
 
   const q = search.trim().toLowerCase();
   const visible = useMemo(() => allThreads.filter((t) => {
@@ -276,6 +285,13 @@ function HomeScreen({
     const r = t.run;
     return [r.defName, r.defId, r.id].some((v) => v?.toLowerCase().includes(q));
   }), [allThreads, filter, q]);
+  const visibleArchived = useMemo(() => {
+    if (filter === 'run') return [];
+    return archivedSessions.filter((session) => {
+      if (!q) return true;
+      return [session.title, session.cwd, session.model, session.id].some((value) => value?.toLowerCase().includes(q));
+    });
+  }, [archivedSessions, filter, q]);
 
   // 分区
   const waiting = useMemo(() => visible.filter(isThreadWaiting), [visible]);
@@ -300,26 +316,56 @@ function HomeScreen({
     return t.run.status === 'failed' || t.run.status === 'cancelled';
   });
 
-  const renderSessionRow = (s: import('./api').SessionRow) => (
-    <div
-      key={s.id}
-      className={cn('flex items-center gap-2 rounded-lg pr-1', selectedIsSession(s.id) && 'bg-panel-2 shadow-[var(--shadow-panel)]')}
-    >
-      <button
-        className="flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left transition-colors hover:bg-panel-2"
-        onClick={() => setSelected({ session: s.id })}
+  const changeSessionArchive = (session: import('./api').SessionRow) => {
+    const mode = sessionArchiveMode(session, session.state);
+    if (!mode) return;
+    setUpdatingSessionArchive(session.id);
+    const request = mode === 'archive' ? api.archiveSession(session.id) : api.restoreSession(session.id);
+    request
+      .then(() => {
+        invalidate('sessions');
+        invalidate('archived-sessions');
+        toast(mode === 'archive' ? '会话已归档' : '会话已移回历史');
+      })
+      .catch((error) => toast.error(`${mode === 'archive' ? '归档' : '恢复'}失败：${error}`))
+      .finally(() => setUpdatingSessionArchive(null));
+  };
+
+  const renderSessionRow = (s: import('./api').SessionRow) => {
+    const archiveMode = sessionArchiveMode(s, s.state);
+    return (
+      <div
+        key={s.id}
+        className={cn('flex items-center gap-2 rounded-lg pr-1', selectedIsSession(s.id) && 'bg-panel-2 shadow-[var(--shadow-panel)]')}
       >
-        <StatusDot tone={STATE_DOT[s.state] ?? 'neutral'} live={s.state === 'thinking' || s.state === 'starting'} />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-medium text-ink-2">{s.title ?? (s.cwd.split('/').pop() || s.cwd)}</span>
-          <span className="mono-nums block truncate text-[10px] text-faint" title={shortModel(s.model).full}>
-            {shortModel(s.model).display} · {relTime(s.createdAt)}{s.usage ? ` · ${fmtCost(s.usage.costUsd)}` : ''}
+        <button
+          className="flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left transition-colors hover:bg-panel-2"
+          onClick={() => setSelected({ session: s.id })}
+        >
+          <StatusDot tone={STATE_DOT[s.state] ?? 'neutral'} live={s.state === 'thinking' || s.state === 'starting'} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-medium text-ink-2">{s.title ?? (s.cwd.split('/').pop() || s.cwd)}</span>
+            <span className="mono-nums block truncate text-[10px] text-faint" title={shortModel(s.model).full}>
+              {shortModel(s.model).display} · {relTime(s.createdAt)}{s.usage ? ` · ${fmtCost(s.usage.costUsd)}` : ''}
+            </span>
           </span>
-        </span>
-      </button>
-      {isWaitingSession(s) && <span className="mr-2 size-2 rounded-full bg-danger" />}
-    </div>
-  );
+        </button>
+        {isWaitingSession(s) && <span className="mr-2 size-2 rounded-full bg-danger" />}
+        {archiveMode && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            disabled={updatingSessionArchive === s.id}
+            aria-label={archiveMode === 'archive' ? '归档会话' : '移出归档'}
+            title={archiveMode === 'archive' ? '归档会话' : '移出归档'}
+            onClick={() => changeSessionArchive(s)}
+          >
+            {archiveMode === 'archive' ? <Archive size={13} /> : <ArchiveRestore size={13} />}
+          </Button>
+        )}
+      </div>
+    );
+  };
 
   const renderRunRow = (r: import('./api').RunRow) => (
     <div
@@ -358,7 +404,7 @@ function HomeScreen({
   const renderRight = () => {
     if (selected === 'new') return <NewSession onCreated={(id) => setSelected({ session: id })} onRunStarted={(runId) => setSelected({ run: runId })} />;
     if (typeof selected === 'object' && 'session' in selected) {
-      const s = allSessions.find((s) => s.id === selected.session);
+      const s = [...allSessions, ...allArchivedSessions].find((session) => session.id === selected.session);
       if (!s) return <div className="p-6 text-sm text-dim">会话未找到</div>;
       return <SessionView key={s.id} session={s} onForked={(id) => setSelected({ session: id })} />;
     }
@@ -440,7 +486,19 @@ function HomeScreen({
             </>
           )}
 
-          {visible.length === 0 && <p className="px-2 py-6 text-center text-xs text-faint">还没有线程</p>}
+          {visibleArchived.length > 0 && (
+            <>
+              <button
+                className="flex items-center gap-1.5 px-2 py-1.5 text-left text-[10px] font-semibold tracking-wide text-faint uppercase hover:text-ink-2"
+                onClick={() => setShowArchived(!showArchived)}
+              >
+                已归档 {visibleArchived.length} 条 {showArchived ? '▾' : '▸'}
+              </button>
+              {showArchived && visibleArchived.map(renderSessionRow)}
+            </>
+          )}
+
+          {visible.length === 0 && visibleArchived.length === 0 && <p className="px-2 py-6 text-center text-xs text-faint">还没有线程</p>}
         </div>
       </aside>
 

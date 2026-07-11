@@ -4,7 +4,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
-import { and, asc, desc, eq, gt } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNotNull, isNull } from 'drizzle-orm';
 import * as z from 'zod';
 import { approvalDecisionSchema, MessageMetaSchema, sessionAgentSchema } from '@co/protocol';
 import { getDb, hasDb, schema } from '../db/index';
@@ -12,6 +12,7 @@ import { decideGate } from '../engine/engine';
 import { publish } from '../events';
 import { forkSession, ForkError } from '../services/fork';
 import { resumeSession, ResumeError } from '../services/resume';
+import { archiveSession, restoreSession, SessionArchiveError } from '../services/sessionArchive';
 import { spawnSession, SpawnError } from '../services/spawn';
 import { ContainerSpawnQueued, spawnContainerSession } from '../services/spawnContainer';
 import { resolveAndSpawn } from '../services/spawnAuto';
@@ -45,6 +46,7 @@ const spawnBodySchema = z.object({
 
 const sendBodySchema = z.object({ text: z.string().min(1), meta: MessageMetaSchema.optional() });
 const renameBodySchema = z.object({ title: z.string().trim().min(1).max(120) }).strict();
+const listSessionsQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
 const decideBodySchema = z.object({ decision: approvalDecisionSchema, decidedBy: z.string().optional() });
 
 function requireDb() {
@@ -66,7 +68,13 @@ async function findSession(sessionId: string) {
 
 export async function registerSessionRoutes(app: FastifyInstance): Promise<void> {
   app.setErrorHandler((err, _req, reply) => {
-    if (err instanceof HttpError || err instanceof SpawnError || err instanceof ResumeError || err instanceof ForkError) {
+    if (
+      err instanceof HttpError ||
+      err instanceof SpawnError ||
+      err instanceof ResumeError ||
+      err instanceof ForkError ||
+      err instanceof SessionArchiveError
+    ) {
       void reply.code(err.statusCode).send({ error: err.message });
       return;
     }
@@ -143,9 +151,15 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     }
   });
 
-  app.get('/api/sessions', async () => {
+  app.get<{ Querystring: { archived?: string } }>('/api/sessions', async (req) => {
     const db = requireDb();
-    const rows = await db.select().from(schema.sessions).orderBy(desc(schema.sessions.createdAt)).limit(100);
+    const { archived } = listSessionsQuerySchema.parse(req.query);
+    const rows = await db
+      .select()
+      .from(schema.sessions)
+      .where(archived === 'true' ? isNotNull(schema.sessions.archivedAt) : isNull(schema.sessions.archivedAt))
+      .orderBy(desc(archived === 'true' ? schema.sessions.archivedAt : schema.sessions.createdAt))
+      .limit(100);
     return { sessions: rows };
   });
 
@@ -173,6 +187,18 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     requireDb();
     const result = await forkSession(req.params.id, req.user?.id);
     return { ok: true, ...result };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/sessions/:id/archive', async (req) => {
+    requireDb();
+    const session = await archiveSession(req.params.id);
+    return { ok: true, session: { id: session.id, archivedAt: session.archivedAt } };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/sessions/:id/restore', async (req) => {
+    requireDb();
+    const session = await restoreSession(req.params.id);
+    return { ok: true, session: { id: session.id, archivedAt: session.archivedAt } };
   });
 
   app.post<{ Params: { id: string } }>('/api/sessions/:id/send', async (req) => {

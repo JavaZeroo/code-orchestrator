@@ -20,6 +20,7 @@ const eligible: ForkSessionRecord = {
   runId: null,
   projectId: 'project-1',
   containerId: null,
+  archivedAt: null,
   createdBy: 'user-1',
 };
 
@@ -49,6 +50,7 @@ describe('forkBlockReason', () => {
     expect(forkBlockReason({ ...eligible, state: 'thinking' }, true)).toContain('busy');
     expect(forkBlockReason({ ...eligible, runId: 'run-1' }, true)).toContain('workflow');
     expect(forkBlockReason({ ...eligible, containerId: 'container-1' }, true)).toContain('container');
+    expect(forkBlockReason({ ...eligible, archivedAt: new Date() }, true)).toContain('restored');
     expect(forkBlockReason({ ...eligible, nativeSessionId: null }, true)).toContain('native session ID');
     expect(forkBlockReason({ ...eligible, agent: 'opencode' }, true)).toContain('cannot be forked');
     expect(forkBlockReason(eligible, false)).toContain('offline');

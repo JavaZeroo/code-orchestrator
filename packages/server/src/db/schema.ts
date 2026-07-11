@@ -297,8 +297,10 @@ export const sessions = pgTable('sessions', {
   createdBy: text('created_by'),
   /** 累计用量：{inputTokens, outputTokens, cacheReadTokens, costUsd, turns} */
   usage: jsonb('usage').$type<Record<string, number>>(),
+  /** 手动会话归档时间；null 表示仍在默认会话列表中 */
+  archivedAt: timestamp('archived_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [index('sessions_archived_at_idx').on(t.archivedAt)]);
 
 /** append-only 事件日志：系统地基（design §2） */
 export const events = pgTable(

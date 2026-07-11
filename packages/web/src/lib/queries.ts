@@ -10,6 +10,9 @@ export const queryClient = new QueryClient({
 export const useSessions = () =>
   useQuery({ queryKey: ['sessions'], queryFn: api.sessions, refetchInterval: 8_000 });
 
+export const useArchivedSessions = () =>
+  useQuery({ queryKey: ['archived-sessions'], queryFn: api.archivedSessions, refetchInterval: 15_000 });
+
 export const useMachines = () =>
   useQuery({ queryKey: ['machines'], queryFn: api.machines, refetchInterval: 15_000 });
 

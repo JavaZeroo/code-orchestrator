@@ -8,6 +8,8 @@ import {
   normalizeSessionTitle,
   ResumeAction,
   SESSION_TITLE_MAX_LENGTH,
+  sessionArchiveMode,
+  SessionArchiveAction,
   SessionTitleEditor,
 } from './SessionView';
 
@@ -25,6 +27,7 @@ const session: SessionRow = {
   projectId: null,
   containerId: null,
   usage: null,
+  archivedAt: null,
   createdAt: '2026-07-11T00:00:00Z',
 };
 
@@ -34,6 +37,7 @@ describe('SessionView resume action', () => {
     expect(isSessionResumable(session, 'idle', true)).toBe(false);
     expect(isSessionResumable({ ...session, runId: 'run-1' }, 'dead', true)).toBe(false);
     expect(isSessionResumable({ ...session, containerId: 'container-1' }, 'dead', true)).toBe(false);
+    expect(isSessionResumable({ ...session, archivedAt: '2026-07-11T04:00:00Z' }, 'dead', true)).toBe(false);
     expect(isSessionResumable({ ...session, nativeSessionId: null }, 'dead', true)).toBe(false);
     expect(isSessionResumable(session, 'dead', false)).toBe(false);
 
@@ -57,6 +61,7 @@ describe('SessionView fork action', () => {
     expect(isSessionForkable(session, 'thinking', true)).toBe(false);
     expect(isSessionForkable({ ...session, runId: 'run-1' }, 'dead', true)).toBe(false);
     expect(isSessionForkable({ ...session, containerId: 'container-1' }, 'dead', true)).toBe(false);
+    expect(isSessionForkable({ ...session, archivedAt: '2026-07-11T04:00:00Z' }, 'dead', true)).toBe(false);
     expect(isSessionForkable({ ...session, nativeSessionId: null }, 'dead', true)).toBe(false);
     expect(isSessionForkable(session, 'dead', false)).toBe(false);
 
@@ -70,6 +75,28 @@ describe('SessionView fork action', () => {
     const markup = renderToStaticMarkup(<ForkAction visible forking onFork={vi.fn()} />);
     expect(markup).toContain('disabled=""');
     expect(markup).toContain('分叉中…');
+  });
+});
+
+describe('SessionView archive action', () => {
+  it('offers archive only for finished manual sessions and restore for archived sessions', () => {
+    expect(sessionArchiveMode(session, 'dead')).toBe('archive');
+    expect(sessionArchiveMode(session, 'idle')).toBeNull();
+    expect(sessionArchiveMode({ ...session, runId: 'run-1' }, 'dead')).toBeNull();
+    expect(sessionArchiveMode({ ...session, archivedAt: '2026-07-11T04:00:00Z' }, 'dead')).toBe('restore');
+
+    const archive = renderToStaticMarkup(<SessionArchiveAction mode="archive" updating={false} onChange={vi.fn()} />);
+    const restore = renderToStaticMarkup(<SessionArchiveAction mode="restore" updating={false} onChange={vi.fn()} />);
+    const hidden = renderToStaticMarkup(<SessionArchiveAction mode={null} updating={false} onChange={vi.fn()} />);
+    expect(archive).toContain('归档');
+    expect(restore).toContain('移出归档');
+    expect(hidden).toBe('');
+  });
+
+  it('disables archive state changes while the request is pending', () => {
+    const markup = renderToStaticMarkup(<SessionArchiveAction mode="archive" updating onChange={vi.fn()} />);
+    expect(markup).toContain('disabled=""');
+    expect(markup).toContain('归档中…');
   });
 });
 
