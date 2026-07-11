@@ -22,6 +22,7 @@ const FORGE_LABEL: Record<ForgeKind, string> = { gitcode: 'GitCode', github: 'Gi
 const REQ_TONE: Record<string, BadgeTone> = {
   running: 'accent',
   waiting_human: 'warn',
+  paused: 'warn',
   done: 'ok',
   failed: 'danger',
   cancelled: 'neutral',

@@ -119,14 +119,30 @@ export async function startRun(
 
 // ---------- tick ----------
 
-export function scheduleTick(runId: string): void {
+/**
+ * 把外部 run 控制动作与引擎 tick 放进同一条串行链。
+ * pause 返回前会等已进入链的调度结束；返回后新 tick 只能看到持久化的 paused 状态。
+ */
+export function serializeRunProgression<T>(runId: string, operation: () => Promise<T>): Promise<T> {
   const prev = tickChains.get(runId) ?? Promise.resolve();
-  const next = prev
-    .then(() => tick(runId))
-    .catch((err) => {
-      console.error(`[engine] tick failed for run ${runId}:`, err);
-    });
-  tickChains.set(runId, next);
+  const result = prev.then(operation);
+  const tail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  tickChains.set(runId, tail);
+  void tail.then(() => {
+    if (tickChains.get(runId) === tail) {
+      tickChains.delete(runId);
+    }
+  });
+  return result;
+}
+
+export function scheduleTick(runId: string): void {
+  void serializeRunProgression(runId, () => tick(runId)).catch((err) => {
+    console.error(`[engine] tick failed for run ${runId}:`, err);
+  });
 }
 
 /** 用户重试已在 DB 原子重置失败节点；清理瞬时重试计数并接回同一 run 的串行 tick 链。 */
@@ -141,7 +157,7 @@ async function tick(runId: string): Promise<void> {
   const db = getDb();
   const runRows = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId)).limit(1);
   const run = runRows[0];
-  if (!run || run.status === 'done' || run.status === 'failed' || run.status === 'cancelled') {
+  if (!run || run.status === 'paused' || run.status === 'done' || run.status === 'failed' || run.status === 'cancelled') {
     return;
   }
   const defRows = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, run.defId)).limit(1);
@@ -1076,7 +1092,7 @@ export async function resumeActiveRuns(): Promise<void> {
   const active = await db
     .select()
     .from(schema.workflowRuns)
-    .where(inArray(schema.workflowRuns.status, ['running', 'waiting_human']));
+    .where(inArray(schema.workflowRuns.status, ['running', 'waiting_human', 'paused']));
   for (const run of active) {
     const defRows = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, run.defId)).limit(1);
     const def = defRows[0] ? parseDef(defRows[0].graph) : null;
@@ -1112,7 +1128,9 @@ export async function resumeActiveRuns(): Promise<void> {
         }
       }
     }
-    scheduleTick(run.id);
+    if (run.status !== 'paused') {
+      scheduleTick(run.id);
+    }
   }
-  console.log(`[engine] resumed ${active.length} active run(s)`);
+  console.log(`[engine] recovered ${active.length} active or paused run(s)`);
 }

@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   isRunRetryEligible,
   runArchiveMode,
+  runProgressionMode,
   RunArchiveAction,
+  RunProgressionAction,
   runRetryAction,
   RunRetryAction,
   runRetestAction,
@@ -67,6 +69,7 @@ describe('RunView archive action', () => {
   it('hides archive for active runs and offers restore for archived runs', () => {
     expect(runArchiveMode({ status: 'running', archivedAt: null })).toBeNull();
     expect(runArchiveMode({ status: 'waiting_human', archivedAt: null })).toBeNull();
+    expect(runArchiveMode({ status: 'paused', archivedAt: null })).toBeNull();
     expect(runArchiveMode({ status: 'done', archivedAt: '2026-07-11T05:00:00Z' })).toBe('restore');
 
     const archive = renderToStaticMarkup(createElement(RunArchiveAction, { mode: 'archive', updating: false, onChange: vi.fn() }));
@@ -84,11 +87,59 @@ describe('RunView archive action', () => {
   });
 });
 
+describe('RunView progression action', () => {
+  it('offers pause for active runs and resume only for paused runs', () => {
+    expect(runProgressionMode({ status: 'running' })).toBe('pause');
+    expect(runProgressionMode({ status: 'waiting_human' })).toBe('pause');
+    expect(runProgressionMode({ status: 'paused' })).toBe('resume');
+    expect(runProgressionMode({ status: 'done' })).toBeNull();
+    expect(runProgressionMode({ status: 'failed' })).toBeNull();
+    expect(runProgressionMode({ status: 'cancelled' })).toBeNull();
+
+    const pause = renderToStaticMarkup(createElement(RunProgressionAction, {
+      mode: 'pause',
+      updating: false,
+      onChange: vi.fn(),
+    }));
+    const resume = renderToStaticMarkup(createElement(RunProgressionAction, {
+      mode: 'resume',
+      updating: false,
+      onChange: vi.fn(),
+    }));
+    const hidden = renderToStaticMarkup(createElement(RunProgressionAction, {
+      mode: null,
+      updating: false,
+      onChange: vi.fn(),
+    }));
+    expect(pause).toContain('暂停');
+    expect(resume).toContain('恢复');
+    expect(hidden).toBe('');
+  });
+
+  it('disables progression controls while a transition is pending', () => {
+    const pausing = renderToStaticMarkup(createElement(RunProgressionAction, {
+      mode: 'pause',
+      updating: true,
+      onChange: vi.fn(),
+    }));
+    const resuming = renderToStaticMarkup(createElement(RunProgressionAction, {
+      mode: 'resume',
+      updating: true,
+      onChange: vi.fn(),
+    }));
+    expect(pausing).toContain('disabled=""');
+    expect(pausing).toContain('暂停中…');
+    expect(resuming).toContain('disabled=""');
+    expect(resuming).toContain('恢复中…');
+  });
+});
+
 describe('RunView retry action', () => {
   it('offers Retry only for an unarchived failed run', () => {
     expect(isRunRetryEligible({ status: 'failed', archivedAt: null })).toBe(true);
     expect(isRunRetryEligible({ status: 'failed', archivedAt: '2026-07-11T05:00:00Z' })).toBe(false);
     expect(isRunRetryEligible({ status: 'running', archivedAt: null })).toBe(false);
+    expect(isRunRetryEligible({ status: 'paused', archivedAt: null })).toBe(false);
     expect(isRunRetryEligible({ status: 'done', archivedAt: null })).toBe(false);
 
     const visible = renderToStaticMarkup(createElement(RunRetryAction, {

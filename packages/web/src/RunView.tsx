@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowLeft, ExternalLink, RefreshCw } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, ExternalLink, Pause, Play, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type ApprovalRow, type ForgeRefRow, type NodeStateRow, type RunRetryResult, type RunRow, type WorkflowDefRow } from './api';
@@ -13,6 +13,7 @@ import { useRunEvents } from './useEvents';
 const RUN_META: Record<string, { label: string; tone: BadgeTone; live?: boolean }> = {
   running: { label: '运行中', tone: 'run', live: true },
   waiting_human: { label: '等待审批', tone: 'human' },
+  paused: { label: '已暂停', tone: 'warn' },
   done: { label: '已完成', tone: 'ok' },
   failed: { label: '失败', tone: 'danger' },
   cancelled: { label: '已取消', tone: 'neutral' },
@@ -91,6 +92,32 @@ export function RunRetryAction({
   );
 }
 
+export type RunProgressionMode = 'pause' | 'resume';
+
+export function runProgressionMode(run: Pick<RunRow, 'status'> | null): RunProgressionMode | null {
+  if (run?.status === 'running' || run?.status === 'waiting_human') return 'pause';
+  return run?.status === 'paused' ? 'resume' : null;
+}
+
+export function RunProgressionAction({
+  mode,
+  updating,
+  onChange,
+}: {
+  mode: RunProgressionMode | null;
+  updating: boolean;
+  onChange: () => void;
+}) {
+  if (!mode) return null;
+  const resuming = mode === 'resume';
+  return (
+    <Button variant={resuming ? 'success' : 'secondary'} size="sm" disabled={updating} onClick={onChange}>
+      {resuming ? <Play size={12} /> : <Pause size={12} />}
+      {updating ? (resuming ? '恢复中…' : '暂停中…') : (resuming ? '恢复' : '暂停')}
+    </Button>
+  );
+}
+
 export type RunArchiveMode = 'archive' | 'restore';
 
 export function runArchiveMode(run: Pick<RunRow, 'status' | 'archivedAt'> | null): RunArchiveMode | null {
@@ -121,6 +148,7 @@ export function RunArchiveAction({
 export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpenSession: (id: string) => void; onBack: () => void }) {
   const [mode, setMode] = useState<'thread' | 'graph'>('thread');
   const [retrying, setRetrying] = useState(false);
+  const [updatingProgression, setUpdatingProgression] = useState(false);
   const [updatingArchive, setUpdatingArchive] = useState(false);
 
   // ---- 共享数据（graph 模式用）----
@@ -224,6 +252,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
   const gate = pending.find((a) => a.kind === 'gate' && a.runId === runId && a.nodeId === selected);
   const runMeta = RUN_META[effectiveRun?.status ?? ''] ?? { label: effectiveRun?.status ?? '', tone: 'neutral' as const };
   const retryEligible = isRunRetryEligible(effectiveRun);
+  const progressionMode = runProgressionMode(effectiveRun);
   const archiveMode = runArchiveMode(effectiveRun);
 
   // 共享的 decide 处理
@@ -292,6 +321,24 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
       .finally(() => setUpdatingArchive(false));
   }, [archiveMode, runId]);
 
+  const handleProgressionChange = useCallback(() => {
+    if (!progressionMode || updatingProgression) return;
+    setUpdatingProgression(true);
+    const request = progressionMode === 'pause' ? api.pauseRun(runId) : api.resumeRun(runId);
+    request
+      .then(({ run: changed }) => {
+        const applyProgressionState = (current: RunRow | null) => current
+          ? { ...current, status: changed.status }
+          : null;
+        setRun(applyProgressionState);
+        setThreadRun(applyProgressionState);
+        invalidate('runs');
+        toast.success(progressionMode === 'pause' ? '运行已暂停；进行中的节点会继续完成' : '运行已恢复');
+      })
+      .catch((error) => toast.error(`${progressionMode === 'pause' ? '暂停' : '恢复'}失败：${error}`))
+      .finally(() => setUpdatingProgression(false));
+  }, [progressionMode, runId, updatingProgression]);
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <header className="flex items-center justify-between gap-3 border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
@@ -320,9 +367,10 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
           </div>
           <StatusDot tone={runMeta.tone} live={runMeta.live} />
           <Badge tone={runMeta.tone}>{runMeta.label}</Badge>
+          <RunProgressionAction mode={progressionMode} updating={updatingProgression} onChange={handleProgressionChange} />
           <RunRetryAction eligible={retryEligible} retrying={retrying} onRetry={handleRetry} />
           <RunArchiveAction mode={archiveMode} updating={updatingArchive} onChange={handleArchiveChange} />
-          {(effectiveRun?.status === 'running' || effectiveRun?.status === 'waiting_human') && (
+          {(effectiveRun?.status === 'running' || effectiveRun?.status === 'waiting_human' || effectiveRun?.status === 'paused') && (
             <Button
               variant="danger"
               size="sm"

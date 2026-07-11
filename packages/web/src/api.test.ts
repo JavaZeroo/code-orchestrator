@@ -55,6 +55,27 @@ describe('api client', () => {
     });
   });
 
+  it('posts workflow pause and resume to the run resource', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ ok: true, run: { id: 'run-1', status: 'paused' } }))
+      .mockResolvedValueOnce(Response.json({ ok: true, run: { id: 'run-1', status: 'running' } }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.pauseRun('run-1')).resolves.toEqual({ ok: true, run: { id: 'run-1', status: 'paused' } });
+    await expect(api.resumeRun('run-1')).resolves.toEqual({ ok: true, run: { id: 'run-1', status: 'running' } });
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/runs/run-1/pause', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/runs/run-1/resume', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  });
+
   it('posts session fork and returns the independent target ID', async () => {
     const fetch = mockFetch(Response.json({ ok: true, sessionId: 'fork-1' }));
 

@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, FolderGit2, type LucideIcon, LogOut, MessageSquareText, Settings } from 'lucide-react';
+import { Archive, ArchiveRestore, FolderGit2, type LucideIcon, LogOut, MessageSquareText, Pause, Play, Settings } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from './api';
@@ -6,7 +6,7 @@ import { authApi, LoginPage, useMe, type Me } from './Auth';
 import { CreateProjectDialog } from './CreateProjectDialog';
 import { NewSession } from './NewSession';
 import { NotificationBell } from './Notifications';
-import { runArchiveMode, RunView } from './RunView';
+import { runArchiveMode, runProgressionMode, RunView } from './RunView';
 import { SettingsPage, type SettingsSection } from './Settings';
 import { sessionArchiveMode, SessionView } from './SessionView';
 import { Button } from './components/ui/button';
@@ -37,11 +37,12 @@ const STATE_DOT: Record<string, string> = {
 const RUN_TONE: Record<string, string> = {
   running: 'run',
   waiting_human: 'human',
+  paused: 'warn',
   done: 'ok',
   failed: 'danger',
   cancelled: 'neutral',
 };
-const RUN_LABEL: Record<string, string> = { running: '运行中', waiting_human: '待处理', done: '完成', failed: '失败', cancelled: '取消' };
+const RUN_LABEL: Record<string, string> = { running: '运行中', waiting_human: '待处理', paused: '已暂停', done: '完成', failed: '失败', cancelled: '取消' };
 
 function BrandMark() {
   return (
@@ -282,6 +283,7 @@ function HomeScreen({
   const [showArchived, setShowArchived] = useState(false);
   const [updatingSessionArchive, setUpdatingSessionArchive] = useState<string | null>(null);
   const [updatingRunArchive, setUpdatingRunArchive] = useState<string | null>(null);
+  const [updatingRunProgression, setUpdatingRunProgression] = useState<string | null>(null);
 
   const q = search.trim().toLowerCase();
   const visible = useMemo(() => allThreads.filter((t) => {
@@ -321,7 +323,7 @@ function HomeScreen({
 
   const active = sortedRest.filter((t) => {
     if (t.kind === 'session') return t.session.state === 'thinking' || t.session.state === 'starting';
-    return t.run.status === 'running';
+    return t.run.status === 'running' || t.run.status === 'paused';
   });
   const idle = sortedRest.filter((t) => {
     if (t.kind === 'session') return t.session.state === 'idle';
@@ -362,6 +364,20 @@ function HomeScreen({
       .finally(() => setUpdatingRunArchive(null));
   };
 
+  const changeRunProgression = (run: import('./api').RunRow) => {
+    const mode = runProgressionMode(run);
+    if (!mode) return;
+    setUpdatingRunProgression(run.id);
+    const request = mode === 'pause' ? api.pauseRun(run.id) : api.resumeRun(run.id);
+    request
+      .then(() => {
+        invalidate('runs');
+        toast.success(mode === 'pause' ? '运行已暂停' : '运行已恢复');
+      })
+      .catch((error) => toast.error(`${mode === 'pause' ? '暂停' : '恢复'}失败：${error}`))
+      .finally(() => setUpdatingRunProgression(null));
+  };
+
   const renderSessionRow = (s: import('./api').SessionRow) => {
     const archiveMode = sessionArchiveMode(s, s.state);
     return (
@@ -400,6 +416,7 @@ function HomeScreen({
 
   const renderRunRow = (r: import('./api').RunRow) => {
     const archiveMode = runArchiveMode(r);
+    const progressionMode = runProgressionMode(r);
     return (
       <div
         key={`run:${r.id}`}
@@ -418,6 +435,18 @@ function HomeScreen({
           </span>
         </button>
         {isWaitingRun(r) && <span className="mr-2 size-2 rounded-full bg-danger" />}
+        {progressionMode && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            disabled={updatingRunProgression === r.id}
+            aria-label={progressionMode === 'pause' ? '暂停运行' : '恢复运行'}
+            title={progressionMode === 'pause' ? '暂停运行' : '恢复运行'}
+            onClick={() => changeRunProgression(r)}
+          >
+            {progressionMode === 'pause' ? <Pause size={13} /> : <Play size={13} />}
+          </Button>
+        )}
         {archiveMode && (
           <Button
             variant="ghost"

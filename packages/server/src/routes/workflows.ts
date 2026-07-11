@@ -8,6 +8,7 @@ import { publish } from '../events';
 import { callRunner } from '../ws/runnerHub';
 import { EngineError, startRun } from '../engine/engine';
 import { archiveWorkflowRun, restoreWorkflowRun, WorkflowRunArchiveError } from '../services/workflowRunArchive';
+import { pauseWorkflowRun, resumeWorkflowRun, WorkflowRunProgressionError } from '../services/workflowRunProgression';
 import { retryWorkflowRun, WorkflowRunRetryError } from '../services/workflowRunRetry';
 import { reviseWorkflowDefinition, WorkflowRevisionError } from '../services/workflowRevision';
 
@@ -137,6 +138,32 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       };
     } catch (err) {
       if (err instanceof WorkflowRunRetryError) {
+        void reply.code(err.statusCode);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/api/runs/:id/pause', async (req, reply) => {
+    try {
+      const result = await pauseWorkflowRun(req.params.id, req.user?.email ?? 'ui');
+      return { ok: true, run: { id: result.run.id, status: result.run.status } };
+    } catch (err) {
+      if (err instanceof WorkflowRunProgressionError) {
+        void reply.code(err.statusCode);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/api/runs/:id/resume', async (req, reply) => {
+    try {
+      const result = await resumeWorkflowRun(req.params.id, req.user?.email ?? 'ui');
+      return { ok: true, run: { id: result.run.id, status: result.run.status } };
+    } catch (err) {
+      if (err instanceof WorkflowRunProgressionError) {
         void reply.code(err.statusCode);
         return { error: err.message };
       }

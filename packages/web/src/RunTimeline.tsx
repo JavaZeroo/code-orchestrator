@@ -31,6 +31,7 @@ const NODE_TONE: Record<string, BadgeTone> = {
 const RUN_META: Record<string, { label: string; tone: BadgeTone; live?: boolean }> = {
   running: { label: '运行中', tone: 'run', live: true },
   waiting_human: { label: '等待审批', tone: 'human' },
+  paused: { label: '已暂停', tone: 'warn' },
   done: { label: '已完成', tone: 'ok' },
   failed: { label: '失败', tone: 'danger' },
   cancelled: { label: '已取消', tone: 'neutral' },
