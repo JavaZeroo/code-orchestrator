@@ -10,6 +10,13 @@ export const queryClient = new QueryClient({
 export const useSessions = () =>
   useQuery({ queryKey: ['sessions'], queryFn: api.sessions, refetchInterval: 8_000 });
 
+export const useSession = (sessionId: string | null, enabled = true) =>
+  useQuery({
+    queryKey: ['session', sessionId],
+    queryFn: () => api.session(sessionId!),
+    enabled: Boolean(sessionId) && enabled,
+  });
+
 export const useArchivedSessions = () =>
   useQuery({ queryKey: ['archived-sessions'], queryFn: api.archivedSessions, refetchInterval: 15_000 });
 

@@ -543,6 +543,75 @@ describeSt('server ST: API + runner websocket', () => {
     expect(missing.json()).toEqual({ error: 'session not found: missing-session' });
   });
 
+  it('reads active, archived, and older sessions by exact ID outside the sidebar list window', async () => {
+    const db = getDb();
+    await db.insert(schema.machines).values({ id: 'm-deep-link', name: 'Deep Link Runner' });
+    const recentSessions = Array.from({ length: 100 }, (_, index) => ({
+      id: `session-deep-link-recent-${index.toString().padStart(3, '0')}`,
+      machineId: 'm-deep-link',
+      agent: 'claude',
+      cwd: `/tmp/deep-link-recent-${index}`,
+      state: 'dead',
+      createdAt: new Date(Date.UTC(2026, 6, 10, 0, 0, index)),
+    }));
+    await db.insert(schema.sessions).values([
+      {
+        id: 'session-deep-link-older',
+        machineId: 'm-deep-link',
+        agent: 'claude',
+        cwd: '/tmp/deep-link-older',
+        title: 'Older conversation',
+        state: 'dead',
+        createdAt: new Date('2025-01-01T00:00:00.000Z'),
+      },
+      {
+        id: 'session-deep-link-active',
+        machineId: 'm-deep-link',
+        agent: 'claude',
+        cwd: '/tmp/deep-link-active',
+        title: 'Active conversation',
+        state: 'idle',
+        createdAt: new Date('2026-07-11T00:00:00.000Z'),
+      },
+      {
+        id: 'session-deep-link-archived',
+        machineId: 'm-deep-link',
+        agent: 'claude',
+        cwd: '/tmp/deep-link-archived',
+        title: 'Archived conversation',
+        state: 'dead',
+        archivedAt: new Date('2026-07-09T00:00:00.000Z'),
+        createdAt: new Date('2024-01-01T00:00:00.000Z'),
+      },
+      ...recentSessions,
+    ]);
+
+    const listed = await app!.inject({ method: 'GET', url: '/api/sessions' });
+    const listedIds = listed.json<{ sessions: Array<{ id: string }> }>().sessions.map((session) => session.id);
+    expect(listedIds).toHaveLength(100);
+    expect(listedIds).toContain('session-deep-link-active');
+    expect(listedIds).not.toContain('session-deep-link-older');
+    expect(listedIds).not.toContain('session-deep-link-archived');
+
+    const [active, archived, older] = await Promise.all([
+      app!.inject({ method: 'GET', url: '/api/sessions/session-deep-link-active' }),
+      app!.inject({ method: 'GET', url: '/api/sessions/session-deep-link-archived' }),
+      app!.inject({ method: 'GET', url: '/api/sessions/session-deep-link-older' }),
+    ]);
+    expect(active.statusCode).toBe(200);
+    expect(active.json()).toMatchObject({
+      session: { id: 'session-deep-link-active', state: 'idle', archivedAt: null },
+    });
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json()).toMatchObject({
+      session: { id: 'session-deep-link-archived', state: 'dead', archivedAt: expect.any(String) },
+    });
+    expect(older.statusCode).toBe(200);
+    expect(older.json()).toMatchObject({
+      session: { id: 'session-deep-link-older', title: 'Older conversation', archivedAt: null },
+    });
+  });
+
   it('archives and restores a finished manual session without changing its transcript', async () => {
     const db = getDb();
     await db.insert(schema.machines).values({ id: 'm-archive', name: 'Archive Runner' });

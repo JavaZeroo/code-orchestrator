@@ -163,6 +163,11 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     return { sessions: rows };
   });
 
+  app.get<{ Params: { id: string } }>('/api/sessions/:id', async (req) => {
+    const session = await findSession(req.params.id);
+    return { session };
+  });
+
   app.patch<{ Params: { id: string } }>('/api/sessions/:id', async (req) => {
     const db = requireDb();
     const body = renameBodySchema.parse(req.body);

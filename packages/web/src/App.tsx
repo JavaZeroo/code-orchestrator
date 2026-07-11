@@ -1,5 +1,5 @@
 import { Archive, ArchiveRestore, FolderGit2, type LucideIcon, LogOut, MessageSquareText, Pause, Play, Settings } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from './api';
 import { authApi, LoginPage, useMe, type Me } from './Auth';
@@ -13,14 +13,15 @@ import { Button } from './components/ui/button';
 import { Spinner, StatusDot } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { isWaitingRun, isWaitingSession, waitingCountByProject, type AttentionItem } from './lib/attention';
-import { invalidate, useArchivedRuns, useArchivedSessions, useProjects, useRuns, useSessions } from './lib/queries';
+import { invalidate, useArchivedRuns, useArchivedSessions, useProjects, useRuns, useSession, useSessions } from './lib/queries';
 import { ProjectProvider, useCurrentProject, useProjectScope } from './lib/project';
 import { runDisplayTitle, runMatchesSearch } from './lib/runTitle';
+import { listenForThreadSelection, parseThreadSelection, pushThreadSelection, type ThreadSelection } from './lib/urlSelection';
 import { cn, relTime, fmtCost, shortModel } from './lib/utils';
 
 type Tab = 'home';
 
-type Selected = 'new' | { session: string } | { run: string };
+type Selected = ThreadSelection;
 
 const NAV: { id: Tab; label: string; icon: LucideIcon; hint: string }[] = [
   { id: 'home', label: '对话', icon: MessageSquareText, hint: '线程 · 会话 · 运行' },
@@ -247,6 +248,15 @@ function HomeScreen({
   const { data: runs = [] } = useRuns();
   const { data: archivedRuns = [] } = useArchivedRuns();
   const { projectId, inScope } = useProjectScope();
+  const selectedSessionId = typeof selected === 'object' && 'session' in selected ? selected.session : null;
+  const listedSelectedSession = useMemo(
+    () => [...allSessions, ...allArchivedSessions].find((session) => session.id === selectedSessionId),
+    [allArchivedSessions, allSessions, selectedSessionId],
+  );
+  const { data: selectedSessionById, isPending: selectedSessionPending } = useSession(
+    selectedSessionId,
+    !listedSelectedSession,
+  );
 
   const runMap = useMemo(() => new Map(runs.map((r) => [r.id, r])), [runs]);
 
@@ -480,7 +490,8 @@ function HomeScreen({
   const renderRight = () => {
     if (selected === 'new') return <NewSession onCreated={(id) => setSelected({ session: id })} onRunStarted={(runId) => setSelected({ run: runId })} />;
     if (typeof selected === 'object' && 'session' in selected) {
-      const s = [...allSessions, ...allArchivedSessions].find((session) => session.id === selected.session);
+      const s = listedSelectedSession ?? selectedSessionById;
+      if (!s && selectedSessionPending) return <div className="flex items-center gap-2 p-6 text-sm text-dim"><Spinner /> 加载会话…</div>;
       if (!s) return <div className="p-6 text-sm text-dim">会话未找到</div>;
       return <SessionView key={s.id} session={s} onForked={(id) => setSelected({ session: id })} />;
     }
@@ -589,10 +600,23 @@ function HomeScreen({
 
 function AppShell({ me, refresh }: { me: Me; refresh: () => void }) {
   const [tab, setTab] = useState<Tab>('home');
-  const [selected, setSelected] = useState<Selected>('new');
+  const [selected, setSelectedState] = useState<Selected>(() => parseThreadSelection(window.location.search));
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
   const { projectId, setProjectId } = useCurrentProject();
+
+  const setSelected = useCallback((next: Selected) => {
+    pushThreadSelection(window.history, window.location.href, next);
+    setSelectedState(next);
+  }, []);
+
+  useEffect(() => {
+    return listenForThreadSelection(window, (next) => {
+      setSettingsSection(null);
+      setTab('home');
+      setSelectedState(next);
+    });
+  }, []);
 
   // 全局 WS 订阅：刷新 sessions/runs 缓存，让红点/铃铛更跟手
   useEffect(() => {

@@ -358,6 +358,7 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
         setEditingTitle(false);
         invalidate('sessions');
         invalidate('archived-sessions');
+        invalidate('session');
         toast('会话标题已更新');
       })
       .catch((error) => toast.error(`重命名失败：${error}`))
@@ -373,6 +374,7 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
       .then(() => {
         invalidate('sessions');
         invalidate('archived-sessions');
+        invalidate('session');
         toast(archiveMode === 'archive' ? '会话已归档' : '会话已移回历史');
       })
       .catch((error) => toast.error(`${archiveMode === 'archive' ? '归档' : '恢复'}失败：${error}`))
