@@ -150,7 +150,7 @@ const runners: FakeRunner[] = [];
 
 async function truncateDb() {
   const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
-  await sql`TRUNCATE TABLE events, approvals, sessions, machines, llm_providers, task_queue, projects RESTART IDENTITY CASCADE`;
+  await sql`TRUNCATE TABLE events, approvals, sessions, machines, llm_providers, task_queue, projects, workflow_defs RESTART IDENTITY CASCADE`;
   await sql.end({ timeout: 1 });
 }
 
@@ -175,6 +175,135 @@ describeSt('server ST: API + runner websocket', () => {
     await app?.close();
     app = null;
     await closeDb();
+  });
+
+  it('publishes a workflow revision and atomically moves future references without changing existing runs', async () => {
+    const db = getDb();
+    const sourceId = 'workflow-revision-v1';
+    const projectId = 'workflow-revision-project';
+    const triggerId = 'workflow-revision-trigger';
+    const runId = 'workflow-revision-existing-run';
+    const sourceGraph = {
+      name: 'Release pipeline',
+      nodes: [{ id: 'implement', type: 'agent', prompt: 'Implement the release' }],
+      edges: [],
+    };
+    await db.insert(schema.workflowDefs).values({
+      id: sourceId,
+      name: sourceGraph.name,
+      version: 1,
+      graph: sourceGraph,
+      projectId,
+    });
+    await db.insert(schema.projects).values({
+      id: projectId,
+      name: 'Workflow revision ST',
+      forge: 'github',
+      repo: 'example/workflow-revision',
+      defaultWorkflow: sourceId,
+      defaultDefId: sourceId,
+    });
+    await db.insert(schema.requirementTriggers).values({
+      id: triggerId,
+      projectId,
+      forge: 'github',
+      repo: 'example/workflow-revision',
+      defId: sourceId,
+    });
+    await db.insert(schema.workflowRuns).values({ id: runId, defId: sourceId, projectId });
+
+    const revisedGraph = {
+      name: 'Release pipeline',
+      nodes: [
+        { id: 'implement', type: 'agent', prompt: 'Implement the release' },
+        { id: 'verify', type: 'check', critic: { kind: 'command', run: 'pnpm test' } },
+      ],
+      edges: [['implement', 'verify']],
+    };
+    const response = await app!.inject({
+      method: 'POST',
+      url: `/api/workflows/${sourceId}/revisions`,
+      payload: { graph: revisedGraph, createdVia: 'chat' },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const revision = response.json() as { id: string; name: string; version: number; previousId: string };
+    expect(revision).toMatchObject({ name: revisedGraph.name, version: 2, previousId: sourceId });
+    expect(revision.id).not.toBe(sourceId);
+
+    const [source] = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, sourceId));
+    const [next] = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, revision.id));
+    const [project] = await db.select().from(schema.projects).where(eq(schema.projects.id, projectId));
+    const [trigger] = await db.select().from(schema.requirementTriggers).where(eq(schema.requirementTriggers.id, triggerId));
+    const [run] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+
+    expect(source).toMatchObject({ id: sourceId, version: 1, archived: 'yes', graph: sourceGraph });
+    expect(next).toMatchObject({
+      id: revision.id,
+      version: 2,
+      archived: 'no',
+      projectId,
+      createdVia: 'chat',
+      graph: revisedGraph,
+    });
+    expect(project).toMatchObject({ defaultWorkflow: revision.id, defaultDefId: revision.id });
+    expect(trigger).toMatchObject({ defId: revision.id });
+    expect(run).toMatchObject({ id: runId, defId: sourceId });
+  });
+
+  it('leaves workflow records and references unchanged when a revision graph is invalid', async () => {
+    const db = getDb();
+    const sourceId = 'workflow-invalid-v1';
+    const projectId = 'workflow-invalid-project';
+    const triggerId = 'workflow-invalid-trigger';
+    const runId = 'workflow-invalid-existing-run';
+    const sourceGraph = {
+      name: 'Guarded pipeline',
+      nodes: [{ id: 'implement', type: 'agent', prompt: 'Implement safely' }],
+      edges: [],
+    };
+    await db.insert(schema.workflowDefs).values({
+      id: sourceId,
+      name: sourceGraph.name,
+      graph: sourceGraph,
+      projectId,
+    });
+    await db.insert(schema.projects).values({
+      id: projectId,
+      name: 'Invalid workflow revision ST',
+      forge: 'github',
+      repo: 'example/invalid-workflow-revision',
+      defaultWorkflow: sourceId,
+      defaultDefId: sourceId,
+    });
+    await db.insert(schema.requirementTriggers).values({
+      id: triggerId,
+      projectId,
+      forge: 'github',
+      repo: 'example/invalid-workflow-revision',
+      defId: sourceId,
+    });
+    await db.insert(schema.workflowRuns).values({ id: runId, defId: sourceId, projectId });
+
+    const response = await app!.inject({
+      method: 'POST',
+      url: `/api/workflows/${sourceId}/revisions`,
+      payload: {
+        graph: { ...sourceGraph, edges: [['implement', 'missing-node']] },
+        createdVia: 'chat',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    const definitions = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.projectId, projectId));
+    const [project] = await db.select().from(schema.projects).where(eq(schema.projects.id, projectId));
+    const [trigger] = await db.select().from(schema.requirementTriggers).where(eq(schema.requirementTriggers.id, triggerId));
+    const [run] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+    expect(definitions).toHaveLength(1);
+    expect(definitions[0]).toMatchObject({ id: sourceId, version: 1, archived: 'no', graph: sourceGraph });
+    expect(project).toMatchObject({ defaultWorkflow: sourceId, defaultDefId: sourceId });
+    expect(trigger).toMatchObject({ defId: sourceId });
+    expect(run).toMatchObject({ id: runId, defId: sourceId });
   });
 
   it('registers a runner, spawns a session, records events, and decides tool approvals', async () => {

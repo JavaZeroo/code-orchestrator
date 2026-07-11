@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api } from './api';
+import { api, type WorkflowDef } from './api';
 
 function mockFetch(response: Response) {
   const fetch = vi.fn().mockResolvedValue(response);
@@ -52,6 +52,27 @@ describe('api client', () => {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ schedulingPaused: true }),
+    });
+  });
+
+  it('publishes a workflow revision through the versioned endpoint', async () => {
+    const fetch = mockFetch(Response.json({ id: 'workflow-v2', name: 'Pipeline', version: 2, previousId: 'workflow-v1' }));
+    const graph: WorkflowDef = {
+      name: 'Pipeline',
+      nodes: [{ id: 'implement', type: 'agent', cli: 'claude', prompt: 'Implement it' }],
+      edges: [],
+    };
+
+    await expect(api.reviseWorkflow('workflow-v1', graph, 'chat')).resolves.toEqual({
+      id: 'workflow-v2',
+      name: 'Pipeline',
+      version: 2,
+      previousId: 'workflow-v1',
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/workflows/workflow-v1/revisions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ graph, createdVia: 'chat' }),
     });
   });
 

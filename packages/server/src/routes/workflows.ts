@@ -7,6 +7,7 @@ import { getDb, schema } from '../db/index';
 import { publish } from '../events';
 import { callRunner } from '../ws/runnerHub';
 import { EngineError, startRun } from '../engine/engine';
+import { reviseWorkflowDefinition, WorkflowRevisionError } from '../services/workflowRevision';
 
 const createBodySchema = z.object({
   graph: z.unknown(),
@@ -22,6 +23,11 @@ const startBodySchema = z.object({
 const patchDefSchema = z.object({
   archived: z.enum(['yes', 'no']).optional(),
   name: z.string().trim().min(1).max(120).optional(),
+});
+
+const reviseBodySchema = z.object({
+  graph: z.unknown(),
+  createdVia: z.enum(['chat', 'manual']).default('manual'),
 });
 
 export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void> {
@@ -82,6 +88,24 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
     }
     await db.update(schema.workflowDefs).set(set).where(eq(schema.workflowDefs.id, req.params.id));
     return { ok: true };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/workflows/:id/revisions', async (req, reply) => {
+    const body = reviseBodySchema.parse(req.body);
+    try {
+      const revision = await reviseWorkflowDefinition(req.params.id, body.graph, {
+        createdVia: body.createdVia,
+        createdBy: req.user?.id,
+      });
+      void reply.code(201);
+      return revision;
+    } catch (err) {
+      if (err instanceof WorkflowRevisionError) {
+        void reply.code(err.statusCode);
+        return { error: err.message };
+      }
+      throw err;
+    }
   });
 
   app.post<{ Params: { id: string } }>('/api/workflows/:id/runs', async (req, reply) => {

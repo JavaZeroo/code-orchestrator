@@ -9,7 +9,7 @@
 import { ArrowLeft, Bell, Boxes, Cpu, FolderGit2, GitBranch, HardDrive, KeyRound, Package, Server, Trash2, Workflow as WorkflowIcon, Zap } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { api } from './api';
+import { api, type WorkflowDefRow } from './api';
 import { MachinesSection, NotifySection, ProvidersSection, TokensSection, type Me } from './Auth';
 import { Designer } from './Designer';
 import {
@@ -252,6 +252,7 @@ export function SettingsPage({
   const { projectId, setProjectId } = useCurrentProject();
   const project = projects.find((p) => p.id === projectId);
   const [designerOpen, setDesignerOpen] = useState(false);
+  const [editingWorkflow, setEditingWorkflow] = useState<WorkflowDefRow | null>(null);
 
   const isProjectSection = section.startsWith('proj-');
   const meta = SECTION_TITLE[section];
@@ -261,10 +262,19 @@ export function SettingsPage({
     return (
       <div className="flex flex-1 flex-col overflow-hidden">
         <Designer
-          onBack={() => setDesignerOpen(false)}
+          workflow={editingWorkflow ?? undefined}
+          onBack={() => {
+            setDesignerOpen(false);
+            setEditingWorkflow(null);
+          }}
           onSaved={() => {
             invalidate('workflows');
+            if (editingWorkflow) {
+              invalidate('projects');
+              invalidate('triggers');
+            }
             setDesignerOpen(false);
+            setEditingWorkflow(null);
           }}
         />
       </div>
@@ -283,7 +293,15 @@ export function SettingsPage({
       case 'proj-basic':
         return <ProjectBasicSection project={project!} onOpenSession={onOpenSession} />;
       case 'proj-pipelines':
-        return <ProjectPipelinesSection project={project!} onOpenDesigner={() => setDesignerOpen(true)} />;
+        return (
+          <ProjectPipelinesSection
+            project={project!}
+            onOpenDesigner={(workflow) => {
+              setEditingWorkflow(workflow ?? null);
+              setDesignerOpen(true);
+            }}
+          />
+        );
       case 'proj-automation':
         return <ProjectAutomationSection me={me} project={project!} onOpenRun={onOpenRun} />;
       case 'proj-material':
