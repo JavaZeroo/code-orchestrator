@@ -1,5 +1,5 @@
-import { ArrowDown, ChevronRight, ExternalLink, GitBranch, Send, Wrench } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowDown, ChevronRight, ExternalLink, GitBranch, RefreshCw, Send, Wrench } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApprovalRequest, EventRow, ForgeRefRow, NodeStateRow, RunRow, SessionEnvelope, WorkflowDefRow, WorkflowDef } from './api';
 import { api } from './api';
@@ -165,9 +165,19 @@ function StatusCard({ nodeId, status, title, type, model }: {
   );
 }
 
+export type ForgeRetestState = 'idle' | 'posting' | 'pending';
+
+export function isForgeRetestEligible(forgeRef: ForgeRefRow): boolean {
+  return Boolean(forgeRef.id) && forgeRef.forge === 'gitcode' && forgeRef.kind === 'pr' && forgeRef.active === 'yes';
+}
+
 /** PR·CI 状态卡 */
-function ForgeCard({ forgeRef, prState, ciState }: {
-  forgeRef: ForgeRefRow; prState?: string; ciState?: string;
+export function ForgeCard({ forgeRef, prState, ciState, retestState = 'idle', onRetest }: {
+  forgeRef: ForgeRefRow;
+  prState?: string;
+  ciState?: string;
+  retestState?: ForgeRetestState;
+  onRetest?: () => void;
 }) {
   const url = forgePrUrl(forgeRef.forge, forgeRef.repo, forgeRef.number);
   const ciLabel = ciState === 'passed' ? '✔ CI 已过'
@@ -176,6 +186,8 @@ function ForgeCard({ forgeRef, prState, ciState }: {
     : ciState === 'pending' ? '○ CI 等待中'
     : null;
   const ciTone: BadgeTone = ciState === 'passed' ? 'ok' : ciState === 'failed' ? 'danger' : ciState === 'running' ? 'run' : 'neutral';
+  const canRetest = Boolean(onRetest) && isForgeRetestEligible(forgeRef);
+  const retestLabel = retestState === 'posting' ? '发送中…' : retestState === 'pending' ? '等待 CI 确认' : '重跑 CI';
 
   return (
     <div className="self-stretch rounded-lg border border-line bg-panel/60 px-3 py-2">
@@ -184,9 +196,17 @@ function ForgeCard({ forgeRef, prState, ciState }: {
         <span className="font-medium text-sm">{forgeRef.forge}#{forgeRef.number}</span>
         {prState && <Badge tone="neutral">{prState}</Badge>}
         {ciLabel && <Badge tone={ciTone}>{ciLabel}</Badge>}
-        <a href={url} target="_blank" rel="noreferrer" className="ml-auto shrink-0 text-xs text-accent hover:underline flex items-center gap-1">
-          <ExternalLink size={11} /> PR
-        </a>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {canRetest && (
+            <Button variant="outline" size="sm" disabled={retestState !== 'idle'} onClick={onRetest}>
+              <RefreshCw size={11} className={retestState === 'posting' ? 'animate-spin' : undefined} />
+              {retestLabel}
+            </Button>
+          )}
+          <a href={url} target="_blank" rel="noreferrer" className="text-xs text-accent hover:underline flex items-center gap-1">
+            <ExternalLink size={11} /> PR
+          </a>
+        </div>
       </div>
     </div>
   );
@@ -234,12 +254,20 @@ interface RunTimelineProps {
   activeSessionId: string | null;
   onSend: (text: string) => void;
   onDecide: (id: string, b: 'allow' | 'deny') => void;
+  onRetest: (refId: string) => Promise<void>;
   onOpenSession?: (sessionId: string) => void;
 }
 
-export function RunTimeline({ events, nodes, def, run, forgeRefs, activeSessionId, onSend, onDecide, onOpenSession }: RunTimelineProps) {
+interface RetestProgress {
+  phase: Exclude<ForgeRetestState, 'idle'>;
+  baselineCiStatus: string | null;
+}
+
+export function RunTimeline({ events, nodes, def, run, forgeRefs, activeSessionId, onSend, onDecide, onRetest, onOpenSession }: RunTimelineProps) {
   const [text, setText] = useState('');
   const [expandedSegments, setExpandedSegments] = useState<Set<string>>(new Set());
+  const [retestProgress, setRetestProgress] = useState<Record<string, RetestProgress>>({});
+  const retestLocks = useRef(new Set<string>());
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
@@ -274,6 +302,50 @@ export function RunTimeline({ events, nodes, def, run, forgeRefs, activeSessionI
     }
     return map;
   }, [forgeRefs]);
+
+  const handleRetest = useCallback((forgeRef: ForgeRefRow) => {
+    if (!isForgeRetestEligible(forgeRef) || retestLocks.current.has(forgeRef.id)) return;
+    retestLocks.current.add(forgeRef.id);
+    setRetestProgress((prev) => ({
+      ...prev,
+      [forgeRef.id]: { phase: 'posting', baselineCiStatus: forgeRef.ciStatus },
+    }));
+    void onRetest(forgeRef.id).then(
+      () => {
+        setRetestProgress((prev) => ({
+          ...prev,
+          [forgeRef.id]: { phase: 'pending', baselineCiStatus: forgeRef.ciStatus },
+        }));
+      },
+      () => {
+        retestLocks.current.delete(forgeRef.id);
+        setRetestProgress((prev) => {
+          const next = { ...prev };
+          delete next[forgeRef.id];
+          return next;
+        });
+      },
+    );
+  }, [onRetest]);
+
+  // poller 改变 CI 状态（或停止跟踪）后，解除“等待确认”锁。
+  useEffect(() => {
+    setRetestProgress((prev) => {
+      let next = prev;
+      for (const [refId, progress] of Object.entries(prev)) {
+        if (progress.phase !== 'pending') continue;
+        const ref = forgeRefs.find((candidate) => candidate.id === refId);
+        const confirmed = !ref
+          || ref.active !== 'yes'
+          || (ref.ciStatus !== null && ref.ciStatus !== progress.baselineCiStatus);
+        if (!confirmed) continue;
+        if (next === prev) next = { ...prev };
+        delete next[refId];
+        retestLocks.current.delete(refId);
+      }
+      return next;
+    });
+  }, [forgeRefs, retestProgress]);
 
   // 审批状态（从 events 重建）
   const approvals = useMemo(() => {
@@ -381,7 +453,7 @@ export function RunTimeline({ events, nodes, def, run, forgeRefs, activeSessionI
           out.push({
             key: `fr-${row.seq}`,
             seq: row.seq,
-            el: <ForgeCard forgeRef={fr ?? { id: '', forge: p.forge as 'gitcode' | 'github', kind: 'pr', repo: p.repo, number: p.number, runId: run.id, nodeId: p.nodeId ?? null, sessionId: null, ciStatus: null, snapshot: null, active: 'yes' }} />,
+            el: <ForgeCard forgeRef={fr ?? { id: '', forge: p.forge as 'gitcode' | 'github', kind: 'pr', repo: p.repo, number: p.number, runId: run.id, nodeId: p.nodeId ?? null, sessionId: null, ciStatus: null, snapshot: null, active: 'yes' }} retestState={fr ? retestProgress[fr.id]?.phase : undefined} onRetest={fr ? () => handleRetest(fr) : undefined} />,
           });
         } else if (row.type === 'forge.pr_state') {
           const p = row.payload as { forge: string; repo: string; number: number; state: string };
@@ -389,7 +461,7 @@ export function RunTimeline({ events, nodes, def, run, forgeRefs, activeSessionI
           out.push({
             key: `prs-${row.seq}`,
             seq: row.seq,
-            el: <ForgeCard forgeRef={fr ?? { id: '', forge: p.forge as 'gitcode' | 'github', kind: 'pr', repo: p.repo, number: p.number, runId: run.id, nodeId: null, sessionId: null, ciStatus: null, snapshot: null, active: 'yes' }} prState={p.state} />,
+            el: <ForgeCard forgeRef={fr ?? { id: '', forge: p.forge as 'gitcode' | 'github', kind: 'pr', repo: p.repo, number: p.number, runId: run.id, nodeId: null, sessionId: null, ciStatus: null, snapshot: null, active: 'yes' }} prState={p.state} retestState={fr ? retestProgress[fr.id]?.phase : undefined} onRetest={fr ? () => handleRetest(fr) : undefined} />,
           });
         } else if (row.type === 'forge.ci') {
           const p = row.payload as { forge: string; repo: string; number: number; state: string };
@@ -397,7 +469,7 @@ export function RunTimeline({ events, nodes, def, run, forgeRefs, activeSessionI
           out.push({
             key: `ci-${row.seq}`,
             seq: row.seq,
-            el: <ForgeCard forgeRef={fr ?? { id: '', forge: p.forge as 'gitcode' | 'github', kind: 'pr', repo: p.repo, number: p.number, runId: run.id, nodeId: null, sessionId: null, ciStatus: null, snapshot: null, active: 'yes' }} ciState={p.state} />,
+            el: <ForgeCard forgeRef={fr ?? { id: '', forge: p.forge as 'gitcode' | 'github', kind: 'pr', repo: p.repo, number: p.number, runId: run.id, nodeId: null, sessionId: null, ciStatus: null, snapshot: null, active: 'yes' }} ciState={p.state} retestState={fr ? retestProgress[fr.id]?.phase : undefined} onRetest={fr ? () => handleRetest(fr) : undefined} />,
           });
         } else if (row.type === 'forge.conflict') {
           const p = row.payload as { forge: string; repo: string; number: number };
@@ -459,7 +531,7 @@ export function RunTimeline({ events, nodes, def, run, forgeRefs, activeSessionI
     flushSegment();
 
     return out.sort((a, b) => a.seq - b.seq);
-  }, [events, nodeBySession, nodeDefById, forgeRefByKey, approvals, expandedSegments, nodes, run.id, onDecide]);
+  }, [events, nodeBySession, nodeDefById, forgeRefByKey, approvals, expandedSegments, nodes, run.id, onDecide, retestProgress, handleRetest]);
 
   // ---- 智能滚动（仿 SessionView）----
 

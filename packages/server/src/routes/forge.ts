@@ -5,6 +5,7 @@ import * as z from 'zod';
 import { getDb, schema } from '../db/index';
 import { pollOnce } from '../forge/poller';
 import { getForge } from '../forge/registry';
+import { ForgeRetestError, forgeRetestService } from '../forge/retest';
 import { anyForgeToken, userForgeToken } from '../forge/tokens';
 
 const createRefSchema = z.object({
@@ -35,6 +36,18 @@ export async function registerForgeRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { id: string } }>('/api/forge/refs/:id', async (req) => {
     await getDb().update(schema.forgeRefs).set({ active: 'no' }).where(eq(schema.forgeRefs.id, req.params.id));
     return { ok: true };
+  });
+
+  /** 使用请求者本人绑定的 token 给活跃 GitCode PR 发布 /retest，后续状态仍由 poller 确认 */
+  app.post<{ Params: { id: string } }>('/api/forge/refs/:id/retest', async (req, reply) => {
+    try {
+      return await forgeRetestService.request(req.params.id, req.user?.id);
+    } catch (err) {
+      if (err instanceof ForgeRetestError) {
+        return reply.code(err.statusCode).send({ error: err.message });
+      }
+      throw err;
+    }
   });
 
   /** 客户端连通性冒烟：透传一次归一化 PR 查询（优先请求者自己的 token） */

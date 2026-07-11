@@ -26,6 +26,25 @@ const NODE_TONE: Record<string, BadgeTone> = {
   skipped: 'neutral',
 };
 
+export interface RunRetestActionDependencies {
+  request(refId: string): Promise<{ ok: true; confirmation: 'pending' }>;
+  success(message: string): void;
+  error(message: string): void;
+  refresh(): void;
+}
+
+export async function runRetestAction(refId: string, deps: RunRetestActionDependencies): Promise<void> {
+  try {
+    await deps.request(refId);
+    deps.success('已发送 /retest，等待 CI 状态确认');
+    deps.refresh();
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    deps.error(`CI 重跑失败：${detail}`);
+    throw err;
+  }
+}
+
 export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpenSession: (id: string) => void; onBack: () => void }) {
   const [mode, setMode] = useState<'thread' | 'graph'>('thread');
 
@@ -150,6 +169,13 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
     api.send(sid, text).catch((e) => toast.error(`发送失败：${e}`));
   }, [activeSessionId]);
 
+  const handleRetest = useCallback((refId: string) => runRetestAction(refId, {
+    request: api.retestForgeRef,
+    success: toast.success,
+    error: toast.error,
+    refresh: refreshThread,
+  }), [refreshThread]);
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <header className="flex items-center justify-between gap-3 border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
@@ -205,6 +231,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
           activeSessionId={activeSessionId}
           onSend={handleSend}
           onDecide={handleDecide}
+          onRetest={handleRetest}
           onOpenSession={onOpenSession}
         />
       ) : mode === 'graph' ? (
