@@ -636,6 +636,69 @@ describeSt('server ST: API + runner websocket', () => {
     expect(emptyArchive.json()).toEqual({ sessions: [] });
   });
 
+  it('persists a workflow run title across list, detail, thread, and server reloads', async () => {
+    const db = getDb();
+    const defId = 'workflow-run-title-def';
+    const runId = 'workflow-run-title-st';
+    const graph = {
+      name: 'Release pipeline',
+      nodes: [{ id: 'implement', type: 'agent', prompt: 'Ship the release' }],
+      edges: [],
+    };
+    await db.insert(schema.workflowDefs).values({ id: defId, name: graph.name, graph });
+    await db.insert(schema.workflowRuns).values({ id: runId, defId });
+
+    const renamed = await app!.inject({
+      method: 'PATCH',
+      url: `/api/runs/${runId}`,
+      payload: { title: '  Production rollout  ' },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toEqual({ ok: true, run: { id: runId, title: 'Production rollout' } });
+
+    const [persisted] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+    expect(persisted?.title).toBe('Production rollout');
+
+    await app!.close();
+    app = null;
+    await closeDb();
+    await startApp();
+
+    const list = await app!.inject({ method: 'GET', url: '/api/runs' });
+    expect(list.statusCode).toBe(200);
+    expect(list.json()).toMatchObject({
+      runs: [expect.objectContaining({ id: runId, title: 'Production rollout', defName: 'Release pipeline' })],
+    });
+
+    const detail = await app!.inject({ method: 'GET', url: `/api/runs/${runId}` });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json()).toMatchObject({ run: { id: runId, title: 'Production rollout' } });
+
+    const thread = await app!.inject({ method: 'GET', url: `/api/runs/${runId}/thread` });
+    expect(thread.statusCode).toBe(200);
+    expect(thread.json()).toMatchObject({ run: { id: runId, title: 'Production rollout' } });
+
+    for (const payload of [
+      { title: '   ' },
+      { title: 'x'.repeat(121) },
+      { title: 'Unexpected field', extra: true },
+      {},
+    ]) {
+      const invalid = await app!.inject({ method: 'PATCH', url: `/api/runs/${runId}`, payload });
+      expect(invalid.statusCode).toBe(400);
+    }
+
+    const missing = await app!.inject({
+      method: 'PATCH',
+      url: '/api/runs/missing-run',
+      payload: { title: 'Missing run title' },
+    });
+    expect(missing.statusCode).toBe(404);
+
+    const [unchanged] = await getDb().select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+    expect(unchanged?.title).toBe('Production rollout');
+  });
+
   it('archives and restores a terminal workflow run without changing linked history', async () => {
     const db = getDb();
     const defId = 'workflow-run-archive-def';

@@ -101,6 +101,7 @@ export interface RunRow {
   /** server 已返回（leftJoin workflow_defs），前端补上类型 */
   defName?: string | null;
   projectId: string | null;
+  title: string | null;
   status: string;
   context: { vars: Record<string, string>; outputs: Record<string, string> };
   startedAt: string;
@@ -308,6 +309,12 @@ export const api = {
   archivedRuns: () => fetch('/api/runs?archived=true').then((r) => j<{ runs: RunRow[] }>(r)).then((d) => d.runs),
   run: (runId: string) =>
     fetch(`/api/runs/${runId}`).then((r) => j<{ run: RunRow; def: WorkflowDefRow; nodes: NodeStateRow[] }>(r)),
+  renameRun: (runId: string, title: string) =>
+    fetch(`/api/runs/${runId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title }),
+    }).then((r) => j<{ ok: true; run: Pick<RunRow, 'id' | 'title'> }>(r)),
   cancelRun: (runId: string) => post(`/api/runs/${runId}/cancel`, {}).then((r) => j<{ ok: boolean }>(r)),
   pauseRun: (runId: string) => post(`/api/runs/${runId}/pause`, {}).then((r) => j<RunProgressionResult>(r)),
   resumeRun: (runId: string) => post(`/api/runs/${runId}/resume`, {}).then((r) => j<RunProgressionResult>(r)),

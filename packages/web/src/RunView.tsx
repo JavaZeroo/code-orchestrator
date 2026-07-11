@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowLeft, ExternalLink, Pause, Play, RefreshCw } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Check, ExternalLink, Pause, Pencil, Play, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type ApprovalRow, type ForgeRefRow, type NodeStateRow, type RunRetryResult, type RunRow, type WorkflowDefRow } from './api';
@@ -8,6 +8,7 @@ import { Markdown } from './components/Markdown';
 import { Button } from './components/ui/button';
 import { Badge, StatusDot, type BadgeTone } from './components/ui/primitives';
 import { invalidate } from './lib/queries';
+import { normalizeRunTitle, RUN_TITLE_MAX_LENGTH, runDisplayTitle } from './lib/runTitle';
 import { useRunEvents } from './useEvents';
 
 const RUN_META: Record<string, { label: string; tone: BadgeTone; live?: boolean }> = {
@@ -27,6 +28,72 @@ const NODE_TONE: Record<string, BadgeTone> = {
   pending: 'neutral',
   skipped: 'neutral',
 };
+
+export function RunTitleEditor({
+  title,
+  draft,
+  editing,
+  saving,
+  onEdit,
+  onDraftChange,
+  onCancel,
+  onSave,
+}: {
+  title: string;
+  draft: string;
+  editing: boolean;
+  saving: boolean;
+  onEdit: () => void;
+  onDraftChange: (value: string) => void;
+  onCancel: () => void;
+  onSave: (title: string) => void;
+}) {
+  const normalized = normalizeRunTitle(draft);
+  if (!editing) {
+    return (
+      <div className="group flex min-w-0 items-center gap-1">
+        <div className="truncate font-display text-[14px] font-semibold text-ink" title={title}>{title}</div>
+        <button
+          type="button"
+          aria-label="重命名运行"
+          title="重命名运行"
+          className="shrink-0 rounded p-1 text-faint opacity-0 transition-opacity hover:bg-panel-2 hover:text-ink group-hover:opacity-100 focus:opacity-100"
+          onClick={onEdit}
+        >
+          <Pencil size={12} />
+        </button>
+      </div>
+    );
+  }
+  return (
+    <form
+      className="flex min-w-0 items-center gap-1"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (normalized) onSave(normalized);
+      }}
+    >
+      <input
+        autoFocus
+        aria-label="运行标题"
+        value={draft}
+        maxLength={RUN_TITLE_MAX_LENGTH}
+        disabled={saving}
+        className="h-7 min-w-48 rounded-md border border-accent bg-bg-2 px-2 text-[13px] text-ink outline-none"
+        onChange={(event) => onDraftChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') onCancel();
+        }}
+      />
+      <Button type="submit" variant="ghost" size="icon-sm" aria-label="保存运行标题" title="保存" disabled={!normalized || saving}>
+        <Check size={13} />
+      </Button>
+      <Button type="button" variant="ghost" size="icon-sm" aria-label="取消重命名" title="取消" disabled={saving} onClick={onCancel}>
+        <X size={13} />
+      </Button>
+    </form>
+  );
+}
 
 export interface RunRetestActionDependencies {
   request(refId: string): Promise<{ ok: true; confirmation: 'pending' }>;
@@ -150,6 +217,9 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
   const [retrying, setRetrying] = useState(false);
   const [updatingProgression, setUpdatingProgression] = useState(false);
   const [updatingArchive, setUpdatingArchive] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [savingTitle, setSavingTitle] = useState(false);
 
   // ---- 共享数据（graph 模式用）----
   const [run, setRun] = useState<RunRow | null>(null);
@@ -254,6 +324,9 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
   const retryEligible = isRunRetryEligible(effectiveRun);
   const progressionMode = runProgressionMode(effectiveRun);
   const archiveMode = runArchiveMode(effectiveRun);
+  const effectiveTitle = effectiveRun
+    ? runDisplayTitle(effectiveRun, effectiveDef?.name)
+    : effectiveDef?.name ?? runId;
 
   // 共享的 decide 处理
   const handleDecide = useCallback((id: string, b: 'allow' | 'deny') => {
@@ -339,6 +412,23 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
       .finally(() => setUpdatingProgression(false));
   }, [progressionMode, runId, updatingProgression]);
 
+  const handleRename = useCallback((title: string) => {
+    setSavingTitle(true);
+    api.renameRun(runId, title)
+      .then(({ run: changed }) => {
+        const applyTitle = (current: RunRow | null) => current ? { ...current, title: changed.title } : null;
+        setRun(applyTitle);
+        setThreadRun(applyTitle);
+        setTitleDraft(changed.title ?? title);
+        setEditingTitle(false);
+        invalidate('runs');
+        invalidate('archived-runs');
+        toast('运行标题已更新');
+      })
+      .catch((error) => toast.error(`重命名失败：${error}`))
+      .finally(() => setSavingTitle(false));
+  }, [runId]);
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <header className="flex items-center justify-between gap-3 border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
@@ -346,7 +436,22 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
           <Button variant="ghost" size="sm" onClick={onBack}>
             <ArrowLeft size={14} /> 返回
           </Button>
-          <span className="truncate font-display text-[14px] font-semibold text-ink">{effectiveDef?.name ?? runId}</span>
+          <RunTitleEditor
+            title={effectiveTitle}
+            draft={titleDraft}
+            editing={editingTitle}
+            saving={savingTitle}
+            onEdit={() => {
+              setTitleDraft(effectiveTitle);
+              setEditingTitle(true);
+            }}
+            onDraftChange={setTitleDraft}
+            onCancel={() => {
+              setTitleDraft(effectiveTitle);
+              setEditingTitle(false);
+            }}
+            onSave={handleRename}
+          />
           <span className="mono-nums text-[11px] text-faint">run {runId.slice(0, 8)}</span>
         </div>
         <div className="flex shrink-0 items-center gap-2">

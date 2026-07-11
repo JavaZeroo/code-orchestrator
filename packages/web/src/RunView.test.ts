@@ -10,9 +10,11 @@ import {
   runRetryAction,
   RunRetryAction,
   runRetestAction,
+  RunTitleEditor,
   type RunRetryActionDependencies,
   type RunRetestActionDependencies,
 } from './RunView';
+import { RUN_TITLE_MAX_LENGTH } from './lib/runTitle';
 
 function dependencies(overrides: Partial<RunRetestActionDependencies> = {}) {
   return {
@@ -185,5 +187,41 @@ describe('RunView retry action', () => {
     expect(deps.success).toHaveBeenCalledWith('运行已重新开始');
     expect(deps.refresh).toHaveBeenCalledWith(result);
     expect(deps.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('RunView title editor', () => {
+  const handlers = {
+    onEdit: vi.fn(),
+    onDraftChange: vi.fn(),
+    onCancel: vi.fn(),
+    onSave: vi.fn(),
+  };
+
+  it('shows the effective run title with an inline rename action', () => {
+    const markup = renderToStaticMarkup(createElement(RunTitleEditor, {
+      title: 'Production rollout',
+      draft: 'Production rollout',
+      editing: false,
+      saving: false,
+      ...handlers,
+    }));
+
+    expect(markup).toContain('Production rollout');
+    expect(markup).toContain('aria-label="重命名运行"');
+  });
+
+  it('renders a bounded editor and disables it while the title is saving', () => {
+    const markup = renderToStaticMarkup(createElement(RunTitleEditor, {
+      title: 'Production rollout',
+      draft: 'Release 2026.07',
+      editing: true,
+      saving: true,
+      ...handlers,
+    }));
+
+    expect(markup).toContain('aria-label="运行标题"');
+    expect(markup).toContain(`maxLength="${RUN_TITLE_MAX_LENGTH}"`);
+    expect(markup).toContain('disabled=""');
   });
 });
