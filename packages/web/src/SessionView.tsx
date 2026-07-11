@@ -1,4 +1,4 @@
-import { ArrowDown, Check, Code2, GitCompare, GitFork, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, Check, Code2, GitCompare, GitFork, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type ApprovalRequest, type SessionRow, type SessionUsage, type UserInputAnswers } from './api';
@@ -132,6 +132,7 @@ export function isSessionResumable(session: SessionRow, state: string, runnerOnl
   return (
     state === 'dead' &&
     runnerOnline &&
+    session.archivedAt == null &&
     session.runId == null &&
     session.containerId == null &&
     Boolean(session.nativeSessionId) &&
@@ -160,6 +161,7 @@ export function isSessionForkable(session: SessionRow, state: string, runnerOnli
   return (
     (state === 'idle' || state === 'dead') &&
     runnerOnline &&
+    session.archivedAt == null &&
     session.runId == null &&
     session.containerId == null &&
     Boolean(session.nativeSessionId) &&
@@ -184,6 +186,32 @@ export function ForkAction({
   );
 }
 
+export type SessionArchiveMode = 'archive' | 'restore';
+
+export function sessionArchiveMode(session: SessionRow, state: string): SessionArchiveMode | null {
+  if (session.archivedAt != null) return 'restore';
+  return state === 'dead' && session.runId == null ? 'archive' : null;
+}
+
+export function SessionArchiveAction({
+  mode,
+  updating,
+  onChange,
+}: {
+  mode: SessionArchiveMode | null;
+  updating: boolean;
+  onChange: () => void;
+}) {
+  if (!mode) return null;
+  const restoring = mode === 'restore';
+  return (
+    <Button variant="secondary" size="sm" disabled={updating} onClick={onChange}>
+      {restoring ? <ArchiveRestore size={12} /> : <Archive size={12} />}
+      {updating ? (restoring ? '移出中…' : '归档中…') : (restoring ? '移出归档' : '归档')}
+    </Button>
+  );
+}
+
 export function SessionView({ session, onForked }: { session: SessionRow; onForked?: (sessionId: string) => void }) {
   const events = useSessionEvents(session.id);
   const { data: machines = [] } = useMachines();
@@ -196,6 +224,7 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
   const [showDiff, setShowDiff] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [forking, setForking] = useState(false);
+  const [updatingArchive, setUpdatingArchive] = useState(false);
   const resumeAfterSeqRef = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -328,10 +357,26 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
         setTitleDraft(title);
         setEditingTitle(false);
         invalidate('sessions');
+        invalidate('archived-sessions');
         toast('会话标题已更新');
       })
       .catch((error) => toast.error(`重命名失败：${error}`))
       .finally(() => setSavingTitle(false));
+  };
+
+  const archiveMode = sessionArchiveMode(session, state);
+  const doChangeArchive = () => {
+    if (!archiveMode) return;
+    setUpdatingArchive(true);
+    const request = archiveMode === 'archive' ? api.archiveSession(session.id) : api.restoreSession(session.id);
+    request
+      .then(() => {
+        invalidate('sessions');
+        invalidate('archived-sessions');
+        toast(archiveMode === 'archive' ? '会话已归档' : '会话已移回历史');
+      })
+      .catch((error) => toast.error(`${archiveMode === 'archive' ? '归档' : '恢复'}失败：${error}`))
+      .finally(() => setUpdatingArchive(false));
   };
 
   const resumable = isSessionResumable(session, state, machine?.id === session.machineId);
@@ -379,6 +424,7 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
             <GitCompare size={13} /> 变更
           </Button>
           <Badge tone={meta.tone}>{meta.label}</Badge>
+          <SessionArchiveAction mode={archiveMode} updating={updatingArchive} onChange={doChangeArchive} />
           <ForkAction visible={forkable} forking={forking} onFork={doFork} />
           <ResumeAction visible={resumable} resuming={resuming} onResume={doResume} />
           {busy && (

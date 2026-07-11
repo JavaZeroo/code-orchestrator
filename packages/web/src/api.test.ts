@@ -80,6 +80,32 @@ describe('api client', () => {
     });
   });
 
+  it('lists archived sessions separately and posts archive state changes', async () => {
+    const archivedAt = '2026-07-11T04:00:00.000Z';
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ sessions: [{ id: 's1', archivedAt }] }))
+      .mockResolvedValueOnce(Response.json({ ok: true, session: { id: 's1', archivedAt } }))
+      .mockResolvedValueOnce(Response.json({ ok: true, session: { id: 's1', archivedAt: null } }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.archivedSessions()).resolves.toEqual([{ id: 's1', archivedAt }]);
+    await expect(api.archiveSession('s1')).resolves.toEqual({ ok: true, session: { id: 's1', archivedAt } });
+    await expect(api.restoreSession('s1')).resolves.toEqual({ ok: true, session: { id: 's1', archivedAt: null } });
+
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/sessions?archived=true');
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/sessions/s1/archive', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(fetch).toHaveBeenNthCalledWith(3, '/api/sessions/s1/restore', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  });
+
   it('persists machine scheduling pause through the machine API', async () => {
     const fetch = mockFetch(Response.json({ ok: true }));
 

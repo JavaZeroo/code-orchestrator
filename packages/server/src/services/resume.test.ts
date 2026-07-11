@@ -16,6 +16,7 @@ const eligible: ResumeSessionRecord = {
   nativeSessionId: 'native-1',
   runId: null,
   containerId: null,
+  archivedAt: null,
   createdBy: 'user-1',
 };
 
@@ -38,6 +39,7 @@ describe('resumeBlockReason', () => {
     expect(resumeBlockReason({ ...eligible, state: 'idle' }, true)).toBe('session is not dead');
     expect(resumeBlockReason({ ...eligible, runId: 'run-1' }, true)).toContain('workflow');
     expect(resumeBlockReason({ ...eligible, containerId: 'container-1' }, true)).toContain('container');
+    expect(resumeBlockReason({ ...eligible, archivedAt: new Date() }, true)).toContain('restored');
     expect(resumeBlockReason({ ...eligible, nativeSessionId: null }, true)).toContain('native session ID');
     expect(resumeBlockReason(eligible, false)).toContain('offline');
   });

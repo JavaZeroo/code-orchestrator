@@ -35,6 +35,7 @@ export interface ForkSessionRecord {
   runId: string | null;
   projectId: string | null;
   containerId: string | null;
+  archivedAt: Date | null;
   createdBy: string | null;
 }
 
@@ -67,6 +68,7 @@ export interface ForkDependencies {
 }
 
 export function forkBlockReason(session: ForkSessionRecord, runnerOnline: boolean): string | null {
+  if (session.archivedAt !== null) return 'archived sessions must be restored before forking';
   if (session.state !== 'idle' && session.state !== 'dead') return `session is busy: ${session.state}`;
   if (session.runId !== null) return 'workflow sessions cannot be forked manually';
   if (session.containerId !== null) return 'container sessions cannot be forked';

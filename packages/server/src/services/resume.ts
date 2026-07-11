@@ -28,6 +28,7 @@ export interface ResumeSessionRecord {
   nativeSessionId: string | null;
   runId: string | null;
   containerId: string | null;
+  archivedAt: Date | null;
   createdBy: string | null;
 }
 
@@ -45,6 +46,7 @@ export interface ResumeDependencies {
 }
 
 export function resumeBlockReason(session: ResumeSessionRecord, runnerOnline: boolean): string | null {
+  if (session.archivedAt !== null) return 'archived sessions must be restored before resuming';
   if (session.state !== 'dead') return 'session is not dead';
   if (session.runId !== null) return 'workflow sessions cannot be resumed manually';
   if (session.containerId !== null) return 'container sessions cannot be resumed';
@@ -69,6 +71,7 @@ const productionDependencies: ResumeDependencies = {
           eq(schema.sessions.state, 'dead'),
           isNull(schema.sessions.runId),
           isNull(schema.sessions.containerId),
+          isNull(schema.sessions.archivedAt),
           isNotNull(schema.sessions.nativeSessionId),
           inArray(schema.sessions.agent, ['claude', 'codex']),
         ),
