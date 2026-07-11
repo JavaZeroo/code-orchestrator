@@ -62,6 +62,10 @@ export function listMachines(): MachineInfo[] {
     .filter((m): m is MachineInfo => m !== null);
 }
 
+export function isRunnerOnline(machineId: string): boolean {
+  return runners.has(machineId);
+}
+
 export async function callRunner<M extends RunnerMethodName>(
   machineId: string,
   method: M,

@@ -47,6 +47,25 @@ describe('runnerMethods contracts', () => {
     });
     expect(parsed.container?.containerId).toBe('c1');
   });
+
+  it('validates host session resume parameters', () => {
+    expect(
+      runnerMethods['session.resume'].params.parse({
+        sessionId: 's1',
+        agent: 'codex',
+        cwd: '/workspace',
+        nativeSessionId: 'thread-1',
+      }),
+    ).toMatchObject({ sessionId: 's1', agent: 'codex', nativeSessionId: 'thread-1' });
+    expect(() =>
+      runnerMethods['session.resume'].params.parse({
+        sessionId: 's1',
+        agent: 'opencode',
+        cwd: '/workspace',
+        nativeSessionId: 'native-1',
+      }),
+    ).toThrow();
+  });
 });
 
 describe('serverMethods contracts', () => {

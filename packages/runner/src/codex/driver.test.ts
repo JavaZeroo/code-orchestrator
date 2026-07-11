@@ -26,7 +26,7 @@ class FakeCodexProcess extends EventEmitter {
   readonly kill = vi.fn();
 }
 
-function createFixture() {
+function createFixture(resumeNativeSessionId?: string) {
   const child = new FakeCodexProcess();
   const outbound: RpcMessage[] = [];
   let buffered = '';
@@ -45,6 +45,11 @@ function createFixture() {
         setImmediate(() =>
           child.stdout.write(`${JSON.stringify({ id: message.id, result: { thread: { id: 'thread-1' } } })}\n`),
         );
+      } else if (message.method === 'thread/resume') {
+        const threadId = (message.params as { threadId?: string } | undefined)?.threadId ?? 'thread-1';
+        setImmediate(() =>
+          child.stdout.write(`${JSON.stringify({ id: message.id, result: { thread: { id: threadId } } })}\n`),
+        );
       }
     }
   });
@@ -61,6 +66,7 @@ function createFixture() {
   const session = new CodexSession(
     { sessionId: 'session-1', agent: 'codex', cwd: '/tmp/work' },
     emit,
+    resumeNativeSessionId,
   );
 
   return {
@@ -71,6 +77,27 @@ function createFixture() {
     sendFromCodex: (message: RpcMessage) => child.stdout.write(`${JSON.stringify(message)}\n`),
   };
 }
+
+describe('CodexSession resume', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uses thread/resume with the persisted native thread ID', async () => {
+    const fixture = createFixture('thread-existing');
+    fixture.session.start();
+
+    await vi.waitFor(() => expect(fixture.session.state).toBe('idle'));
+    expect(fixture.outbound).toContainEqual(
+      expect.objectContaining({
+        method: 'thread/resume',
+        params: expect.objectContaining({ threadId: 'thread-existing', cwd: '/tmp/work' }),
+      }),
+    );
+    expect(fixture.outbound).not.toContainEqual(expect.objectContaining({ method: 'thread/start' }));
+    expect(fixture.session.nativeSessionId).toBe('thread-existing');
+  });
+});
 
 describe('CodexSession interactive questions', () => {
   beforeEach(() => {

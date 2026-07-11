@@ -1,13 +1,14 @@
-import { ArrowDown, Code2, GitCompare, Send, Square, X } from 'lucide-react';
+import { ArrowDown, Code2, GitCompare, RotateCcw, Send, Square, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, type ApprovalRequest, type MachineRow, type SessionRow, type SessionUsage, type UserInputAnswers } from './api';
+import { api, type ApprovalRequest, type SessionRow, type SessionUsage, type UserInputAnswers } from './api';
 import { UnifiedDiff } from './components/DiffView';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
 import { Button } from './components/ui/button';
 import { Badge, StatusDot, Textarea, type BadgeTone } from './components/ui/primitives';
 import { useSessionEvents } from './useEvents';
 import { isCodexUserInputRequest, Timeline, type ApprovalItem } from './Timeline';
+import { useMachines } from './lib/queries';
 import { fmtCost, fmtTokens, shortModel } from './lib/utils';
 
 const STATE_META: Record<string, { label: string; tone: BadgeTone; live?: boolean }> = {
@@ -54,16 +55,47 @@ function DiffDialog({ sessionId, open, onOpenChange }: { sessionId: string; open
   );
 }
 
+export function isSessionResumable(session: SessionRow, state: string, runnerOnline: boolean): boolean {
+  return (
+    state === 'dead' &&
+    runnerOnline &&
+    session.runId == null &&
+    session.containerId == null &&
+    Boolean(session.nativeSessionId) &&
+    (session.agent === 'claude' || session.agent === 'codex')
+  );
+}
+
+export function ResumeAction({
+  visible,
+  resuming,
+  onResume,
+}: {
+  visible: boolean;
+  resuming: boolean;
+  onResume: () => void;
+}) {
+  if (!visible) return null;
+  return (
+    <Button variant="success" size="sm" disabled={resuming} onClick={onResume}>
+      <RotateCcw size={12} /> {resuming ? '恢复中…' : '恢复会话'}
+    </Button>
+  );
+}
+
 export function SessionView({ session }: { session: SessionRow }) {
   const events = useSessionEvents(session.id);
+  const { data: machines = [] } = useMachines();
   const [text, setText] = useState('');
-  const [machine, setMachine] = useState<MachineRow | null>(null);
   const [showDiff, setShowDiff] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const resumeAfterSeqRef = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const NEAR_BOTTOM = 80;
+  const machine = machines.find((item) => item.id === session.machineId) ?? null;
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -72,10 +104,6 @@ export function SessionView({ session }: { session: SessionRow }) {
     atBottomRef.current = near;
     if (near) setShowJump(false);
   };
-
-  useEffect(() => {
-    api.machines().then((ms) => setMachine(ms.find((m) => m.id === session.machineId) ?? null)).catch(() => {});
-  }, [session.machineId]);
 
   const { state, usage } = useMemo(() => {
     let st = session.state;
@@ -127,6 +155,14 @@ export function SessionView({ session }: { session: SessionRow }) {
     [approvals],
   );
 
+  useEffect(() => {
+    if (!resuming) return;
+    const runnerStateArrived = events.some(
+      (event) => event.type === 'session.state' && event.seq > resumeAfterSeqRef.current,
+    );
+    if (runnerStateArrived) setResuming(false);
+  }, [events, resuming]);
+
   const handleApprovalError = (error: unknown) => {
     // 已被处理（其他端/自动决策）：降级为提示，等增量轮询把 decided 事件补回来
     if (String(error).includes('already')) toast.info('该请求已被处理，状态稍后同步');
@@ -140,12 +176,25 @@ export function SessionView({ session }: { session: SessionRow }) {
 
   const doSend = () => {
     const t = text.trim();
-    if (!t || dead) {
+    if (!t || dead || resuming) {
       return;
     }
     setText('');
     api.send(session.id, t).catch((e) => toast.error(`发送失败：${e}`));
   };
+
+  const doResume = () => {
+    resumeAfterSeqRef.current = events.reduce((max, event) => Math.max(max, event.seq), 0);
+    setResuming(true);
+    api.resume(session.id)
+      .then(() => toast('正在恢复原会话…'))
+      .catch((e) => {
+        setResuming(false);
+        toast.error(`恢复失败：${e}`);
+      });
+  };
+
+  const resumable = isSessionResumable(session, state, machine?.id === session.machineId);
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -174,6 +223,7 @@ export function SessionView({ session }: { session: SessionRow }) {
             <GitCompare size={13} /> 变更
           </Button>
           <Badge tone={meta.tone}>{meta.label}</Badge>
+          <ResumeAction visible={resumable} resuming={resuming} onResume={doResume} />
           {busy && (
             <Button
               variant="secondary"
@@ -232,8 +282,8 @@ export function SessionView({ session }: { session: SessionRow }) {
         <Textarea
           value={text}
           rows={2}
-          placeholder={dead ? '会话已结束' : '输入消息，Enter 发送，Shift+Enter 换行'}
-          disabled={dead}
+          placeholder={resuming ? '正在恢复原会话…' : dead ? '会话已结束' : '输入消息，Enter 发送，Shift+Enter 换行'}
+          disabled={dead || resuming}
           className="resize-none"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -243,7 +293,7 @@ export function SessionView({ session }: { session: SessionRow }) {
             }
           }}
         />
-        <Button variant="default" size="icon" className="h-auto w-11 shrink-0" disabled={dead || !text.trim()} onClick={doSend}>
+        <Button variant="default" size="icon" className="h-auto w-11 shrink-0" disabled={dead || resuming || !text.trim()} onClick={doSend}>
           <Send size={15} />
         </Button>
       </footer>

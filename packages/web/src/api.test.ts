@@ -44,6 +44,17 @@ describe('api client', () => {
     });
   });
 
+  it('posts session resume to the existing session resource', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, sessionId: 's1' }));
+
+    await expect(api.resume('s1')).resolves.toEqual({ ok: true, sessionId: 's1' });
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/s1/resume', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  });
+
   it('persists machine scheduling pause through the machine API', async () => {
     const fetch = mockFetch(Response.json({ ok: true }));
 

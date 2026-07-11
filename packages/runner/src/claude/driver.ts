@@ -107,8 +107,10 @@ export class ClaudeSession {
   constructor(
     private readonly params: RunnerParams<'session.spawn'>,
     private readonly emit: DriverEmit,
+    private readonly resumeNativeSessionId?: string,
   ) {
     this.sessionId = params.sessionId;
+    this.nativeSessionId = resumeNativeSessionId;
   }
 
   /** 拉起 SDK 循环（后台运行，错误经 service envelope 上报） */
@@ -316,6 +318,7 @@ export class ClaudeSession {
       env,
       abortController: this.abort,
       canUseTool: this.canUseTool,
+      resume: this.resumeNativeSessionId,
       // 把 claude CLI 的 stderr 透出来（容器内诊断用；平时也有助定位 CLI 层错误）
       stderr: (data: string) => process.stderr.write(`[claude-cli] ${data}`),
     };
@@ -345,7 +348,7 @@ export class ClaudeSession {
 
     for await (const message of this.q) {
       if (message.type === 'system' && (message as { subtype?: string }).subtype === 'init') {
-        const nativeId = (message as { session_id?: string }).session_id;
+        const nativeId = (message as { session_id?: string }).session_id ?? this.resumeNativeSessionId;
         if (nativeId) {
           this.nativeSessionId = nativeId;
         }

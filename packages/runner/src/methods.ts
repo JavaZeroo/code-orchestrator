@@ -39,12 +39,16 @@ export interface RunnerContext {
 export { listSessionStates };
 
 export function createRunnerMethodHandler(ctx: RunnerContext) {
-  function createHostSession(p: RunnerParams<'session.spawn'>, emit: DriverEmit): RunnerSession {
+  function createHostSession(
+    p: RunnerParams<'session.spawn'>,
+    emit: DriverEmit,
+    resumeNativeSessionId?: string,
+  ): RunnerSession {
     switch (p.agent) {
       case 'claude':
-        return new ClaudeSession(p, emit);
+        return new ClaudeSession(p, emit, resumeNativeSessionId);
       case 'codex':
-        return new CodexSession(p, emit);
+        return new CodexSession(p, emit, resumeNativeSessionId);
       default:
         throw new Error(`agent "${p.agent}" not supported yet`);
     }
@@ -137,6 +141,33 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
         addSession(session);
         session.start();
         return { ok: true };
+      }
+      case 'session.resume': {
+        const p = runnerMethods['session.resume'].params.parse(params);
+        const existing = getSession(p.sessionId);
+        if (existing && existing.state !== 'dead') {
+          return { ok: false, error: `session already running: ${p.sessionId}` };
+        }
+        if (existing) {
+          removeSession(p.sessionId);
+        }
+        const emit = makeEmit(p.sessionId);
+        const spawnParams: RunnerParams<'session.spawn'> = {
+          sessionId: p.sessionId,
+          agent: p.agent,
+          cwd: p.cwd,
+          meta: p.meta,
+          env: p.env,
+        };
+        try {
+          const session = createHostSession(spawnParams, emit, p.nativeSessionId);
+          addSession(session);
+          session.start();
+          return { ok: true };
+        } catch (err) {
+          removeSession(p.sessionId);
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
       }
       case 'session.send': {
         const p = runnerMethods['session.send'].params.parse(params);
