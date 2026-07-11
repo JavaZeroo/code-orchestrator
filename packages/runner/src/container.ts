@@ -11,10 +11,8 @@ import type { RunnerParams } from '@co/protocol';
 const run = promisify(execFile);
 const EXEC_MAX_BUFFER = 16 * 1024 * 1024;
 
-/** 起容器（-d 守护），返回容器 id。 */
-export async function containerRun(
-  p: RunnerParams<'container.run'>,
-): Promise<{ ok: boolean; containerId?: string; error?: string }> {
+/** 把 container.run 参数翻译成 docker run argv。 */
+export function buildContainerRunArgs(p: RunnerParams<'container.run'>): string[] {
   const args = ['run', '-d'];
   if (p.name) {
     args.push('--name', p.name);
@@ -42,6 +40,14 @@ export async function containerRun(
   if (p.command && p.command.length > 0) {
     args.push(...p.command);
   }
+  return args;
+}
+
+/** 起容器（-d 守护），返回容器 id。 */
+export async function containerRun(
+  p: RunnerParams<'container.run'>,
+): Promise<{ ok: boolean; containerId?: string; error?: string }> {
+  const args = buildContainerRunArgs(p);
   try {
     const { stdout } = await run('docker', args, { maxBuffer: EXEC_MAX_BUFFER });
     return { ok: true, containerId: stdout.trim() };

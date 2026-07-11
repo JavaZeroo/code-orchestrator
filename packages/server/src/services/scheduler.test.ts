@@ -76,3 +76,15 @@ describe('ascend accelerator bindFlags', () => {
     expect(getAccelerator('tpu')).toBeNull();
   });
 });
+
+describe('nvidia accelerator bindFlags', () => {
+  it('产出只包含分配卡序号的 Docker --gpus 选择器', () => {
+    const a = getAccelerator('nvidia-gpu')!;
+
+    expect(a.bindFlags([0, 1])).toEqual({
+      devices: [],
+      env: {},
+      gpus: 'device=0,1',
+    });
+  });
+});

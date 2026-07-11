@@ -1,7 +1,7 @@
 /**
  * 加速器适配器（design-v2 Q4/Q8）：把「分到哪些卡」翻译成 docker run 的设备/环境。
  * 可插拔——加一种加速器 = 加一个适配器，调度器/容器逻辑一行不改（照 Forge 适配器那套）。
- * v1 只实现 Ascend；NVIDIA 留 v2（且宿主机 Docker 18.09 早于 --gpus，届时走 --runtime=nvidia）。
+ * Ascend 走逐设备绑定；NVIDIA 走 Docker --gpus 设备选择。
  */
 
 export interface BindFlags {
@@ -32,8 +32,21 @@ const ascend: AcceleratorAdapter = {
   },
 };
 
+/** NVIDIA GPU：交给 NVIDIA Container Toolkit，只暴露本次整机预留分到的卡 */
+const nvidia: AcceleratorAdapter = {
+  kind: 'nvidia-gpu',
+  bindFlags(indices) {
+    return {
+      devices: [],
+      env: {},
+      gpus: `device=${indices.join(',')}`,
+    };
+  },
+};
+
 const registry: Record<string, AcceleratorAdapter> = {
   [ascend.kind]: ascend,
+  [nvidia.kind]: nvidia,
 };
 
 export function getAccelerator(kind: string): AcceleratorAdapter | null {
