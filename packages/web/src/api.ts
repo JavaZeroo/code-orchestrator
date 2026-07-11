@@ -114,6 +114,11 @@ export interface RunRetryResult {
   retriedNodeIds: string[];
 }
 
+export interface RunProgressionResult {
+  ok: true;
+  run: Pick<RunRow, 'id' | 'status'>;
+}
+
 export interface NodeStateRow {
   runId: string;
   nodeId: string;
@@ -304,6 +309,8 @@ export const api = {
   run: (runId: string) =>
     fetch(`/api/runs/${runId}`).then((r) => j<{ run: RunRow; def: WorkflowDefRow; nodes: NodeStateRow[] }>(r)),
   cancelRun: (runId: string) => post(`/api/runs/${runId}/cancel`, {}).then((r) => j<{ ok: boolean }>(r)),
+  pauseRun: (runId: string) => post(`/api/runs/${runId}/pause`, {}).then((r) => j<RunProgressionResult>(r)),
+  resumeRun: (runId: string) => post(`/api/runs/${runId}/resume`, {}).then((r) => j<RunProgressionResult>(r)),
   retryRun: (runId: string) => post(`/api/runs/${runId}/retry`, {}).then((r) => j<RunRetryResult>(r)),
   archiveRun: (runId: string) =>
     post(`/api/runs/${runId}/archive`, {}).then((r) =>

@@ -29,7 +29,7 @@ describe('workflow run archive eligibility', () => {
     expect(workflowRunArchiveBlockReason({ ...eligible, status })).toBeNull();
   });
 
-  it.each(['running', 'waiting_human'])('rejects an active %s run', (status) => {
+  it.each(['running', 'waiting_human', 'paused'])('rejects an active %s run', (status) => {
     expect(workflowRunArchiveBlockReason({ ...eligible, status })).toContain('still active');
   });
 

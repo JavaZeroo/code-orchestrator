@@ -4,7 +4,8 @@ import postgres from 'postgres';
 import WebSocket from 'ws';
 import { createApp } from './app';
 import { closeDb, getDb, schema } from './db/index';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
+import { resumeActiveRuns, scheduleTick, serializeRunProgression } from './engine/engine';
 import { encryptSecret } from './services/crypto';
 import { markTaskDone, reconcileQueueOnce, type QueuedTask } from './services/taskQueue';
 import { getForge } from './forge/registry';
@@ -898,6 +899,128 @@ describeSt('server ST: API + runner websocket', () => {
         expect.objectContaining({ type: 'run.retried', payload: { by: 'ui', retriedNodeIds: ['deploy'] } }),
       ]),
     });
+  });
+
+  it('keeps downstream workflow work paused across restart and starts it once after resume', async () => {
+    const firstRunner = await FakeRunner.connect(baseUrl, {
+      'session.spawn': () => ({ ok: true, nativeSessionId: 'native-pause-first' }),
+    });
+    runners.push(firstRunner);
+    const machineInfo = {
+      id: 'm-run-progression',
+      name: 'Run Progression Runner',
+      labels: ['pause-st'],
+      resources: [],
+      runnerVersion: 'st',
+      startedAt: Date.now(),
+    };
+    await firstRunner.callServer('machine.register', { info: machineInfo });
+
+    const db = getDb();
+    const defId = 'workflow-run-progression-def';
+    const graph = {
+      name: 'Pause and resume pipeline',
+      nodes: [
+        { id: 'prepare', type: 'agent', prompt: 'Prepare release', machine: { labels: ['pause-st'] }, cwd: '/tmp/run-progression' },
+        { id: 'publish', type: 'agent', prompt: 'Publish release', machine: { labels: ['pause-st'] }, cwd: '/tmp/run-progression' },
+      ],
+      edges: [['prepare', 'publish']],
+    };
+    await db.insert(schema.workflowDefs).values({ id: defId, name: graph.name, graph });
+
+    const started = await app!.inject({ method: 'POST', url: `/api/workflows/${defId}/runs`, payload: { vars: {} } });
+    expect(started.statusCode).toBe(201);
+    const { runId } = started.json<{ runId: string }>();
+    await vi.waitFor(() => {
+      expect(firstRunner.calls.filter((call) => call.method === 'session.spawn')).toHaveLength(1);
+    });
+    expect(firstRunner.calls.find((call) => call.method === 'session.spawn')).toMatchObject({
+      params: { runId, nodeId: 'prepare', prompt: 'Prepare release' },
+    });
+
+    const pauseResponses = await Promise.all([
+      app!.inject({ method: 'POST', url: `/api/runs/${runId}/pause` }),
+      app!.inject({ method: 'POST', url: `/api/runs/${runId}/pause` }),
+    ]);
+    expect(pauseResponses.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+    const [paused] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+    expect(paused?.status).toBe('paused');
+
+    const [prepare] = await db
+      .select()
+      .from(schema.nodeStates)
+      .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, 'prepare')));
+    expect(prepare).toMatchObject({ status: 'running' });
+    await db
+      .update(schema.nodeStates)
+      .set({ status: 'done', output: { summary: 'release ready' }, updatedAt: new Date() })
+      .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, 'prepare')));
+    if (prepare?.sessionId) {
+      await db.update(schema.sessions).set({ state: 'dead' }).where(eq(schema.sessions.id, prepare.sessionId));
+    }
+    await db.insert(schema.events).values({
+      runId,
+      type: 'run.node.state',
+      payload: { nodeId: 'prepare', status: 'done', sessionId: prepare?.sessionId },
+    });
+    scheduleTick(runId);
+    await serializeRunProgression(runId, async () => {});
+
+    const [suppressed] = await db
+      .select()
+      .from(schema.nodeStates)
+      .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, 'publish')));
+    expect(suppressed?.status).toBe('pending');
+    expect(firstRunner.calls.filter((call) => call.method === 'session.spawn')).toHaveLength(1);
+
+    await firstRunner.close();
+    await app!.close();
+    app = null;
+    await startApp();
+
+    const secondRunner = await FakeRunner.connect(baseUrl, {
+      'session.spawn': () => ({ ok: true, nativeSessionId: 'native-pause-second' }),
+    });
+    runners.push(secondRunner);
+    await secondRunner.callServer('machine.register', { info: { ...machineInfo, startedAt: Date.now() } });
+    await resumeActiveRuns();
+    await serializeRunProgression(runId, async () => {});
+
+    const persisted = await app!.inject({ method: 'GET', url: `/api/runs/${runId}` });
+    expect(persisted.statusCode).toBe(200);
+    expect(persisted.json()).toMatchObject({ run: { id: runId, status: 'paused' } });
+    expect(secondRunner.calls.filter((call) => call.method === 'session.spawn')).toHaveLength(0);
+
+    const resumeResponses = await Promise.all([
+      app!.inject({ method: 'POST', url: `/api/runs/${runId}/resume` }),
+      app!.inject({ method: 'POST', url: `/api/runs/${runId}/resume` }),
+    ]);
+    expect(resumeResponses.map((response) => response.statusCode).sort()).toEqual([200, 409]);
+    await serializeRunProgression(runId, async () => {});
+
+    expect(secondRunner.calls.filter((call) => call.method === 'session.spawn')).toHaveLength(1);
+    expect(secondRunner.calls.find((call) => call.method === 'session.spawn')).toMatchObject({
+      params: { runId, nodeId: 'publish', prompt: 'Publish release' },
+    });
+    const states = await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, runId));
+    expect(states).toEqual(expect.arrayContaining([
+      expect.objectContaining({ nodeId: 'prepare', status: 'done' }),
+      expect.objectContaining({ nodeId: 'publish', status: 'running' }),
+    ]));
+    const progressionEvents = (await db.select().from(schema.events).where(eq(schema.events.runId, runId)))
+      .filter((event) => event.type === 'run.status');
+    expect(progressionEvents.map((event) => event.payload)).toEqual([
+      { status: 'paused', by: 'ui' },
+      { status: 'running', by: 'ui' },
+    ]);
+
+    const cancellableRunId = 'workflow-run-paused-cancellable';
+    await db.insert(schema.workflowRuns).values({ id: cancellableRunId, defId, status: 'paused' });
+    await db.insert(schema.nodeStates).values({ runId: cancellableRunId, nodeId: 'prepare', status: 'pending' });
+    const cancelled = await app!.inject({ method: 'POST', url: `/api/runs/${cancellableRunId}/cancel` });
+    expect(cancelled.statusCode).toBe(200);
+    const [cancelledRun] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, cancellableRunId));
+    expect(cancelledRun?.status).toBe('cancelled');
   });
 
   it('binds allocated NVIDIA GPUs to a container while keeping the runner exclusively reserved', async () => {

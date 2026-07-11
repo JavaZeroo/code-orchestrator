@@ -48,7 +48,7 @@ describe('workflow run retry eligibility', () => {
   it('allows only unarchived failed runs', () => {
     expect(workflowRunRetryBlockReason(failedRun)).toBeNull();
     expect(workflowRunRetryBlockReason({ ...failedRun, archivedAt: new Date() })).toContain('restored');
-    for (const status of ['running', 'waiting_human', 'done', 'cancelled']) {
+    for (const status of ['running', 'waiting_human', 'paused', 'done', 'cancelled']) {
       expect(workflowRunRetryBlockReason({ ...failedRun, status })).toContain('not failed');
     }
   });
