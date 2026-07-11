@@ -152,7 +152,7 @@ const runners: FakeRunner[] = [];
 
 async function truncateDb() {
   const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
-  await sql`TRUNCATE TABLE events, approvals, sessions, machines, llm_providers, task_queue, projects, workflow_defs, forge_refs, forge_tokens, user_settings, account, "session", verification, "user" RESTART IDENTITY CASCADE`;
+  await sql`TRUNCATE TABLE events, approvals, sessions, resource_reservations, project_materializations, machines, llm_providers, task_queue, projects, workflow_defs, forge_refs, forge_tokens, user_settings, account, "session", verification, "user" RESTART IDENTITY CASCADE`;
   await sql.end({ timeout: 1 });
 }
 
@@ -486,6 +486,89 @@ describeSt('server ST: API + runner websocket', () => {
     expect((events.json() as { events: Array<{ type: string }> }).events.map((event) => event.type)).toEqual(
       expect.arrayContaining(['session.created', 'session.state', 'approval.requested', 'approval.decided']),
     );
+  });
+
+  it('binds allocated NVIDIA GPUs to a container while keeping the runner exclusively reserved', async () => {
+    const runner = await FakeRunner.connect(baseUrl, {
+      'workspace.provision': () => ({
+        ok: true,
+        cwd: '/data/co/wt/nvidia-session',
+        branch: 'co/nvidia-session',
+        basePath: '/data/co/base/nvidia-project',
+      }),
+      'container.run': () => ({ ok: true, containerId: 'nvidia-container-1' }),
+      'container.exec': () => ({ exitCode: 0, stdout: '', stderr: '' }),
+      'session.spawn': () => ({ ok: true, nativeSessionId: 'native-nvidia-1' }),
+    });
+    runners.push(runner);
+
+    await expect(
+      runner.callServer('machine.register', {
+        info: {
+          id: 'm-nvidia',
+          name: 'NVIDIA Runner',
+          labels: ['gpu'],
+          resources: [
+            { kind: 'nvidia-gpu', index: 0 },
+            { kind: 'nvidia-gpu', index: 1 },
+          ],
+          runnerVersion: 'st',
+          startedAt: Date.now(),
+        },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    const project = await app!.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: {
+        name: 'NVIDIA Container ST',
+        forge: 'github',
+        repo: 'example/nvidia-container',
+        baseImage: 'nvidia/cuda:latest',
+        accel: { kind: 'nvidia-gpu' },
+      },
+    });
+    expect(project.statusCode).toBe(201);
+    const { id: projectId } = project.json() as { id: string };
+
+    const spawn = await app!.inject({
+      method: 'POST',
+      url: '/api/container-sessions',
+      payload: { projectId, prompt: 'run on both allocated GPUs', agent: 'claude' },
+    });
+    expect(spawn.statusCode).toBe(200);
+    const { sessionId } = spawn.json() as { sessionId: string };
+
+    expect(runner.calls.find((call) => call.method === 'container.run')).toMatchObject({
+      params: {
+        image: 'nvidia/cuda:latest',
+        devices: [],
+        gpus: 'device=0,1',
+      },
+    });
+
+    const queued = await app!.inject({
+      method: 'POST',
+      url: '/api/container-sessions',
+      payload: { projectId, prompt: 'wait for the reserved runner', agent: 'claude' },
+    });
+    expect(queued.statusCode).toBe(202);
+    expect(queued.json()).toMatchObject({ queued: true, taskId: expect.any(String) });
+    expect(runner.calls.filter((call) => call.method === 'container.run')).toHaveLength(1);
+
+    const reservations = await getDb()
+      .select({
+        machineId: schema.resourceReservations.machineId,
+        sessionId: schema.resourceReservations.sessionId,
+        kind: schema.resourceReservations.kind,
+        status: schema.resourceReservations.status,
+      })
+      .from(schema.resourceReservations)
+      .where(eq(schema.resourceReservations.sessionId, sessionId));
+    expect(reservations).toEqual([
+      { machineId: 'm-nvidia', sessionId, kind: 'nvidia-gpu', status: 'active' },
+    ]);
   });
 
   it('resumes a dead manual session on its original runner and keeps its timeline for subsequent messages', async () => {
