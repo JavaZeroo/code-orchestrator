@@ -1,12 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { createId } from '@paralleldrive/cuid2';
-import { and, asc, desc, eq, gt, inArray, ne, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
 import * as z from 'zod';
 import { workflowDefSchema } from '@co/protocol';
 import { getDb, schema } from '../db/index';
 import { publish } from '../events';
 import { callRunner } from '../ws/runnerHub';
 import { EngineError, startRun } from '../engine/engine';
+import { archiveWorkflowRun, restoreWorkflowRun, WorkflowRunArchiveError } from '../services/workflowRunArchive';
 import { reviseWorkflowDefinition, WorkflowRevisionError } from '../services/workflowRevision';
 
 const createBodySchema = z.object({
@@ -29,6 +30,8 @@ const reviseBodySchema = z.object({
   graph: z.unknown(),
   createdVia: z.enum(['chat', 'manual']).default('manual'),
 });
+
+const listRunsQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
 
 export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/workflows', async (req, reply) => {
@@ -152,7 +155,34 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
     return { ok: true, killedSessions: alive.length };
   });
 
-  app.get('/api/runs', async () => {
+  app.post<{ Params: { id: string } }>('/api/runs/:id/archive', async (req, reply) => {
+    try {
+      const run = await archiveWorkflowRun(req.params.id);
+      return { ok: true, run: { id: run.id, archivedAt: run.archivedAt } };
+    } catch (err) {
+      if (err instanceof WorkflowRunArchiveError) {
+        void reply.code(err.statusCode);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/api/runs/:id/restore', async (req, reply) => {
+    try {
+      const run = await restoreWorkflowRun(req.params.id);
+      return { ok: true, run: { id: run.id, archivedAt: run.archivedAt } };
+    } catch (err) {
+      if (err instanceof WorkflowRunArchiveError) {
+        void reply.code(err.statusCode);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  app.get<{ Querystring: { archived?: string } }>('/api/runs', async (req) => {
+    const { archived } = listRunsQuerySchema.parse(req.query);
     const runs = await getDb()
       .select({
         id: schema.workflowRuns.id,
@@ -163,10 +193,12 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
         context: schema.workflowRuns.context,
         startedAt: schema.workflowRuns.startedAt,
         endedAt: schema.workflowRuns.endedAt,
+        archivedAt: schema.workflowRuns.archivedAt,
       })
       .from(schema.workflowRuns)
       .leftJoin(schema.workflowDefs, eq(schema.workflowRuns.defId, schema.workflowDefs.id))
-      .orderBy(desc(schema.workflowRuns.startedAt))
+      .where(archived === 'true' ? isNotNull(schema.workflowRuns.archivedAt) : isNull(schema.workflowRuns.archivedAt))
+      .orderBy(desc(archived === 'true' ? schema.workflowRuns.archivedAt : schema.workflowRuns.startedAt))
       .limit(100);
     return { runs };
   });

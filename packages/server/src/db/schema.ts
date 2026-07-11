@@ -348,20 +348,26 @@ export const workflowDefs = pgTable('workflow_defs', {
   archived: text('archived', { enum: ['yes', 'no'] }).notNull().default('no'),
 });
 
-export const workflowRuns = pgTable('workflow_runs', {
-  id: text('id').primaryKey(),
-  defId: text('def_id')
-    .notNull()
-    .references(() => workflowDefs.id),
-  /** 归属项目（design-v2 #36 scoping）：从 trigger/def 继承 */
-  projectId: text('project_id'),
-  status: text('status', { enum: ['running', 'waiting_human', 'done', 'failed', 'cancelled'] })
-    .notNull()
-    .default('running'),
-  context: jsonb('context').$type<Record<string, unknown>>().notNull().default({}),
-  startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
-  endedAt: timestamp('ended_at', { withTimezone: true }),
-});
+export const workflowRuns = pgTable(
+  'workflow_runs',
+  {
+    id: text('id').primaryKey(),
+    defId: text('def_id')
+      .notNull()
+      .references(() => workflowDefs.id),
+    /** 归属项目（design-v2 #36 scoping）：从 trigger/def 继承 */
+    projectId: text('project_id'),
+    status: text('status', { enum: ['running', 'waiting_human', 'done', 'failed', 'cancelled'] })
+      .notNull()
+      .default('running'),
+    context: jsonb('context').$type<Record<string, unknown>>().notNull().default({}),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    /** 终态运行归档时间；null 表示仍在默认线程列表中 */
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+  },
+  (t) => [index('workflow_runs_archived_at_idx').on(t.archivedAt)],
+);
 
 export const nodeStates = pgTable(
   'node_states',

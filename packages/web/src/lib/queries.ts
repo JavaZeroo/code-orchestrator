@@ -24,6 +24,9 @@ export const useWorkflows = () =>
 
 export const useRuns = () => useQuery({ queryKey: ['runs'], queryFn: api.runs, refetchInterval: 8_000 });
 
+export const useArchivedRuns = () =>
+  useQuery({ queryKey: ['archived-runs'], queryFn: api.archivedRuns, refetchInterval: 15_000 });
+
 export const useTriggers = () =>
   useQuery({ queryKey: ['triggers'], queryFn: api.triggers, refetchInterval: 15_000 });
 

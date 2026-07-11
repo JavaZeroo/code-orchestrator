@@ -635,6 +635,124 @@ describeSt('server ST: API + runner websocket', () => {
     expect(emptyArchive.json()).toEqual({ sessions: [] });
   });
 
+  it('archives and restores a terminal workflow run without changing linked history', async () => {
+    const db = getDb();
+    const defId = 'workflow-run-archive-def';
+    const runId = 'workflow-run-archive-st';
+    const activeRunId = 'workflow-run-archive-active';
+    const sessionId = 'workflow-run-archive-session';
+    const graph = {
+      name: 'Archived release pipeline',
+      nodes: [{ id: 'implement', type: 'agent', prompt: 'Ship the release' }],
+      edges: [],
+    };
+    await db.insert(schema.workflowDefs).values({ id: defId, name: graph.name, graph });
+    await db.insert(schema.workflowRuns).values([
+      { id: runId, defId, status: 'done', context: { vars: { release: '1.0' }, outputs: {} }, endedAt: new Date() },
+      { id: activeRunId, defId, status: 'running' },
+    ]);
+    await db.insert(schema.machines).values({ id: 'm-run-archive', name: 'Run Archive Runner' });
+    await db.insert(schema.sessions).values({
+      id: sessionId,
+      machineId: 'm-run-archive',
+      agent: 'claude',
+      cwd: '/tmp/run-archive-work',
+      state: 'dead',
+      runId,
+      nodeId: 'implement',
+    });
+    await db.insert(schema.nodeStates).values({
+      runId,
+      nodeId: 'implement',
+      status: 'done',
+      sessionId,
+      output: { summary: 'release shipped' },
+    });
+    await db.insert(schema.events).values([
+      { runId, type: 'run.status', payload: { status: 'done' } },
+      { runId, sessionId, type: 'session.message', payload: { marker: 'retained run transcript' } },
+    ]);
+    await db.insert(schema.forgeRefs).values({
+      id: 'workflow-run-archive-ref',
+      forge: 'github',
+      kind: 'pr',
+      repo: 'example/release',
+      number: 42,
+      runId,
+      nodeId: 'implement',
+      sessionId,
+      ciStatus: 'success',
+    });
+
+    const linkedBefore = {
+      nodes: await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, runId)),
+      sessions: await db.select().from(schema.sessions).where(eq(schema.sessions.runId, runId)),
+      events: await db.select().from(schema.events).where(eq(schema.events.runId, runId)),
+      forgeRefs: await db.select().from(schema.forgeRefs).where(eq(schema.forgeRefs.runId, runId)),
+    };
+    const beforeArchive = await app!.inject({ method: 'GET', url: '/api/runs' });
+    expect(beforeArchive.json<{ runs: Array<{ id: string }> }>().runs.map((run) => run.id)).toEqual(
+      expect.arrayContaining([runId, activeRunId]),
+    );
+
+    const archived = await app!.inject({ method: 'POST', url: `/api/runs/${runId}/archive` });
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json()).toMatchObject({
+      ok: true,
+      run: { id: runId, archivedAt: expect.any(String) },
+    });
+
+    const [persisted] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+    expect(persisted?.archivedAt).toBeInstanceOf(Date);
+    const defaultList = await app!.inject({ method: 'GET', url: '/api/runs' });
+    const defaultRunIds = defaultList.json<{ runs: Array<{ id: string }> }>().runs.map((run) => run.id);
+    expect(defaultRunIds).not.toContain(runId);
+    expect(defaultRunIds).toContain(activeRunId);
+    const archivedList = await app!.inject({ method: 'GET', url: '/api/runs?archived=true' });
+    expect(archivedList.statusCode).toBe(200);
+    expect(archivedList.json()).toMatchObject({
+      runs: [{ id: runId, status: 'done', archivedAt: expect.any(String) }],
+    });
+
+    const detailWhileArchived = await app!.inject({ method: 'GET', url: `/api/runs/${runId}` });
+    expect(detailWhileArchived.statusCode).toBe(200);
+    expect(detailWhileArchived.json()).toMatchObject({
+      run: { id: runId, status: 'done', archivedAt: expect.any(String) },
+      nodes: [{ runId, nodeId: 'implement', sessionId, output: { summary: 'release shipped' } }],
+    });
+    const threadWhileArchived = await app!.inject({ method: 'GET', url: `/api/runs/${runId}/thread` });
+    expect(threadWhileArchived.statusCode).toBe(200);
+    expect(threadWhileArchived.json()).toMatchObject({
+      run: { id: runId, archivedAt: expect.any(String) },
+      events: expect.arrayContaining([
+        expect.objectContaining({ type: 'session.message', payload: { marker: 'retained run transcript' } }),
+      ]),
+      forgeRefs: [expect.objectContaining({ id: 'workflow-run-archive-ref', runId, sessionId })],
+    });
+
+    const linkedAfterArchive = {
+      nodes: await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, runId)),
+      sessions: await db.select().from(schema.sessions).where(eq(schema.sessions.runId, runId)),
+      events: await db.select().from(schema.events).where(eq(schema.events.runId, runId)),
+      forgeRefs: await db.select().from(schema.forgeRefs).where(eq(schema.forgeRefs.runId, runId)),
+    };
+    expect(linkedAfterArchive).toEqual(linkedBefore);
+
+    const active = await app!.inject({ method: 'POST', url: `/api/runs/${activeRunId}/archive` });
+    expect(active.statusCode).toBe(409);
+    expect(active.json()).toMatchObject({ error: expect.stringContaining('still active') });
+    const [activePersisted] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, activeRunId));
+    expect(activePersisted?.archivedAt).toBeNull();
+
+    const restored = await app!.inject({ method: 'POST', url: `/api/runs/${runId}/restore` });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json()).toEqual({ ok: true, run: { id: runId, archivedAt: null } });
+    const restoredList = await app!.inject({ method: 'GET', url: '/api/runs' });
+    expect(restoredList.json<{ runs: Array<{ id: string }> }>().runs.map((run) => run.id)).toContain(runId);
+    const emptyArchive = await app!.inject({ method: 'GET', url: '/api/runs?archived=true' });
+    expect(emptyArchive.json()).toEqual({ runs: [] });
+  });
+
   it('binds allocated NVIDIA GPUs to a container while keeping the runner exclusively reserved', async () => {
     const runner = await FakeRunner.connect(baseUrl, {
       'workspace.provision': () => ({
