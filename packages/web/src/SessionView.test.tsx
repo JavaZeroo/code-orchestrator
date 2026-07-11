@@ -5,6 +5,7 @@ import {
   ForkAction,
   isSessionForkable,
   isSessionResumable,
+  LoadEarlierAction,
   normalizeSessionTitle,
   ResumeAction,
   SESSION_TITLE_MAX_LENGTH,
@@ -97,6 +98,29 @@ describe('SessionView archive action', () => {
     const markup = renderToStaticMarkup(<SessionArchiveAction mode="archive" updating onChange={vi.fn()} />);
     expect(markup).toContain('disabled=""');
     expect(markup).toContain('归档中…');
+  });
+});
+
+describe('SessionView earlier history action', () => {
+  it('shows the action only while an earlier page is available', () => {
+    const visible = renderToStaticMarkup(
+      <LoadEarlierAction visible loading={false} onLoad={vi.fn()} />,
+    );
+    const hidden = renderToStaticMarkup(
+      <LoadEarlierAction visible={false} loading={false} onLoad={vi.fn()} />,
+    );
+
+    expect(visible).toContain('加载更早消息');
+    expect(hidden).toBe('');
+  });
+
+  it('disables repeated requests while an earlier page is loading', () => {
+    const markup = renderToStaticMarkup(
+      <LoadEarlierAction visible loading onLoad={vi.fn()} />,
+    );
+
+    expect(markup).toContain('disabled=""');
+    expect(markup).toContain('加载中…');
   });
 });
 

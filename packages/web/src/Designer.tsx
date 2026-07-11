@@ -18,7 +18,7 @@ function DraftPane({
   workflow?: WorkflowDefRow;
   onSaved: (id: string) => void;
 }) {
-  const events = useSessionEvents(sessionId);
+  const { events } = useSessionEvents(sessionId);
   const [saving, setSaving] = useState(false);
   const { projectId } = useProjectScope();
 

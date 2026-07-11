@@ -1,5 +1,5 @@
-import { Archive, ArchiveRestore, ArrowDown, Check, Code2, GitCompare, GitFork, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, Code2, GitCompare, GitFork, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type ApprovalRequest, type SessionRow, type SessionUsage, type UserInputAnswers } from './api';
 import { UnifiedDiff } from './components/DiffView';
@@ -212,8 +212,27 @@ export function SessionArchiveAction({
   );
 }
 
+export function LoadEarlierAction({
+  visible,
+  loading,
+  onLoad,
+}: {
+  visible: boolean;
+  loading: boolean;
+  onLoad: () => void;
+}) {
+  if (!visible) return null;
+  return (
+    <div className="flex justify-center px-4 py-3">
+      <Button variant="ghost" size="sm" disabled={loading} onClick={onLoad}>
+        <ArrowUp size={12} /> {loading ? '加载中…' : '加载更早消息'}
+      </Button>
+    </div>
+  );
+}
+
 export function SessionView({ session, onForked }: { session: SessionRow; onForked?: (sessionId: string) => void }) {
-  const events = useSessionEvents(session.id);
+  const { events, hasEarlier, loadingEarlier, loadEarlier } = useSessionEvents(session.id);
   const { data: machines = [] } = useMachines();
   const [text, setText] = useState('');
   const fallbackTitle = session.cwd.split('/').pop() || session.cwd;
@@ -228,6 +247,7 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
   const resumeAfterSeqRef = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const prependScrollRef = useRef<{ height: number; top: number } | null>(null);
   const atBottomRef = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const NEAR_BOTTOM = 80;
@@ -279,9 +299,15 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
     return map;
   }, [events]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    const prependScroll = prependScrollRef.current;
+    if (prependScroll) {
+      el.scrollTop = prependScroll.top + el.scrollHeight - prependScroll.height;
+      prependScrollRef.current = null;
+      return;
+    }
     if (atBottomRef.current) {
       el.scrollTop = el.scrollHeight;
     } else {
@@ -315,6 +341,19 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
     api.decide(id, behavior).catch(handleApprovalError);
 
   const answer = (id: string, answers: UserInputAnswers) => api.answer(id, answers).catch(handleApprovalError);
+
+  const doLoadEarlier = () => {
+    const el = scrollRef.current;
+    if (el) prependScrollRef.current = { height: el.scrollHeight, top: el.scrollTop };
+    void loadEarlier()
+      .then((page) => {
+        if (!page || page.events.length === 0) prependScrollRef.current = null;
+      })
+      .catch((error) => {
+        prependScrollRef.current = null;
+        toast.error(`加载更早消息失败：${error}`);
+      });
+  };
 
   const doSend = () => {
     const t = text.trim();
@@ -448,6 +487,7 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
 
       <div className="relative flex-1 min-h-0 overflow-hidden">
         <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">
+          <LoadEarlierAction visible={hasEarlier} loading={loadingEarlier} onLoad={doLoadEarlier} />
           <Timeline events={events} approvals={approvals} cwd={session.cwd} onDecide={decide} onAnswer={answer} />
           <div ref={bottomRef} />
         </div>

@@ -7,6 +7,18 @@ export interface EventRow {
   payload: unknown;
 }
 
+export interface SessionEventPage {
+  events: EventRow[];
+  page: {
+    hasEarlier: boolean;
+    before: number | null;
+  };
+}
+
+export type SessionEventCursor =
+  | { before: number; since?: never }
+  | { before?: never; since: number };
+
 export interface SessionUsage {
   inputTokens: number;
   outputTokens: number;
@@ -289,9 +301,13 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title }),
     }).then((r) => j<{ ok: true; session: Pick<SessionRow, 'id' | 'title'> }>(r)),
-  events: (sessionId: string, since?: number) =>
-    fetch(`/api/sessions/${sessionId}/events${since ? `?since=${since}` : ''}`)
-      .then((r) => j<{ events: EventRow[] }>(r)).then((d) => d.events),
+  events: (sessionId: string, cursor?: SessionEventCursor) => {
+    const query = new URLSearchParams();
+    if (cursor?.before) query.set('before', String(cursor.before));
+    if (cursor?.since) query.set('since', String(cursor.since));
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return fetch(`/api/sessions/${sessionId}/events${suffix}`).then((r) => j<SessionEventPage>(r));
+  },
   spawn: (body: { projectId?: string | null; prompt?: string; agent?: SessionAgent; model?: string; effort?: Effort;
                   machineId?: string; cwd?: string; container?: boolean;
                   designer?: boolean; taskIntake?: boolean }) =>
