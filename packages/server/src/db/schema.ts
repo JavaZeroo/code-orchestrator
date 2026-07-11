@@ -357,6 +357,8 @@ export const workflowRuns = pgTable(
       .references(() => workflowDefs.id),
     /** 归属项目（design-v2 #36 scoping）：从 trigger/def 继承 */
     projectId: text('project_id'),
+    /** 单次运行的操作员标题；独立于共享 workflow definition 名称 */
+    title: text('title'),
     /** paused=保留进行中节点，但阻止 pending 节点继续调度；状态与事件一起持久化 */
     status: text('status', { enum: ['running', 'waiting_human', 'paused', 'done', 'failed', 'cancelled'] })
       .notNull()

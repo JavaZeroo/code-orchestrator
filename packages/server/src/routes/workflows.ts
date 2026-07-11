@@ -28,6 +28,10 @@ const patchDefSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
 });
 
+const patchRunSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+}).strict();
+
 const reviseBodySchema = z.object({
   graph: z.unknown(),
   createdVia: z.enum(['chat', 'manual']).default('manual'),
@@ -126,6 +130,20 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       }
       throw err;
     }
+  });
+
+  app.patch<{ Params: { id: string } }>('/api/runs/:id', async (req, reply) => {
+    const body = patchRunSchema.parse(req.body);
+    const [run] = await getDb()
+      .update(schema.workflowRuns)
+      .set({ title: body.title })
+      .where(eq(schema.workflowRuns.id, req.params.id))
+      .returning({ id: schema.workflowRuns.id, title: schema.workflowRuns.title });
+    if (!run) {
+      void reply.code(404);
+      return { error: 'run not found' };
+    }
+    return { ok: true, run };
   });
 
   app.post<{ Params: { id: string } }>('/api/runs/:id/retry', async (req, reply) => {
@@ -234,6 +252,7 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
         defId: schema.workflowRuns.defId,
         defName: schema.workflowDefs.name,
         projectId: schema.workflowRuns.projectId,
+        title: schema.workflowRuns.title,
         status: schema.workflowRuns.status,
         context: schema.workflowRuns.context,
         startedAt: schema.workflowRuns.startedAt,

@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { isWaitingRun, isWaitingSession, waitingCountByProject, type AttentionItem } from './lib/attention';
 import { invalidate, useArchivedRuns, useArchivedSessions, useProjects, useRuns, useSessions } from './lib/queries';
 import { ProjectProvider, useCurrentProject, useProjectScope } from './lib/project';
+import { runDisplayTitle, runMatchesSearch } from './lib/runTitle';
 import { cn, relTime, fmtCost, shortModel } from './lib/utils';
 
 type Tab = 'home';
@@ -223,7 +224,7 @@ function threadActiveTime(t: ThreadItem): string {
 
 function threadTitle(t: ThreadItem): string {
   if (t.kind === 'session') return t.session.title ?? (t.session.cwd.split('/').pop() || t.session.cwd);
-  return t.run.defName ?? t.run.defId.slice(0, 8);
+  return runDisplayTitle(t.run);
 }
 
 function threadId(t: ThreadItem): string {
@@ -295,7 +296,7 @@ function HomeScreen({
       return [s.title, s.cwd, s.model, s.id].some((v) => v?.toLowerCase().includes(q));
     }
     const r = t.run;
-    return [r.defName, r.defId, r.id].some((v) => v?.toLowerCase().includes(q));
+    return runMatchesSearch(r, q);
   }), [allThreads, filter, q]);
   const visibleArchived = useMemo(() => {
     return allArchivedThreads.filter((thread) => {
@@ -307,7 +308,7 @@ function HomeScreen({
         return [session.title, session.cwd, session.model, session.id].some((value) => value?.toLowerCase().includes(q));
       }
       const run = thread.run;
-      return [run.defName, run.defId, run.id].some((value) => value?.toLowerCase().includes(q));
+      return runMatchesSearch(run, q);
     });
   }, [allArchivedThreads, filter, q]);
 
@@ -428,7 +429,7 @@ function HomeScreen({
         >
           <StatusDot tone={RUN_TONE[r.status] ?? 'neutral'} live={r.status === 'running'} />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-[13px] font-medium text-ink-2">{r.defName ?? r.defId.slice(0, 8)}</span>
+            <span className="block truncate text-[13px] font-medium text-ink-2">{runDisplayTitle(r)}</span>
             <span className="mono-nums block truncate text-[10px] text-faint">
               {RUN_LABEL[r.status] ?? r.status} · run {r.id.slice(0, 8)} · {relTime(r.endedAt ?? r.startedAt)}
             </span>

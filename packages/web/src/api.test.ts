@@ -101,6 +101,20 @@ describe('api client', () => {
     });
   });
 
+  it('renames a workflow run through its existing resource', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, run: { id: 'run-1', title: 'Production rollout' } }));
+
+    await expect(api.renameRun('run-1', 'Production rollout')).resolves.toEqual({
+      ok: true,
+      run: { id: 'run-1', title: 'Production rollout' },
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/runs/run-1', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Production rollout' }),
+    });
+  });
+
   it('lists archived sessions separately and posts archive state changes', async () => {
     const archivedAt = '2026-07-11T04:00:00.000Z';
     const fetch = vi

@@ -5,6 +5,7 @@
  */
 
 import type { SessionRow, RunRow, ProjectRow } from '../api';
+import { runDisplayTitle } from './runTitle';
 
 /** 会话线程 waiting ⇔ state === 'waiting_approval' || state === 'waiting_input' */
 export function isWaitingSession(s: SessionRow): boolean {
@@ -80,7 +81,7 @@ export function crossProjectWaiting(
       id: r.id,
       projectId: r.projectId,
       projectName: projMap.get(r.projectId)?.name ?? r.projectId,
-      title: r.defName ?? r.defId.slice(0, 8),
+      title: runDisplayTitle(r),
       subtitle: '流水线等待审批',
     });
   }
