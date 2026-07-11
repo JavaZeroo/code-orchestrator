@@ -1,13 +1,14 @@
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk';
 import type { ApprovalRequest } from '@co/protocol';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ClaudeSession, type DriverEmit } from './driver';
+import { ClaudeSession, forkClaudeNativeSession, type DriverEmit } from './driver';
 
 const queryMock = vi.hoisted(() => vi.fn());
+const forkSessionMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@anthropic-ai/claude-agent-sdk', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@anthropic-ai/claude-agent-sdk')>();
-  return { ...actual, query: queryMock };
+  return { ...actual, query: queryMock, forkSession: forkSessionMock };
 });
 
 function fakeQuery(nativeSessionId: string): Query {
@@ -19,6 +20,29 @@ function fakeQuery(nativeSessionId: string): Query {
   };
   return stream as unknown as Query;
 }
+
+describe('forkClaudeNativeSession', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uses the SDK fork API to copy the complete saved transcript', async () => {
+    forkSessionMock.mockResolvedValue({ sessionId: 'claude-native-fork' });
+
+    await expect(forkClaudeNativeSession('claude-native-source', '/tmp/work')).resolves.toBe(
+      'claude-native-fork',
+    );
+    expect(forkSessionMock).toHaveBeenCalledWith('claude-native-source', { dir: '/tmp/work' });
+  });
+
+  it('rejects a fork that does not receive a distinct native session ID', async () => {
+    forkSessionMock.mockResolvedValue({ sessionId: 'claude-native-source' });
+
+    await expect(forkClaudeNativeSession('claude-native-source', '/tmp/work')).rejects.toThrow(
+      'distinct forked session',
+    );
+  });
+});
 
 describe('ClaudeSession resume', () => {
   beforeEach(() => {

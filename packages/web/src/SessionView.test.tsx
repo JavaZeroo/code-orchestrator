@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionRow } from './api';
 import {
+  ForkAction,
+  isSessionForkable,
   isSessionResumable,
   normalizeSessionTitle,
   ResumeAction,
@@ -45,6 +47,29 @@ describe('SessionView resume action', () => {
     const markup = renderToStaticMarkup(<ResumeAction visible resuming onResume={vi.fn()} />);
     expect(markup).toContain('disabled=""');
     expect(markup).toContain('恢复中…');
+  });
+});
+
+describe('SessionView fork action', () => {
+  it('shows fork for eligible idle or dead manual sessions on the online original runner', () => {
+    expect(isSessionForkable({ ...session, state: 'idle' }, 'idle', true)).toBe(true);
+    expect(isSessionForkable(session, 'dead', true)).toBe(true);
+    expect(isSessionForkable(session, 'thinking', true)).toBe(false);
+    expect(isSessionForkable({ ...session, runId: 'run-1' }, 'dead', true)).toBe(false);
+    expect(isSessionForkable({ ...session, containerId: 'container-1' }, 'dead', true)).toBe(false);
+    expect(isSessionForkable({ ...session, nativeSessionId: null }, 'dead', true)).toBe(false);
+    expect(isSessionForkable(session, 'dead', false)).toBe(false);
+
+    const visible = renderToStaticMarkup(<ForkAction visible forking={false} onFork={vi.fn()} />);
+    const hidden = renderToStaticMarkup(<ForkAction visible={false} forking={false} onFork={vi.fn()} />);
+    expect(visible).toContain('分叉会话');
+    expect(hidden).not.toContain('分叉会话');
+  });
+
+  it('disables the action while the independent target is being created', () => {
+    const markup = renderToStaticMarkup(<ForkAction visible forking onFork={vi.fn()} />);
+    expect(markup).toContain('disabled=""');
+    expect(markup).toContain('分叉中…');
   });
 });
 

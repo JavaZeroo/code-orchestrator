@@ -6,6 +6,7 @@ import { getSession, removeSession } from './sessions';
 const startMock = vi.hoisted(() => vi.fn());
 
 vi.mock('./claude/driver', () => ({
+  forkClaudeNativeSession: vi.fn(async () => 'claude-native-fork'),
   ClaudeSession: class {
     readonly sessionId: string;
     readonly nativeSessionId: string | undefined;

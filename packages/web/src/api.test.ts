@@ -55,6 +55,17 @@ describe('api client', () => {
     });
   });
 
+  it('posts session fork and returns the independent target ID', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, sessionId: 'fork-1' }));
+
+    await expect(api.fork('source-1')).resolves.toEqual({ ok: true, sessionId: 'fork-1' });
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/source-1/fork', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  });
+
   it('renames a session through its existing resource', async () => {
     const fetch = mockFetch(Response.json({ ok: true, session: { id: 's1', title: 'Release follow-up' } }));
 

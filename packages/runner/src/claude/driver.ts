@@ -9,6 +9,7 @@
 
 import {
   createSdkMcpServer,
+  forkSession,
   query,
   tool,
   type Options,
@@ -30,6 +31,15 @@ import {
 } from '@co/protocol';
 import { Pushable } from '../utils/pushable';
 import { mapSdkMessage } from './mapper';
+
+/** 复制 Claude 持久化 transcript，返回可由 query({ resume }) 接入的新原生会话 ID。 */
+export async function forkClaudeNativeSession(nativeSessionId: string, cwd: string): Promise<string> {
+  const forked = await forkSession(nativeSessionId, { dir: cwd });
+  if (!forked.sessionId || forked.sessionId === nativeSessionId) {
+    throw new Error('Claude SDK did not create a distinct forked session');
+  }
+  return forked.sessionId;
+}
 
 export interface SessionUsage {
   inputTokens: number;

@@ -698,6 +698,178 @@ describeSt('server ST: API + runner websocket', () => {
     );
   });
 
+  it('forks a saved host session through REST, persistence, and runner while keeping transcripts independent', async () => {
+    const runner = await FakeRunner.connect(baseUrl, {
+      'session.fork': () => ({ ok: true, nativeSessionId: 'claude-native-fork' }),
+      'session.send': () => ({ ok: true }),
+    });
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: {
+        id: 'm-fork',
+        name: 'Fork Runner',
+        labels: ['dev'],
+        resources: [],
+        runnerVersion: 'st',
+        startedAt: Date.now(),
+      },
+    });
+
+    const sourceSessionId = 'session-fork-source';
+    await getDb().insert(schema.sessions).values({
+      id: sourceSessionId,
+      machineId: 'm-fork',
+      agent: 'claude',
+      model: 'claude-sonnet',
+      cwd: '/tmp/fork-work',
+      title: 'Saved conversation',
+      state: 'idle',
+      nativeSessionId: 'claude-native-source',
+    });
+    const sourceTranscript = [
+      {
+        id: 'source-user-message',
+        time: 1,
+        role: 'user',
+        claudeUuid: 'claude-message-user',
+        ev: { t: 'text', text: 'keep this original question' },
+      },
+      {
+        id: 'source-agent-message',
+        time: 2,
+        role: 'agent',
+        claudeUuid: 'claude-message-agent',
+        ev: { t: 'text', text: 'keep this original answer' },
+      },
+    ];
+    await getDb().insert(schema.events).values([
+      { sessionId: sourceSessionId, type: 'session.created', payload: { marker: 'source-created' } },
+      ...sourceTranscript.map((payload) => ({ sessionId: sourceSessionId, type: 'session.message', payload })),
+    ]);
+
+    const forked = await app!.inject({ method: 'POST', url: `/api/sessions/${sourceSessionId}/fork` });
+    expect(forked.statusCode).toBe(200);
+    const { sessionId: forkSessionId } = forked.json() as { ok: true; sessionId: string };
+    expect(forkSessionId).not.toBe(sourceSessionId);
+    expect(runner.calls.find((call) => call.method === 'session.fork')).toMatchObject({
+      params: {
+        sourceSessionId,
+        sessionId: forkSessionId,
+        agent: 'claude',
+        cwd: '/tmp/fork-work',
+        nativeSessionId: 'claude-native-source',
+      },
+    });
+
+    const [source] = await getDb().select().from(schema.sessions).where(eq(schema.sessions.id, sourceSessionId));
+    const [target] = await getDb().select().from(schema.sessions).where(eq(schema.sessions.id, forkSessionId));
+    expect(source).toMatchObject({
+      id: sourceSessionId,
+      state: 'idle',
+      nativeSessionId: 'claude-native-source',
+      title: 'Saved conversation',
+    });
+    expect(target).toMatchObject({
+      id: forkSessionId,
+      machineId: 'm-fork',
+      state: 'starting',
+      nativeSessionId: 'claude-native-fork',
+      title: 'Saved conversation (fork)',
+      runId: null,
+      containerId: null,
+    });
+
+    const targetBeforeSend = await app!.inject({ method: 'GET', url: `/api/sessions/${forkSessionId}/events` });
+    const copiedMessages = targetBeforeSend
+      .json<{ events: Array<{ type: string; payload: unknown }> }>()
+      .events.filter((event) => event.type === 'session.message');
+    expect(copiedMessages.map((event) => event.payload)).toEqual(sourceTranscript);
+
+    const sent = await app!.inject({
+      method: 'POST',
+      url: `/api/sessions/${forkSessionId}/send`,
+      payload: { text: 'continue only on the fork' },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(runner.calls.find((call) => call.method === 'session.send')).toMatchObject({
+      params: { sessionId: forkSessionId, text: 'continue only on the fork' },
+    });
+    await runner.callServer('session.event', {
+      sessionId: forkSessionId,
+      envelope: {
+        id: 'fork-user-message',
+        time: 3,
+        role: 'user',
+        ev: { t: 'text', text: 'continue only on the fork' },
+      },
+    });
+
+    const sourceAfter = await app!.inject({ method: 'GET', url: `/api/sessions/${sourceSessionId}/events` });
+    const targetAfter = await app!.inject({ method: 'GET', url: `/api/sessions/${forkSessionId}/events` });
+    expect(
+      sourceAfter.json<{ events: Array<{ type: string; payload: unknown }> }>().events
+        .filter((event) => event.type === 'session.message')
+        .map((event) => event.payload),
+    ).toEqual(sourceTranscript);
+    expect(
+      targetAfter.json<{ events: Array<{ type: string; payload: { ev?: { text?: string } } }> }>().events
+        .filter((event) => event.type === 'session.message')
+        .map((event) => event.payload.ev?.text),
+    ).toEqual(['keep this original question', 'keep this original answer', 'continue only on the fork']);
+  });
+
+  it('rejects ineligible fork requests without runner calls or partial target rows', async () => {
+    const runner = await FakeRunner.connect(baseUrl, {
+      'session.fork': () => ({ ok: true, nativeSessionId: 'should-not-be-created' }),
+    });
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: {
+        id: 'm-fork-guard',
+        name: 'Fork Guard Runner',
+        labels: ['dev'],
+        resources: [],
+        runnerVersion: 'st',
+        startedAt: Date.now(),
+      },
+    });
+    await getDb().insert(schema.machines).values({ id: 'm-fork-offline', name: 'Offline Fork Runner' });
+    await getDb().insert(schema.sessions).values([
+      {
+        id: 'fork-busy', machineId: 'm-fork-guard', agent: 'claude', cwd: '/tmp/busy',
+        state: 'thinking', nativeSessionId: 'native-busy',
+      },
+      {
+        id: 'fork-workflow', machineId: 'm-fork-guard', agent: 'claude', cwd: '/tmp/workflow',
+        state: 'idle', nativeSessionId: 'native-workflow', runId: 'run-1',
+      },
+      {
+        id: 'fork-container', machineId: 'm-fork-guard', agent: 'claude', cwd: '/tmp/container',
+        state: 'dead', nativeSessionId: 'native-container', containerId: 'container-1',
+      },
+      {
+        id: 'fork-missing-native', machineId: 'm-fork-guard', agent: 'codex', cwd: '/tmp/missing',
+        state: 'idle', nativeSessionId: null,
+      },
+      {
+        id: 'fork-offline', machineId: 'm-fork-offline', agent: 'codex', cwd: '/tmp/offline',
+        state: 'dead', nativeSessionId: 'thread-offline',
+      },
+    ]);
+
+    const sourceIds = ['fork-busy', 'fork-workflow', 'fork-container', 'fork-missing-native', 'fork-offline'];
+    for (const sourceId of sourceIds) {
+      const response = await app!.inject({ method: 'POST', url: `/api/sessions/${sourceId}/fork` });
+      expect(response.statusCode).toBe(409);
+    }
+
+    expect(runner.calls.filter((call) => call.method === 'session.fork')).toHaveLength(0);
+    const sessions = await getDb().select({ id: schema.sessions.id }).from(schema.sessions);
+    expect(sessions.map((row) => row.id).sort()).toEqual([...sourceIds].sort());
+    const targetEvents = await getDb().select().from(schema.events);
+    expect(targetEvents).toHaveLength(0);
+  });
+
   it('serializes concurrent resume requests, rejects ineligible sessions, and rolls back runner failures', async () => {
     let releaseConcurrent!: () => void;
     const concurrentGate = new Promise<void>((resolve) => {

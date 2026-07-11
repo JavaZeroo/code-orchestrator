@@ -85,6 +85,28 @@ export const runnerMethods = {
     }),
     result: z.object({ ok: z.boolean(), error: z.string().optional() }),
   },
+  /** 从已持久化的宿主原生会话复制完整历史，并在同一 runner 拉起独立会话 */
+  'session.fork': {
+    params: z
+      .object({
+        sourceSessionId: z.string(),
+        sessionId: z.string(),
+        agent: z.enum(['claude', 'codex']),
+        cwd: z.string(),
+        nativeSessionId: z.string().min(1),
+        meta: MessageMetaSchema.optional(),
+        env: z.record(z.string(), z.string()).optional(),
+      })
+      .refine((params) => params.sourceSessionId !== params.sessionId, {
+        message: 'fork target session must differ from source session',
+        path: ['sessionId'],
+      }),
+    result: z.object({
+      ok: z.boolean(),
+      nativeSessionId: z.string().optional(),
+      error: z.string().optional(),
+    }),
+  },
   'session.send': {
     params: z.object({
       sessionId: z.string(),
