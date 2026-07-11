@@ -290,6 +290,9 @@ export const api = {
   runThread: (runId: string, since?: number) =>
     fetch(`/api/runs/${runId}/thread${since ? `?since=${since}` : ''}`)
       .then((r) => j<{ run: RunRow; def: WorkflowDefRow; nodes: NodeStateRow[]; events: EventRow[]; forgeRefs: ForgeRefRow[] }>(r)),
+  retestForgeRef: (refId: string) =>
+    fetch(`/api/forge/refs/${encodeURIComponent(refId)}/retest`, { method: 'POST' })
+      .then((r) => j<{ ok: true; confirmation: 'pending' }>(r)),
   pendingApprovals: () =>
     fetch('/api/approvals?status=pending').then((r) => j<{ approvals: ApprovalRow[] }>(r)).then((d) => d.approvals),
   send: (sessionId: string, text: string) => post(`/api/sessions/${sessionId}/send`, { text }).then((r) => j(r)),

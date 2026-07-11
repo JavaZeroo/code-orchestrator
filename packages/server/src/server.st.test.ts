@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import postgres from 'postgres';
 import WebSocket from 'ws';
 import { createApp } from './app';
 import { closeDb, getDb, schema } from './db/index';
 import { eq } from 'drizzle-orm';
+import { encryptSecret } from './services/crypto';
 import { markTaskDone, reconcileQueueOnce, type QueuedTask } from './services/taskQueue';
 
 const runSt = Boolean(process.env.DATABASE_URL);
@@ -150,12 +151,12 @@ const runners: FakeRunner[] = [];
 
 async function truncateDb() {
   const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
-  await sql`TRUNCATE TABLE events, approvals, sessions, machines, llm_providers, task_queue, projects, workflow_defs RESTART IDENTITY CASCADE`;
+  await sql`TRUNCATE TABLE events, approvals, sessions, machines, llm_providers, task_queue, projects, workflow_defs, forge_refs, forge_tokens, user_settings, account, "session", verification, "user" RESTART IDENTITY CASCADE`;
   await sql.end({ timeout: 1 });
 }
 
-async function startApp() {
-  app = await createApp({ authEnabled: false, logger: false, serveWeb: false, startBackground: false });
+async function startApp(authEnabled = false) {
+  app = await createApp({ authEnabled, logger: false, serveWeb: false, startBackground: false });
   await app.listen({ port: 0, host: '127.0.0.1' });
   const addr = app.server.address();
   if (!addr || typeof addr === 'string') {
@@ -171,6 +172,7 @@ describeSt('server ST: API + runner websocket', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(runners.splice(0).map((runner) => runner.close()));
     await app?.close();
     app = null;
@@ -846,5 +848,56 @@ describeSt('server ST: API + runner websocket', () => {
       .from(schema.taskQueue)
       .where(eq(schema.taskQueue.id, taskId));
     expect(finalRows).toEqual([{ status: 'running' }]);
+  });
+
+  it('posts /retest through REST with the authenticated requester token', async () => {
+    await app!.close();
+    app = null;
+    await closeDb();
+    await startApp(true);
+
+    const email = 'forge-retest@example.com';
+    const signUp = await app!.inject({
+      method: 'POST',
+      url: '/api/auth/sign-up/email',
+      headers: { host: 'localhost:7620', origin: 'http://localhost:7620' },
+      payload: { name: 'Forge Operator', email, password: 'system-test-password' },
+    });
+    expect(signUp.statusCode).toBe(200);
+    const cookie = signUp.cookies.map(({ name, value }) => `${name}=${value}`).join('; ');
+    expect(cookie).not.toBe('');
+
+    const db = getDb();
+    const [operator] = await db.select().from(schema.authUser).where(eq(schema.authUser.email, email)).limit(1);
+    expect(operator).toBeDefined();
+    await db.insert(schema.authUser).values({ id: 'other-user', name: 'Other', email: 'other@example.com' });
+    await db.insert(schema.forgeTokens).values([
+      { userId: 'other-user', forge: 'gitcode', tokenEnc: encryptSecret('wrong-user-token') },
+      { userId: operator!.id, forge: 'gitcode', tokenEnc: encryptSecret('requester-gitcode-token') },
+    ]);
+    await db.insert(schema.forgeRefs).values({
+      id: 'gitcode-retest-ref',
+      forge: 'gitcode',
+      kind: 'pr',
+      repo: 'mindspore/mindformers',
+      number: 8377,
+      runId: 'run-retest',
+      active: 'yes',
+    });
+
+    const outbound = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ id: 901 }));
+    const response = await app!.inject({
+      method: 'POST',
+      url: '/api/forge/refs/gitcode-retest-ref/retest',
+      headers: { host: 'localhost:7620', cookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, confirmation: 'pending' });
+    expect(outbound).toHaveBeenCalledTimes(1);
+    const [url, init] = outbound.mock.calls[0]!;
+    expect(url).toBe('https://api.gitcode.com/api/v5/repos/mindspore/mindformers/pulls/8377/comments');
+    expect(init).toMatchObject({ method: 'POST', body: JSON.stringify({ body: '/retest' }) });
+    expect((init?.headers as Record<string, string>).authorization).toBe('Bearer requester-gitcode-token');
   });
 });

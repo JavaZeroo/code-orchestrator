@@ -5,5 +5,8 @@ export default defineConfig({
     include: ['src/**/*.st.test.ts'],
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    env: {
+      AUTH_SECRET: 'st-only-not-a-secret-code-orchestrator',
+    },
   },
 });

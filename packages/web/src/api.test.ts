@@ -88,6 +88,19 @@ describe('api client', () => {
     });
   });
 
+  it('requests a GitCode CI retest for the encoded tracked ref', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, confirmation: 'pending' }));
+
+    await expect(api.retestForgeRef('ref/1')).resolves.toEqual({ ok: true, confirmation: 'pending' });
+    expect(fetch).toHaveBeenCalledWith('/api/forge/refs/ref%2F1/retest', { method: 'POST' });
+  });
+
+  it('surfaces a rejected retest request to the run action', async () => {
+    mockFetch(new Response('{"error":"该 forge ref 已停止跟踪"}', { status: 409 }));
+
+    await expect(api.retestForgeRef('ref-1')).rejects.toThrow('409: {"error":"该 forge ref 已停止跟踪"}');
+  });
+
   it('lists, reprioritizes, retries, and cancels project queued sessions', async () => {
     const task = {
       id: 'task/1',
