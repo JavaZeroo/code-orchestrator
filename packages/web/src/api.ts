@@ -280,6 +280,8 @@ export const api = {
   machines: () => fetch('/api/machines').then((r) => j<{ machines: MachineRow[] }>(r)).then((d) => d.machines),
   allMachines: () => fetch('/api/machines/all').then((r) => j<{ machines: AllMachineRow[] }>(r)).then((d) => d.machines),
   sessions: () => fetch('/api/sessions').then((r) => j<{ sessions: SessionRow[] }>(r)).then((d) => d.sessions),
+  session: (sessionId: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}`).then((r) => j<{ session: SessionRow }>(r)).then((d) => d.session),
   archivedSessions: () => fetch('/api/sessions?archived=true').then((r) => j<{ sessions: SessionRow[] }>(r)).then((d) => d.sessions),
   renameSession: (sessionId: string, title: string) =>
     fetch(`/api/sessions/${sessionId}`, {

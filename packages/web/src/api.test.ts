@@ -33,6 +33,13 @@ describe('api client', () => {
     expect(fetch).toHaveBeenNthCalledWith(2, '/api/sessions/s1/events?since=12');
   });
 
+  it('fetches one session by its encoded ID', async () => {
+    const fetch = mockFetch(Response.json({ session: { id: 'session/older', state: 'dead' } }));
+
+    await expect(api.session('session/older')).resolves.toEqual({ id: 'session/older', state: 'dead' });
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Folder');
+  });
+
   it('posts JSON bodies for session spawn', async () => {
     const fetch = mockFetch(Response.json({ sessionId: 's1' }));
 

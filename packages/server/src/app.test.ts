@@ -39,4 +39,11 @@ describe('createApp', () => {
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual({ error: 'database not available' });
   });
+
+  it('registers exact session reads as a database-backed resource', async () => {
+    const res = await (await testApp()).inject({ method: 'GET', url: '/api/sessions/session-1' });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: 'DATABASE_URL 未配置' });
+  });
 });
