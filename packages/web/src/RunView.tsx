@@ -1,4 +1,4 @@
-import { ArrowLeft, ExternalLink } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, ExternalLink } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type ApprovalRow, type ForgeRefRow, type NodeStateRow, type RunRow, type WorkflowDefRow } from './api';
@@ -7,6 +7,7 @@ import { RunTimeline } from './RunTimeline';
 import { Markdown } from './components/Markdown';
 import { Button } from './components/ui/button';
 import { Badge, StatusDot, type BadgeTone } from './components/ui/primitives';
+import { invalidate } from './lib/queries';
 import { useRunEvents } from './useEvents';
 
 const RUN_META: Record<string, { label: string; tone: BadgeTone; live?: boolean }> = {
@@ -45,8 +46,36 @@ export async function runRetestAction(refId: string, deps: RunRetestActionDepend
   }
 }
 
+export type RunArchiveMode = 'archive' | 'restore';
+
+export function runArchiveMode(run: Pick<RunRow, 'status' | 'archivedAt'> | null): RunArchiveMode | null {
+  if (!run) return null;
+  if (run.archivedAt != null) return 'restore';
+  return ['done', 'failed', 'cancelled'].includes(run.status) ? 'archive' : null;
+}
+
+export function RunArchiveAction({
+  mode,
+  updating,
+  onChange,
+}: {
+  mode: RunArchiveMode | null;
+  updating: boolean;
+  onChange: () => void;
+}) {
+  if (!mode) return null;
+  const restoring = mode === 'restore';
+  return (
+    <Button variant="secondary" size="sm" disabled={updating} onClick={onChange}>
+      {restoring ? <ArchiveRestore size={12} /> : <Archive size={12} />}
+      {updating ? (restoring ? '移出中…' : '归档中…') : (restoring ? '移出归档' : '归档')}
+    </Button>
+  );
+}
+
 export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpenSession: (id: string) => void; onBack: () => void }) {
   const [mode, setMode] = useState<'thread' | 'graph'>('thread');
+  const [updatingArchive, setUpdatingArchive] = useState(false);
 
   // ---- 共享数据（graph 模式用）----
   const [run, setRun] = useState<RunRow | null>(null);
@@ -148,6 +177,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
   }, [def, interpTitle]);
   const gate = pending.find((a) => a.kind === 'gate' && a.runId === runId && a.nodeId === selected);
   const runMeta = RUN_META[effectiveRun?.status ?? ''] ?? { label: effectiveRun?.status ?? '', tone: 'neutral' as const };
+  const archiveMode = runArchiveMode(effectiveRun);
 
   // 共享的 decide 处理
   const handleDecide = useCallback((id: string, b: 'allow' | 'deny') => {
@@ -175,6 +205,23 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
     error: toast.error,
     refresh: refreshThread,
   }), [refreshThread]);
+
+  const handleArchiveChange = useCallback(() => {
+    if (!archiveMode) return;
+    setUpdatingArchive(true);
+    const request = archiveMode === 'archive' ? api.archiveRun(runId) : api.restoreRun(runId);
+    request
+      .then(({ run: changed }) => {
+        const applyArchiveState = (current: RunRow | null) => current ? { ...current, archivedAt: changed.archivedAt } : null;
+        setRun(applyArchiveState);
+        setThreadRun(applyArchiveState);
+        invalidate('runs');
+        invalidate('archived-runs');
+        toast(archiveMode === 'archive' ? '运行已归档' : '运行已移回历史');
+      })
+      .catch((error) => toast.error(`${archiveMode === 'archive' ? '归档' : '恢复'}失败：${error}`))
+      .finally(() => setUpdatingArchive(false));
+  }, [archiveMode, runId]);
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -204,6 +251,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
           </div>
           <StatusDot tone={runMeta.tone} live={runMeta.live} />
           <Badge tone={runMeta.tone}>{runMeta.label}</Badge>
+          <RunArchiveAction mode={archiveMode} updating={updatingArchive} onChange={handleArchiveChange} />
           {(effectiveRun?.status === 'running' || effectiveRun?.status === 'waiting_human') && (
             <Button
               variant="danger"

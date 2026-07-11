@@ -106,6 +106,32 @@ describe('api client', () => {
     });
   });
 
+  it('lists archived runs separately and posts archive state changes', async () => {
+    const archivedAt = '2026-07-11T05:00:00.000Z';
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ runs: [{ id: 'run-1', archivedAt }] }))
+      .mockResolvedValueOnce(Response.json({ ok: true, run: { id: 'run-1', archivedAt } }))
+      .mockResolvedValueOnce(Response.json({ ok: true, run: { id: 'run-1', archivedAt: null } }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.archivedRuns()).resolves.toEqual([{ id: 'run-1', archivedAt }]);
+    await expect(api.archiveRun('run-1')).resolves.toEqual({ ok: true, run: { id: 'run-1', archivedAt } });
+    await expect(api.restoreRun('run-1')).resolves.toEqual({ ok: true, run: { id: 'run-1', archivedAt: null } });
+
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/runs?archived=true');
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/runs/run-1/archive', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(fetch).toHaveBeenNthCalledWith(3, '/api/runs/run-1/restore', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  });
+
   it('persists machine scheduling pause through the machine API', async () => {
     const fetch = mockFetch(Response.json({ ok: true }));
 

@@ -105,6 +105,7 @@ export interface RunRow {
   context: { vars: Record<string, string>; outputs: Record<string, string> };
   startedAt: string;
   endedAt: string | null;
+  archivedAt: string | null;
 }
 
 export interface NodeStateRow {
@@ -293,9 +294,16 @@ export const api = {
   startRun: (workflowId: string, vars: Record<string, string>, projectId?: string | null) =>
     post(`/api/workflows/${workflowId}/runs`, { vars, projectId }).then((r) => j<{ runId: string }>(r)),
   runs: () => fetch('/api/runs').then((r) => j<{ runs: RunRow[] }>(r)).then((d) => d.runs),
+  archivedRuns: () => fetch('/api/runs?archived=true').then((r) => j<{ runs: RunRow[] }>(r)).then((d) => d.runs),
   run: (runId: string) =>
     fetch(`/api/runs/${runId}`).then((r) => j<{ run: RunRow; def: WorkflowDefRow; nodes: NodeStateRow[] }>(r)),
   cancelRun: (runId: string) => post(`/api/runs/${runId}/cancel`, {}).then((r) => j<{ ok: boolean }>(r)),
+  archiveRun: (runId: string) =>
+    post(`/api/runs/${runId}/archive`, {}).then((r) =>
+      j<{ ok: true; run: Pick<RunRow, 'id' | 'archivedAt'> }>(r)),
+  restoreRun: (runId: string) =>
+    post(`/api/runs/${runId}/restore`, {}).then((r) =>
+      j<{ ok: true; run: Pick<RunRow, 'id' | 'archivedAt'> }>(r)),
   runThread: (runId: string, since?: number) =>
     fetch(`/api/runs/${runId}/thread${since ? `?since=${since}` : ''}`)
       .then((r) => j<{ run: RunRow; def: WorkflowDefRow; nodes: NodeStateRow[]; events: EventRow[]; forgeRefs: ForgeRefRow[] }>(r)),

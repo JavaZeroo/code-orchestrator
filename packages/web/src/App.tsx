@@ -6,14 +6,14 @@ import { authApi, LoginPage, useMe, type Me } from './Auth';
 import { CreateProjectDialog } from './CreateProjectDialog';
 import { NewSession } from './NewSession';
 import { NotificationBell } from './Notifications';
-import { RunView } from './RunView';
+import { runArchiveMode, RunView } from './RunView';
 import { SettingsPage, type SettingsSection } from './Settings';
 import { sessionArchiveMode, SessionView } from './SessionView';
 import { Button } from './components/ui/button';
 import { Spinner, StatusDot } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { isWaitingRun, isWaitingSession, waitingCountByProject, type AttentionItem } from './lib/attention';
-import { invalidate, useArchivedSessions, useProjects, useRuns, useSessions } from './lib/queries';
+import { invalidate, useArchivedRuns, useArchivedSessions, useProjects, useRuns, useSessions } from './lib/queries';
 import { ProjectProvider, useCurrentProject, useProjectScope } from './lib/project';
 import { cn, relTime, fmtCost, shortModel } from './lib/utils';
 
@@ -243,6 +243,7 @@ function HomeScreen({
   const { data: allSessions = [] } = useSessions();
   const { data: allArchivedSessions = [] } = useArchivedSessions();
   const { data: runs = [] } = useRuns();
+  const { data: archivedRuns = [] } = useArchivedRuns();
   const { projectId, inScope } = useProjectScope();
 
   const runMap = useMemo(() => new Map(runs.map((r) => [r.id, r])), [runs]);
@@ -257,6 +258,7 @@ function HomeScreen({
     [allArchivedSessions, inScope],
   );
   const scopedRuns = useMemo(() => runs.filter((r) => inScope(r.projectId)), [runs, inScope]);
+  const scopedArchivedRuns = useMemo(() => archivedRuns.filter((r) => inScope(r.projectId)), [archivedRuns, inScope]);
 
   // 顶层线程：manual 会话（无 runId）+ 所有 runs（工作流子会话由所属 run 代表）
   const allThreads: ThreadItem[] = useMemo(
@@ -266,12 +268,20 @@ function HomeScreen({
     ],
     [sessions, scopedRuns],
   );
+  const allArchivedThreads: ThreadItem[] = useMemo(
+    () => [
+      ...archivedSessions.map((session) => ({ kind: 'session' as const, session })),
+      ...scopedArchivedRuns.map((run) => ({ kind: 'run' as const, run })),
+    ],
+    [archivedSessions, scopedArchivedRuns],
+  );
 
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'session' | 'run'>('all');
   const [showHistory, setShowHistory] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [updatingSessionArchive, setUpdatingSessionArchive] = useState<string | null>(null);
+  const [updatingRunArchive, setUpdatingRunArchive] = useState<string | null>(null);
 
   const q = search.trim().toLowerCase();
   const visible = useMemo(() => allThreads.filter((t) => {
@@ -286,12 +296,18 @@ function HomeScreen({
     return [r.defName, r.defId, r.id].some((v) => v?.toLowerCase().includes(q));
   }), [allThreads, filter, q]);
   const visibleArchived = useMemo(() => {
-    if (filter === 'run') return [];
-    return archivedSessions.filter((session) => {
+    return allArchivedThreads.filter((thread) => {
+      if (filter === 'session' && thread.kind !== 'session') return false;
+      if (filter === 'run' && thread.kind !== 'run') return false;
       if (!q) return true;
-      return [session.title, session.cwd, session.model, session.id].some((value) => value?.toLowerCase().includes(q));
+      if (thread.kind === 'session') {
+        const session = thread.session;
+        return [session.title, session.cwd, session.model, session.id].some((value) => value?.toLowerCase().includes(q));
+      }
+      const run = thread.run;
+      return [run.defName, run.defId, run.id].some((value) => value?.toLowerCase().includes(q));
     });
-  }, [archivedSessions, filter, q]);
+  }, [allArchivedThreads, filter, q]);
 
   // 分区
   const waiting = useMemo(() => visible.filter(isThreadWaiting), [visible]);
@@ -331,6 +347,21 @@ function HomeScreen({
       .finally(() => setUpdatingSessionArchive(null));
   };
 
+  const changeRunArchive = (run: import('./api').RunRow) => {
+    const mode = runArchiveMode(run);
+    if (!mode) return;
+    setUpdatingRunArchive(run.id);
+    const request = mode === 'archive' ? api.archiveRun(run.id) : api.restoreRun(run.id);
+    request
+      .then(() => {
+        invalidate('runs');
+        invalidate('archived-runs');
+        toast(mode === 'archive' ? '运行已归档' : '运行已移回历史');
+      })
+      .catch((error) => toast.error(`${mode === 'archive' ? '归档' : '恢复'}失败：${error}`))
+      .finally(() => setUpdatingRunArchive(null));
+  };
+
   const renderSessionRow = (s: import('./api').SessionRow) => {
     const archiveMode = sessionArchiveMode(s, s.state);
     return (
@@ -367,26 +398,41 @@ function HomeScreen({
     );
   };
 
-  const renderRunRow = (r: import('./api').RunRow) => (
-    <div
-      key={`run:${r.id}`}
-      className={cn('flex items-center gap-2 rounded-lg pr-1', selectedIsRun(r.id) && 'bg-panel-2 shadow-[var(--shadow-panel)]')}
-    >
-      <button
-        className="flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left transition-colors hover:bg-panel-2"
-        onClick={() => setSelected({ run: r.id })}
+  const renderRunRow = (r: import('./api').RunRow) => {
+    const archiveMode = runArchiveMode(r);
+    return (
+      <div
+        key={`run:${r.id}`}
+        className={cn('flex items-center gap-2 rounded-lg pr-1', selectedIsRun(r.id) && 'bg-panel-2 shadow-[var(--shadow-panel)]')}
       >
-        <StatusDot tone={RUN_TONE[r.status] ?? 'neutral'} live={r.status === 'running'} />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-medium text-ink-2">{r.defName ?? r.defId.slice(0, 8)}</span>
-          <span className="mono-nums block truncate text-[10px] text-faint">
-            {RUN_LABEL[r.status] ?? r.status} · run {r.id.slice(0, 8)} · {relTime(r.endedAt ?? r.startedAt)}
+        <button
+          className="flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left transition-colors hover:bg-panel-2"
+          onClick={() => setSelected({ run: r.id })}
+        >
+          <StatusDot tone={RUN_TONE[r.status] ?? 'neutral'} live={r.status === 'running'} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-medium text-ink-2">{r.defName ?? r.defId.slice(0, 8)}</span>
+            <span className="mono-nums block truncate text-[10px] text-faint">
+              {RUN_LABEL[r.status] ?? r.status} · run {r.id.slice(0, 8)} · {relTime(r.endedAt ?? r.startedAt)}
+            </span>
           </span>
-        </span>
-      </button>
-      {isWaitingRun(r) && <span className="mr-2 size-2 rounded-full bg-danger" />}
-    </div>
-  );
+        </button>
+        {isWaitingRun(r) && <span className="mr-2 size-2 rounded-full bg-danger" />}
+        {archiveMode && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            disabled={updatingRunArchive === r.id}
+            aria-label={archiveMode === 'archive' ? '归档运行' : '移出归档'}
+            title={archiveMode === 'archive' ? '归档运行' : '移出归档'}
+            onClick={() => changeRunArchive(r)}
+          >
+            {archiveMode === 'archive' ? <Archive size={13} /> : <ArchiveRestore size={13} />}
+          </Button>
+        )}
+      </div>
+    );
+  };
 
   function selectedIsSession(id: string): boolean {
     return typeof selected === 'object' && 'session' in selected && selected.session === id;
@@ -494,7 +540,7 @@ function HomeScreen({
               >
                 已归档 {visibleArchived.length} 条 {showArchived ? '▾' : '▸'}
               </button>
-              {showArchived && visibleArchived.map(renderSessionRow)}
+              {showArchived && visibleArchived.map(renderThreadRow)}
             </>
           )}
 
