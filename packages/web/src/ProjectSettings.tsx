@@ -9,7 +9,6 @@ import { toast } from 'sonner';
 import type { CreateTriggerBody, ForgeKind, ProjectRow, RequirementRow, TriggerRow, WorkflowDefRow } from './api';
 import { api, type Autonomy, type MaterializationRow } from './api';
 import type { Me } from './Auth';
-import { Designer } from './Designer';
 import { Button } from './components/ui/button';
 import { Badge, Card, Input, Label, Spinner, StatusDot, Textarea, type BadgeTone } from './components/ui/primitives';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
@@ -302,7 +301,15 @@ function RequirementRowItem({ r, onOpenRun }: { r: RequirementRow; onOpenRun: (r
 
 /* ──────── 流水线卡片 ──────── */
 
-function WorkflowDefCard({ def, project }: { def: WorkflowDefRow; project: ProjectRow }) {
+function WorkflowDefCard({
+  def,
+  project,
+  onEdit,
+}: {
+  def: WorkflowDefRow;
+  project: ProjectRow;
+  onEdit: (def: WorkflowDefRow) => void;
+}) {
   const [archiving, setArchiving] = useState(false);
   const [settingDefault, setSettingDefault] = useState(false);
   const isDefault = project.defaultWorkflow === def.id;
@@ -347,6 +354,9 @@ function WorkflowDefCard({ def, project }: { def: WorkflowDefRow; project: Proje
           </span>
         </div>
         <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" onClick={() => onEdit(def)} title="编辑并发布新版本">
+            <MessageCircle size={13} />
+          </Button>
           <Button variant="ghost" size="icon" onClick={doRename} title="改名">
             <Pencil size={13} />
           </Button>
@@ -622,7 +632,13 @@ export function ProjectAutomationSection({ me, project, onOpenRun }: { me: Me; p
   );
 }
 
-export function ProjectPipelinesSection({ project, onOpenDesigner }: { project: ProjectRow; onOpenDesigner: () => void }) {
+export function ProjectPipelinesSection({
+  project,
+  onOpenDesigner,
+}: {
+  project: ProjectRow;
+  onOpenDesigner: (workflow?: WorkflowDefRow) => void;
+}) {
   const { data: allDefs = [] } = useWorkflows();
   const defs = allDefs.filter((d) => d.projectId === project.id);
   const activeDefs = defs.filter((d) => d.archived !== 'yes');
@@ -632,7 +648,7 @@ export function ProjectPipelinesSection({ project, onOpenDesigner }: { project: 
     <section className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <p className="text-xs text-dim">项目的自动化流程。Composer「走流水线」与 issue/定时触发器都从这里取定义；星标为默认。</p>
-        <Button variant="default" size="sm" className="shrink-0" onClick={onOpenDesigner}>
+        <Button variant="default" size="sm" className="shrink-0" onClick={() => onOpenDesigner()}>
           <MessageCircle size={14} /> 对话编排新流水线
         </Button>
       </div>
@@ -645,7 +661,7 @@ export function ProjectPipelinesSection({ project, onOpenDesigner }: { project: 
         ) : (
           <>
             {activeDefs.map((d) => (
-              <WorkflowDefCard key={d.id} def={d} project={project} />
+              <WorkflowDefCard key={d.id} def={d} project={project} onEdit={onOpenDesigner} />
             ))}
             {archivedDefs.length > 0 && <ArchivedDefsSection defs={archivedDefs} project={project} />}
           </>

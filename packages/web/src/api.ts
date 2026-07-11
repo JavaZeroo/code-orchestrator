@@ -276,6 +276,9 @@ export const api = {
   workflows: () => fetch('/api/workflows').then((r) => j<{ workflows: WorkflowDefRow[] }>(r)).then((d) => d.workflows),
   createWorkflow: (graph: WorkflowDef, createdVia: 'chat' | 'manual', projectId?: string | null) =>
     post('/api/workflows', { graph, createdVia, projectId }).then((r) => j<{ id: string }>(r)),
+  reviseWorkflow: (id: string, graph: WorkflowDef, createdVia: 'chat' | 'manual') =>
+    post(`/api/workflows/${encodeURIComponent(id)}/revisions`, { graph, createdVia })
+      .then((r) => j<{ id: string; name: string; version: number; previousId: string }>(r)),
   patchWorkflow: (id: string, patch: { archived?: 'yes' | 'no'; name?: string }) =>
     fetch(`/api/workflows/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
   startRun: (workflowId: string, vars: Record<string, string>, projectId?: string | null) =>
