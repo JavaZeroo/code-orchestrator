@@ -72,6 +72,19 @@ export const runnerMethods = {
       error: z.string().optional(),
     }),
   },
+  /** 在原 runner 上重新接入已持久化的原生会话；仅宿主 Claude/Codex 会话支持 */
+  'session.resume': {
+    params: z.object({
+      sessionId: z.string(),
+      agent: z.enum(['claude', 'codex']),
+      cwd: z.string(),
+      nativeSessionId: z.string().min(1),
+      /** 重新解析后的模型/权限配置；原生会话历史仍由 nativeSessionId 恢复 */
+      meta: MessageMetaSchema.optional(),
+      env: z.record(z.string(), z.string()).optional(),
+    }),
+    result: z.object({ ok: z.boolean(), error: z.string().optional() }),
+  },
   'session.send': {
     params: z.object({
       sessionId: z.string(),

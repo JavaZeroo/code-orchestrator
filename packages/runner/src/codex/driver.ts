@@ -160,8 +160,10 @@ export class CodexSession {
   constructor(
     private readonly params: RunnerParams<'session.spawn'>,
     private readonly emit: DriverEmit,
+    private readonly resumeNativeSessionId?: string,
   ) {
     this.sessionId = params.sessionId;
+    this.nativeSessionId = resumeNativeSessionId;
   }
 
   start(): void {
@@ -253,9 +255,11 @@ export class CodexSession {
     rl.on('line', (line) => this.onLine(line));
 
     await this.initialize();
-    const thread = await this.sendRequest('thread/start', this.threadStartParams());
+    const thread = this.resumeNativeSessionId
+      ? await this.sendRequest('thread/resume', this.threadResumeParams(this.resumeNativeSessionId))
+      : await this.sendRequest('thread/start', this.threadStartParams());
     const threadObj = obj(obj(thread).thread);
-    const native = str(threadObj.id);
+    const native = str(threadObj.id) ?? this.resumeNativeSessionId;
     if (native) {
       this.threadId = native;
       this.nativeSessionId = native;
@@ -292,6 +296,20 @@ export class CodexSession {
       ...(appendParts.length > 0 ? { developerInstructions: appendParts.join('\n\n') } : {}),
       ephemeral: false,
       serviceName: 'code-orchestrator',
+    };
+  }
+
+  private threadResumeParams(threadId: string): Record<string, unknown> {
+    const meta = this.params.meta ?? {};
+    const appendParts = [meta.appendSystemPrompt].filter((s): s is string => Boolean(s));
+    return {
+      threadId,
+      ...(meta.model ? { model: meta.model } : {}),
+      cwd: this.params.cwd,
+      approvalPolicy: mapApprovalPolicy(meta.permissionMode),
+      sandbox: mapSandbox(meta.permissionMode),
+      ...(meta.customSystemPrompt ? { baseInstructions: meta.customSystemPrompt } : {}),
+      ...(appendParts.length > 0 ? { developerInstructions: appendParts.join('\n\n') } : {}),
     };
   }
 

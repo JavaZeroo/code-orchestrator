@@ -10,6 +10,7 @@ import { approvalDecisionSchema, MessageMetaSchema, sessionAgentSchema } from '@
 import { getDb, hasDb, schema } from '../db/index';
 import { decideGate } from '../engine/engine';
 import { publish } from '../events';
+import { resumeSession, ResumeError } from '../services/resume';
 import { spawnSession, SpawnError } from '../services/spawn';
 import { ContainerSpawnQueued, spawnContainerSession } from '../services/spawnContainer';
 import { resolveAndSpawn } from '../services/spawnAuto';
@@ -63,7 +64,7 @@ async function findSession(sessionId: string) {
 
 export async function registerSessionRoutes(app: FastifyInstance): Promise<void> {
   app.setErrorHandler((err, _req, reply) => {
-    if (err instanceof HttpError || err instanceof SpawnError) {
+    if (err instanceof HttpError || err instanceof SpawnError || err instanceof ResumeError) {
       void reply.code(err.statusCode).send({ error: err.message });
       return;
     }
@@ -144,6 +145,12 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     const db = requireDb();
     const rows = await db.select().from(schema.sessions).orderBy(desc(schema.sessions.createdAt)).limit(100);
     return { sessions: rows };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/sessions/:id/resume', async (req) => {
+    requireDb();
+    const result = await resumeSession(req.params.id);
+    return { ok: true, ...result };
   });
 
   app.post<{ Params: { id: string } }>('/api/sessions/:id/send', async (req) => {

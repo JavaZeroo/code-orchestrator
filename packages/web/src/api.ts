@@ -27,6 +27,7 @@ export interface SessionRow {
   runId: string | null;
   nodeId: string | null;
   projectId: string | null;
+  containerId: string | null;
   usage: SessionUsage | null;
   createdAt: string;
 }
@@ -296,6 +297,8 @@ export const api = {
   pendingApprovals: () =>
     fetch('/api/approvals?status=pending').then((r) => j<{ approvals: ApprovalRow[] }>(r)).then((d) => d.approvals),
   send: (sessionId: string, text: string) => post(`/api/sessions/${sessionId}/send`, { text }).then((r) => j(r)),
+  resume: (sessionId: string) =>
+    post(`/api/sessions/${sessionId}/resume`, {}).then((r) => j<{ ok: true; sessionId: string }>(r)),
   kill: (sessionId: string) => post(`/api/sessions/${sessionId}/kill`, {}).then((r) => j(r)),
   interrupt: (sessionId: string) => post(`/api/sessions/${sessionId}/interrupt`, {}).then((r) => j(r)),
   sessionDiff: (sessionId: string) =>

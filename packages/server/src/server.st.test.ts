@@ -395,6 +395,162 @@ describeSt('server ST: API + runner websocket', () => {
     );
   });
 
+  it('resumes a dead manual session on its original runner and keeps its timeline for subsequent messages', async () => {
+    const runner = await FakeRunner.connect(baseUrl, {
+      'session.resume': () => ({ ok: true }),
+      'session.send': () => ({ ok: true }),
+    });
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: {
+        id: 'm-resume',
+        name: 'Resume Runner',
+        labels: ['dev'],
+        resources: [],
+        runnerVersion: 'st',
+        startedAt: Date.now(),
+      },
+    });
+
+    const sessionId = 'session-resume-st';
+    await getDb().insert(schema.sessions).values({
+      id: sessionId,
+      machineId: 'm-resume',
+      agent: 'claude',
+      model: 'claude-sonnet',
+      cwd: '/tmp/resume-work',
+      state: 'dead',
+      nativeSessionId: 'claude-native-resume',
+    });
+    const [before] = await getDb()
+      .insert(schema.events)
+      .values({ sessionId, type: 'session.message', payload: { marker: 'before-runner-restart' } })
+      .returning({ seq: schema.events.seq });
+
+    const resumed = await app!.inject({ method: 'POST', url: `/api/sessions/${sessionId}/resume` });
+    expect(resumed.statusCode).toBe(200);
+    expect(resumed.json()).toEqual({ ok: true, sessionId });
+    expect(runner.calls.find((call) => call.method === 'session.resume')).toMatchObject({
+      params: {
+        sessionId,
+        agent: 'claude',
+        cwd: '/tmp/resume-work',
+        nativeSessionId: 'claude-native-resume',
+      },
+    });
+    const [claimed] = await getDb().select().from(schema.sessions).where(eq(schema.sessions.id, sessionId));
+    expect(claimed?.state).toBe('starting');
+
+    await expect(
+      runner.callServer('session.state', {
+        sessionId,
+        state: 'idle',
+        nativeSessionId: 'claude-native-resume',
+      }),
+    ).resolves.toEqual({ ok: true });
+    const sent = await app!.inject({
+      method: 'POST',
+      url: `/api/sessions/${sessionId}/send`,
+      payload: { text: 'continue with the earlier context' },
+    });
+    expect(sent.statusCode).toBe(200);
+    expect(runner.calls.find((call) => call.method === 'session.send')).toMatchObject({
+      params: { sessionId, text: 'continue with the earlier context' },
+    });
+
+    const timeline = await app!.inject({ method: 'GET', url: `/api/sessions/${sessionId}/events` });
+    const events = timeline.json<{ events: Array<{ seq: number; type: string; payload: unknown }> }>().events;
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ seq: before!.seq, type: 'session.message', payload: { marker: 'before-runner-restart' } }),
+        expect.objectContaining({ type: 'session.state', payload: expect.objectContaining({ state: 'idle' }) }),
+      ]),
+    );
+  });
+
+  it('serializes concurrent resume requests, rejects ineligible sessions, and rolls back runner failures', async () => {
+    let releaseConcurrent!: () => void;
+    const concurrentGate = new Promise<void>((resolve) => {
+      releaseConcurrent = resolve;
+    });
+    const runner = await FakeRunner.connect(baseUrl, {
+      'session.resume': async (params) => {
+        const { sessionId } = params as { sessionId: string };
+        if (sessionId === 'session-resume-concurrent') {
+          await concurrentGate;
+          return { ok: true };
+        }
+        return { ok: false, error: 'native context unavailable' };
+      },
+    });
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: {
+        id: 'm-resume-guard',
+        name: 'Resume Guard Runner',
+        labels: ['dev'],
+        resources: [],
+        runnerVersion: 'st',
+        startedAt: Date.now(),
+      },
+    });
+    await getDb().insert(schema.sessions).values([
+      {
+        id: 'session-resume-concurrent',
+        machineId: 'm-resume-guard',
+        agent: 'codex',
+        cwd: '/tmp/concurrent',
+        state: 'dead',
+        nativeSessionId: 'thread-concurrent',
+      },
+      {
+        id: 'session-resume-failure',
+        machineId: 'm-resume-guard',
+        agent: 'codex',
+        cwd: '/tmp/failure',
+        state: 'dead',
+        nativeSessionId: 'thread-failure',
+      },
+      {
+        id: 'session-resume-workflow',
+        machineId: 'm-resume-guard',
+        agent: 'claude',
+        cwd: '/tmp/workflow',
+        state: 'dead',
+        nativeSessionId: 'native-workflow',
+        runId: 'run-owned-session',
+      },
+    ]);
+
+    const first = app!.inject({ method: 'POST', url: '/api/sessions/session-resume-concurrent/resume' });
+    await vi.waitFor(() =>
+      expect(runner.calls).toContainEqual(
+        expect.objectContaining({ method: 'session.resume', params: expect.objectContaining({ sessionId: 'session-resume-concurrent' }) }),
+      ),
+    );
+    const concurrent = await app!.inject({ method: 'POST', url: '/api/sessions/session-resume-concurrent/resume' });
+    expect(concurrent.statusCode).toBe(409);
+    releaseConcurrent();
+    expect((await first).statusCode).toBe(200);
+
+    const ineligible = await app!.inject({ method: 'POST', url: '/api/sessions/session-resume-workflow/resume' });
+    expect(ineligible.statusCode).toBe(409);
+    const [workflow] = await getDb()
+      .select({ state: schema.sessions.state })
+      .from(schema.sessions)
+      .where(eq(schema.sessions.id, 'session-resume-workflow'));
+    expect(workflow?.state).toBe('dead');
+
+    const failed = await app!.inject({ method: 'POST', url: '/api/sessions/session-resume-failure/resume' });
+    expect(failed.statusCode).toBe(502);
+    expect(failed.json()).toMatchObject({ error: 'native context unavailable' });
+    const [rolledBack] = await getDb()
+      .select({ state: schema.sessions.state })
+      .from(schema.sessions)
+      .where(eq(schema.sessions.id, 'session-resume-failure'));
+    expect(rolledBack?.state).toBe('dead');
+  });
+
   it('forwards Codex interactive answers across REST and runner/client websockets', async () => {
     const runner = await FakeRunner.connect(baseUrl, {
       'session.spawn': () => ({ ok: true, nativeSessionId: 'codex-thread-1' }),
