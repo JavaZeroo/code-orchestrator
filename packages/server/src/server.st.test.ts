@@ -7,6 +7,7 @@ import { closeDb, getDb, schema } from './db/index';
 import { eq } from 'drizzle-orm';
 import { encryptSecret } from './services/crypto';
 import { markTaskDone, reconcileQueueOnce, type QueuedTask } from './services/taskQueue';
+import { getForge } from './forge/registry';
 
 const runSt = Boolean(process.env.DATABASE_URL);
 const describeSt = runSt ? describe : describe.skip;
@@ -306,6 +307,98 @@ describeSt('server ST: API + runner websocket', () => {
     expect(project).toMatchObject({ defaultWorkflow: sourceId, defaultDefId: sourceId });
     expect(trigger).toMatchObject({ defId: sourceId });
     expect(run).toMatchObject({ id: runId, defId: sourceId });
+  });
+
+  it('atomically starts one workflow run for a recorded issue intake', async () => {
+    const db = getDb();
+    const projectId = 'manual-intake-project';
+    const defId = 'manual-intake-workflow';
+    const triggerId = 'manual-intake-trigger';
+    const intakeId = 'manual-intake';
+    const graph = {
+      name: 'Manual intake pipeline',
+      nodes: [{ id: 'review', type: 'gate' }],
+      edges: [],
+    };
+    await db.insert(schema.projects).values({
+      id: projectId,
+      name: 'Manual intake ST',
+      forge: 'github',
+      repo: 'example/manual-intake',
+      vars: { team: 'project', priority: 'project' },
+    });
+    await db.insert(schema.workflowDefs).values({
+      id: defId,
+      name: graph.name,
+      graph,
+      projectId,
+    });
+    await db.insert(schema.requirementTriggers).values({
+      id: triggerId,
+      projectId,
+      forge: 'github',
+      repo: 'example/manual-intake',
+      defId,
+      vars: { priority: 'trigger' },
+    });
+    await db.insert(schema.requirementIntakes).values({
+      id: intakeId,
+      triggerId,
+      projectId,
+      forge: 'github',
+      repo: 'example/manual-intake',
+      issueNumber: '73',
+      title: 'Seeded issue',
+      author: 'seed-author',
+      issueUrl: 'https://github.com/example/manual-intake/issues/73',
+      status: 'seeded',
+    });
+    const getIssue = vi.spyOn(getForge('github'), 'getIssue').mockResolvedValue({
+      number: '73',
+      title: 'Launch recorded intake',
+      body: 'Use the original issue body',
+      state: 'open',
+      labels: ['automation'],
+      author: 'issue-author',
+      htmlUrl: 'https://github.com/example/manual-intake/issues/73',
+    });
+
+    const responses = await Promise.all([
+      app!.inject({ method: 'POST', url: `/api/requirements/${intakeId}/start` }),
+      app!.inject({ method: 'POST', url: `/api/requirements/${intakeId}/start` }),
+    ]);
+    const success = responses.find((response) => response.statusCode === 201);
+    const conflict = responses.find((response) => response.statusCode === 409);
+
+    expect(success).toBeDefined();
+    expect(conflict?.json()).toMatchObject({ error: expect.stringContaining('already') });
+    const { runId } = success!.json() as { runId: string };
+    const [intake] = await db.select().from(schema.requirementIntakes).where(eq(schema.requirementIntakes.id, intakeId));
+    const runs = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.defId, defId));
+    await vi.waitFor(async () => {
+      const [node] = await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, runId));
+      expect(node?.status).toBe('waiting_human');
+    });
+    const nodes = await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, runId));
+
+    expect(getIssue).toHaveBeenCalledTimes(1);
+    expect(intake).toMatchObject({ status: 'started', runId });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ id: runId, projectId });
+    expect(runs[0]?.context).toMatchObject({
+      vars: {
+        team: 'project',
+        priority: 'trigger',
+        forge: 'github',
+        repo: 'example/manual-intake',
+        issue_number: '73',
+        issue_title: 'Launch recorded intake',
+        issue_body: 'Use the original issue body',
+        issue_author: 'issue-author',
+      },
+    });
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({ runId, nodeId: 'review', status: 'waiting_human' });
   });
 
   it('registers a runner, spawns a session, records events, and decides tool approvals', async () => {

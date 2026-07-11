@@ -81,7 +81,15 @@ async function publishNodeState(runId: string, nodeId: string, status: string, e
 
 // ---------- 启动 ----------
 
-export async function startRun(defId: string, vars: Record<string, string>, projectId?: string): Promise<string> {
+type RunTransaction = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0];
+
+/** 可选 hook 与 run/node 建账同事务执行；用于把外部来源记录原子链接到新 run。 */
+export async function startRun(
+  defId: string,
+  vars: Record<string, string>,
+  projectId?: string,
+  onCreate?: (tx: RunTransaction, runId: string) => Promise<void>,
+): Promise<string> {
   const db = getDb();
   const defRows = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, defId)).limit(1);
   const defRow = defRows[0];
@@ -97,10 +105,13 @@ export async function startRun(defId: string, vars: Record<string, string>, proj
   const runId = createId();
   const context: RunContext = { vars: { ...(def.vars ?? {}), ...vars }, outputs: {} };
   const effectiveProjectId = projectId ?? defRow.projectId ?? undefined;
-  await db.insert(schema.workflowRuns).values({ id: runId, defId, projectId: effectiveProjectId, status: 'running', context });
-  await db
-    .insert(schema.nodeStates)
-    .values(def.nodes.map((n) => ({ runId, nodeId: n.id, status: 'pending' as const })));
+  await db.transaction(async (tx) => {
+    await tx.insert(schema.workflowRuns).values({ id: runId, defId, projectId: effectiveProjectId, status: 'running', context });
+    await tx
+      .insert(schema.nodeStates)
+      .values(def.nodes.map((n) => ({ runId, nodeId: n.id, status: 'pending' as const })));
+    await onCreate?.(tx, runId);
+  });
   await publish({ type: 'run.started', runId, payload: { defId, name: def.name, vars: context.vars, projectId: effectiveProjectId } });
   scheduleTick(runId);
   return runId;

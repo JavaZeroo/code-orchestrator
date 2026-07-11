@@ -106,6 +106,13 @@ describe('api client', () => {
     expect(fetch).toHaveBeenCalledWith('/api/forge/refs/ref%2F1/retest', { method: 'POST' });
   });
 
+  it('starts a recorded requirement through its encoded intake resource', async () => {
+    const fetch = mockFetch(Response.json({ runId: 'run-1' }, { status: 201 }));
+
+    await expect(api.startRequirement('intake/1')).resolves.toEqual({ runId: 'run-1' });
+    expect(fetch).toHaveBeenCalledWith('/api/requirements/intake%2F1/start', { method: 'POST' });
+  });
+
   it('surfaces a rejected retest request to the run action', async () => {
     mockFetch(new Response('{"error":"该 forge ref 已停止跟踪"}', { status: 409 }));
 

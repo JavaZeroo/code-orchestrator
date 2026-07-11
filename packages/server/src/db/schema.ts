@@ -479,8 +479,8 @@ export const requirementIntakes = pgTable(
     author: text('author'),
     issueUrl: text('issue_url'),
     runId: text('run_id'),
-    /** seeded=基线仅记录未触发 started=已起工作流 failed=起工作流失败 */
-    status: text('status', { enum: ['seeded', 'started', 'failed'] }).notNull(),
+    /** seeded=基线未触发 starting=已抢占启动权 started=已起工作流 failed=启动失败可重试 */
+    status: text('status', { enum: ['seeded', 'starting', 'started', 'failed'] }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('req_intake_trigger_issue_uniq').on(t.triggerId, t.issueNumber)],
