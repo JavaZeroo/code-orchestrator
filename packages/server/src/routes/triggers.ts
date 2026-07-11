@@ -11,7 +11,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { count, desc, eq, max, sql } from 'drizzle-orm';
 import * as z from 'zod';
 import { getDb, schema } from '../db/index';
-import { pollIntakesOnce } from '../forge/intake';
+import { pollIntakesOnce, RecordedIntakeStartError, startRecordedIntake } from '../forge/intake';
 
 const createSchema = z.object({
   projectId: z.string().nullable().optional(),
@@ -166,6 +166,21 @@ export async function registerTriggerRoutes(app: FastifyInstance): Promise<void>
       .orderBy(desc(schema.requirementIntakes.createdAt))
       .limit(200);
     return { requirements: rows };
+  });
+
+  /** 对首次轮询记录的基线需求手动开跑，或重试此前启动失败的需求。 */
+  app.post<{ Params: { id: string } }>('/api/requirements/:id/start', async (req, reply) => {
+    try {
+      const result = await startRecordedIntake(req.params.id);
+      void reply.code(201);
+      return result;
+    } catch (err) {
+      if (err instanceof RecordedIntakeStartError) {
+        void reply.code(err.statusCode);
+        return { error: err.message };
+      }
+      throw err;
+    }
   });
 
   /** 手动触发一轮需求轮询（调试用） */

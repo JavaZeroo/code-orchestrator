@@ -9,7 +9,7 @@
 
 import { Cron } from 'croner';
 import { createId } from '@paralleldrive/cuid2';
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { getDb, schema } from '../db/index';
 import { publish } from '../events';
 import { EngineError, startRun } from '../engine/engine';
@@ -23,6 +23,44 @@ const POLL_INTERVAL_MS = 60_000;
 const SINCE_BUFFER_MS = 5 * 60_000;
 
 type TriggerRow = typeof schema.requirementTriggers.$inferSelect;
+type IntakeRow = typeof schema.requirementIntakes.$inferSelect;
+type ProjectRow = typeof schema.projects.$inferSelect;
+
+export interface RecordedIntakeContext {
+  intake: Pick<
+    IntakeRow,
+    | 'id'
+    | 'triggerId'
+    | 'projectId'
+    | 'forge'
+    | 'repo'
+    | 'issueNumber'
+    | 'title'
+    | 'author'
+    | 'issueUrl'
+    | 'runId'
+    | 'status'
+  >;
+  trigger: Pick<TriggerRow, 'id' | 'defId' | 'forge' | 'repo' | 'vars'>;
+  project?: Pick<ProjectRow, 'id' | 'name' | 'vars'>;
+}
+
+export interface RecordedIntakeStartDependencies {
+  load(id: string): Promise<RecordedIntakeContext | undefined>;
+  claim(id: string): Promise<boolean>;
+  getIssue(context: RecordedIntakeContext): Promise<NormalizedIssue>;
+  launch(context: RecordedIntakeContext, issue: NormalizedIssue, vars: Record<string, string>): Promise<string>;
+  rollback(context: RecordedIntakeContext, error: unknown): Promise<void>;
+}
+
+export class RecordedIntakeStartError extends Error {
+  constructor(
+    readonly statusCode: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 /** 标签需全含；标题按正则（非法则退化子串）过滤 */
 function matches(issue: NormalizedIssue, trigger: TriggerRow): boolean {
@@ -46,22 +84,210 @@ function matches(issue: NormalizedIssue, trigger: TriggerRow): boolean {
 }
 
 /** issue 字段 → 工作流变量（agent 节点 prompt 用 {{vars.issue_body}} 等引用） */
-function issueVars(
+export function buildIssueVariables(
   issue: NormalizedIssue,
-  trigger: TriggerRow,
-  project?: typeof schema.projects.$inferSelect,
+  trigger: Pick<TriggerRow, 'forge' | 'repo' | 'vars'>,
+  project?: { vars: Record<string, string> },
+  source: Pick<IntakeRow, 'forge' | 'repo'> = trigger,
 ): Record<string, string> {
   return {
     ...(project?.vars ?? {}), // 项目级默认（最低优先）
     ...trigger.vars, // 触发器覆盖项目
-    forge: trigger.forge,
-    repo: trigger.repo,
+    forge: source.forge,
+    repo: source.repo,
     issue_number: issue.number,
     issue_title: issue.title,
     issue_body: issue.body ?? '',
     issue_url: issue.htmlUrl ?? '',
     issue_author: issue.author ?? '',
   };
+}
+
+export async function startRecordedIntakeWithDependencies(
+  id: string,
+  deps: RecordedIntakeStartDependencies,
+): Promise<{ runId: string }> {
+  const context = await deps.load(id);
+  if (!context) {
+    throw new RecordedIntakeStartError(404, `requirement intake not found: ${id}`);
+  }
+  if (context.intake.runId || !['seeded', 'failed'].includes(context.intake.status)) {
+    throw new RecordedIntakeStartError(409, `requirement intake already started or claimed: ${id}`);
+  }
+  if (!(await deps.claim(id))) {
+    throw new RecordedIntakeStartError(409, `requirement intake is already being started: ${id}`);
+  }
+
+  try {
+    const fresh = await deps.getIssue(context);
+    const issue: NormalizedIssue = {
+      ...fresh,
+      number: context.intake.issueNumber,
+      title: fresh.title || context.intake.title || `#${context.intake.issueNumber}`,
+      author: fresh.author ?? context.intake.author ?? undefined,
+      htmlUrl: fresh.htmlUrl ?? context.intake.issueUrl ?? undefined,
+    };
+    const vars = buildIssueVariables(issue, context.trigger, context.project, context.intake);
+    const runId = await deps.launch(context, issue, vars);
+    return { runId };
+  } catch (err) {
+    await deps.rollback(context, err);
+    if (err instanceof RecordedIntakeStartError) {
+      throw err;
+    }
+    if (err instanceof EngineError) {
+      throw new RecordedIntakeStartError(err.statusCode, err.message);
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    throw new RecordedIntakeStartError(502, `requirement intake launch failed: ${message}`);
+  }
+}
+
+async function launchIssueIntake(
+  context: RecordedIntakeContext,
+  issue: NormalizedIssue,
+  vars: Record<string, string>,
+  via?: 'manual',
+): Promise<string> {
+  const db = getDb();
+  const ws = await provisionWorkspace(
+    context.intake.forge,
+    context.intake.repo,
+    context.intake.issueNumber,
+    vars.base ?? 'main',
+  );
+  if (ws) {
+    vars.cwd = ws.cwd;
+    vars.branch = ws.branch;
+  }
+  const runId = await startRun(
+    context.trigger.defId,
+    vars,
+    context.intake.projectId ?? undefined,
+    async (tx, createdRunId) => {
+      const linked = await tx
+        .update(schema.requirementIntakes)
+        .set({ runId: createdRunId, status: 'started' })
+        .where(
+          and(
+            eq(schema.requirementIntakes.id, context.intake.id),
+            eq(schema.requirementIntakes.status, 'starting'),
+            isNull(schema.requirementIntakes.runId),
+          ),
+        )
+        .returning({ id: schema.requirementIntakes.id });
+      if (!linked[0]) {
+        throw new RecordedIntakeStartError(
+          409,
+          `requirement intake already started or claimed: ${context.intake.id}`,
+        );
+      }
+    },
+  );
+  await publish({
+    type: 'requirement.triggered',
+    runId,
+    payload: {
+      triggerId: context.trigger.id,
+      projectId: context.intake.projectId ?? undefined,
+      project: context.project?.name,
+      forge: context.intake.forge,
+      repo: context.intake.repo,
+      issue: context.intake.issueNumber,
+      title: issue.title,
+      url: issue.htmlUrl,
+      ...(via ? { via } : {}),
+    },
+  });
+  return runId;
+}
+
+const recordedIntakeDependencies: RecordedIntakeStartDependencies = {
+  async load(id) {
+    const db = getDb();
+    const [intake] = await db
+      .select()
+      .from(schema.requirementIntakes)
+      .where(eq(schema.requirementIntakes.id, id))
+      .limit(1);
+    if (!intake) {
+      return undefined;
+    }
+    const [trigger] = await db
+      .select()
+      .from(schema.requirementTriggers)
+      .where(eq(schema.requirementTriggers.id, intake.triggerId))
+      .limit(1);
+    if (!trigger) {
+      return undefined;
+    }
+    const project = intake.projectId
+      ? (await db.select().from(schema.projects).where(eq(schema.projects.id, intake.projectId)).limit(1))[0]
+      : undefined;
+    return { intake, trigger, project };
+  },
+
+  async claim(id) {
+    const claimed = await getDb()
+      .update(schema.requirementIntakes)
+      .set({ status: 'starting' })
+      .where(
+        and(
+          eq(schema.requirementIntakes.id, id),
+          inArray(schema.requirementIntakes.status, ['seeded', 'failed']),
+          isNull(schema.requirementIntakes.runId),
+        ),
+      )
+      .returning({ id: schema.requirementIntakes.id });
+    return Boolean(claimed[0]);
+  },
+
+  async getIssue(context) {
+    const token = await anyForgeToken(context.intake.forge);
+    return getForge(context.intake.forge).getIssue(
+      context.intake.repo,
+      context.intake.issueNumber,
+      token,
+    );
+  },
+
+  launch(context, issue, vars) {
+    return launchIssueIntake(context, issue, vars, 'manual');
+  },
+
+  async rollback(context, error) {
+    const rolledBack = await getDb()
+      .update(schema.requirementIntakes)
+      .set({ status: 'failed' })
+      .where(
+        and(
+          eq(schema.requirementIntakes.id, context.intake.id),
+          eq(schema.requirementIntakes.status, 'starting'),
+          isNull(schema.requirementIntakes.runId),
+        ),
+      )
+      .returning({ id: schema.requirementIntakes.id });
+    if (!rolledBack[0]) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    await publish({
+      type: 'requirement.failed',
+      payload: {
+        triggerId: context.trigger.id,
+        projectId: context.intake.projectId ?? undefined,
+        forge: context.intake.forge,
+        repo: context.intake.repo,
+        issue: context.intake.issueNumber,
+        error: message,
+        via: 'manual',
+      },
+    });
+  },
+};
+
+export function startRecordedIntake(id: string): Promise<{ runId: string }> {
+  return startRecordedIntakeWithDependencies(id, recordedIntakeDependencies);
 }
 
 /** kind=schedule：cron 到点起 run。首轮只立水位不触发；错过多个周期只补一发。 */
@@ -164,7 +390,7 @@ async function pollTrigger(trigger: TriggerRow): Promise<void> {
         title: issue.title,
         author: issue.author,
         issueUrl: issue.htmlUrl,
-        status: seeding ? 'seeded' : 'started',
+        status: seeding ? 'seeded' : 'starting',
       })
       .onConflictDoNothing({ target: [schema.requirementIntakes.triggerId, schema.requirementIntakes.issueNumber] })
       .returning({ id: schema.requirementIntakes.id });
@@ -173,33 +399,38 @@ async function pollTrigger(trigger: TriggerRow): Promise<void> {
       continue; // 已见过，或基线仅记录不触发
     }
     try {
-      const vars = issueVars(issue, trigger, project);
-      // 自动供给隔离工作区（WORKSPACE_ROOT 开启时）：每 run 独立 worktree，注入 cwd/branch
-      const ws = await provisionWorkspace(forgeKind, trigger.repo, issue.number, vars.base ?? 'main');
-      if (ws) {
-        vars.cwd = ws.cwd;
-        vars.branch = ws.branch;
-      }
-      const runId = await startRun(trigger.defId, vars, trigger.projectId ?? undefined);
-      await db.update(schema.requirementIntakes).set({ runId }).where(eq(schema.requirementIntakes.id, intakeId));
-      await publish({
-        type: 'requirement.triggered',
-        runId,
-        payload: {
+      const vars = buildIssueVariables(issue, trigger, project);
+      const context: RecordedIntakeContext = {
+        intake: {
+          id: intakeId,
           triggerId: trigger.id,
-          projectId: trigger.projectId ?? undefined,
-          project: project?.name,
+          projectId: trigger.projectId ?? null,
           forge: forgeKind,
           repo: trigger.repo,
-          issue: issue.number,
+          issueNumber: issue.number,
           title: issue.title,
-          url: issue.htmlUrl,
+          author: issue.author ?? null,
+          issueUrl: issue.htmlUrl ?? null,
+          runId: null,
+          status: 'starting',
         },
-      });
+        trigger,
+        project,
+      };
+      const runId = await launchIssueIntake(context, issue, vars);
       console.log(`[intake] ${trigger.repo}#${issue.number} → run ${runId}`);
     } catch (err) {
       const msg = err instanceof EngineError ? err.message : err instanceof Error ? err.message : String(err);
-      await db.update(schema.requirementIntakes).set({ status: 'failed' }).where(eq(schema.requirementIntakes.id, intakeId));
+      await db
+        .update(schema.requirementIntakes)
+        .set({ status: 'failed' })
+        .where(
+          and(
+            eq(schema.requirementIntakes.id, intakeId),
+            eq(schema.requirementIntakes.status, 'starting'),
+            isNull(schema.requirementIntakes.runId),
+          ),
+        );
       await publish({
         type: 'requirement.failed',
         payload: { triggerId: trigger.id, forge: forgeKind, repo: trigger.repo, issue: issue.number, error: msg },

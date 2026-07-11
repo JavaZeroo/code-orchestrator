@@ -190,7 +190,7 @@ export interface RequirementRow {
   author: string | null;
   issueUrl: string | null;
   runId: string | null;
-  status: 'seeded' | 'started' | 'failed';
+  status: 'seeded' | 'starting' | 'started' | 'failed';
   runStatus: string | null;
   createdAt: string;
 }
@@ -317,6 +317,9 @@ export const api = {
     fetch(`/api/triggers/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then((r) => j(r)),
   deleteTrigger: (id: string) => fetch(`/api/triggers/${id}`, { method: 'DELETE' }).then((r) => j(r)),
   requirements: () => fetch('/api/requirements').then((r) => j<{ requirements: RequirementRow[] }>(r)).then((d) => d.requirements),
+  startRequirement: (id: string) =>
+    fetch(`/api/requirements/${encodeURIComponent(id)}/start`, { method: 'POST' })
+      .then((r) => j<{ runId: string }>(r)),
   pollTriggers: () => post('/api/triggers/poll', {}).then((r) => j<{ polled: number }>(r)),
   listProviders: () => fetch('/api/llm/providers').then((r) => j<{ providers: LlmProviderRow[] }>(r)).then((d) => d.providers),
   saveProvider: (name: string, body: { base_url?: string | null; api_key?: string; models?: string[]; default_model?: string | null }) =>

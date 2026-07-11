@@ -261,14 +261,33 @@ function TriggerRowItem({ t }: { t: TriggerRow }) {
   );
 }
 
-function RequirementRowItem({ r, onOpenRun }: { r: RequirementRow; onOpenRun: (runId: string) => void }) {
+export function RequirementRowItem({ r, onOpenRun }: { r: RequirementRow; onOpenRun: (runId: string) => void }) {
+  const [busy, setBusy] = useState(false);
   const statusText =
     r.status === 'seeded'
       ? '基线（未触发）'
       : r.status === 'failed'
         ? '触发失败'
-        : (r.runStatus ?? 'started');
+        : r.status === 'starting'
+          ? '正在启动'
+          : (r.runStatus ?? 'started');
   const tone = r.status === 'seeded' ? 'neutral' : r.status === 'failed' ? 'danger' : REQ_TONE[r.runStatus ?? ''] ?? 'accent';
+  const canStart = !r.runId && (r.status === 'seeded' || r.status === 'failed');
+
+  const start = () => {
+    setBusy(true);
+    api.startRequirement(r.id)
+      .then(() => {
+        toast.success(r.status === 'failed' ? '需求已重新启动' : '需求已启动');
+        invalidate('requirements');
+        invalidate('runs');
+      })
+      .catch((e) => {
+        invalidate('requirements');
+        toast.error(String(e instanceof Error ? e.message : e));
+      })
+      .finally(() => setBusy(false));
+  };
 
   return (
     <div className="flex items-center gap-3 border-b border-line/60 px-3 py-2.5 last:border-b-0">
@@ -290,6 +309,11 @@ function RequirementRowItem({ r, onOpenRun }: { r: RequirementRow; onOpenRun: (r
         </div>
       </div>
       <Badge tone={tone}>{statusText}</Badge>
+      {canStart && (
+        <Button variant="secondary" size="sm" disabled={busy} onClick={start} title={r.status === 'failed' ? '重试需求' : '启动需求'}>
+          <Play size={13} /> {busy ? '启动中…' : r.status === 'failed' ? '重试' : '启动'}
+        </Button>
+      )}
       {r.runId && (
         <Button variant="ghost" size="sm" onClick={() => onOpenRun(r.runId!)} title="查看运行">
           <Play size={13} /> 运行
@@ -596,7 +620,7 @@ export function ProjectAutomationSection({ me, project, onOpenRun }: { me: Me; p
   return (
     <section className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <p className="text-xs text-dim">issue 命中过滤 / cron 到点 → 自动起流水线。seeded/failed 基线是配置域诊断日志。</p>
+        <p className="text-xs text-dim">issue 命中过滤 / cron 到点 → 自动起流水线；基线需求可手动启动，失败需求可重试。</p>
         <Button variant="secondary" size="sm" className="shrink-0" disabled={polling} onClick={pollNow}>
           <RefreshCw size={13} className={cn(polling && 'animate-spin')} /> 立即轮询
         </Button>
