@@ -53,6 +53,7 @@ const listSessionsQuerySchema = z.object({ archived: z.enum(['true', 'false']).d
 const decideBodySchema = z.object({ decision: approvalDecisionSchema, decidedBy: z.string().optional() });
 const workspaceFileQuerySchema = z.object({ path: z.string().min(1) });
 const workspaceListQuerySchema = z.object({ path: z.string().default('') });
+const WORKSPACE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const EVENT_PAGE_SIZE = 2000;
 
 function requireDb() {
@@ -73,6 +74,10 @@ async function findSession(sessionId: string) {
 }
 
 export async function registerSessionRoutes(app: FastifyInstance): Promise<void> {
+  app.addContentTypeParser('application/octet-stream', {
+    parseAs: 'buffer',
+    bodyLimit: WORKSPACE_UPLOAD_MAX_BYTES,
+  }, (_req, body, done) => done(null, body));
   app.setErrorHandler((err, _req, reply) => {
     if (
       err instanceof HttpError ||
@@ -87,6 +92,10 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     }
     if (err instanceof z.ZodError) {
       void reply.code(400).send({ error: 'invalid request', issues: err.issues });
+      return;
+    }
+    if ((err as { code?: string }).code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+      void reply.code(413).send({ error: `file exceeds the ${WORKSPACE_UPLOAD_MAX_BYTES}-byte limit` });
       return;
     }
     app.log.error(err);
@@ -305,6 +314,26 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       .header('content-length', String(data.length))
       .header('content-disposition', `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(result.basename)}`)
       .send(data);
+  });
+
+  /** Upload one bounded file into the host or container session workspace. */
+  app.post<{ Params: { id: string }; Querystring: { path?: string }; Body: Buffer }>('/api/sessions/:id/files', {
+    bodyLimit: WORKSPACE_UPLOAD_MAX_BYTES,
+  }, async (req, reply) => {
+    const session = await findSession(req.params.id);
+    const { path } = workspaceFileQuerySchema.parse(req.query);
+    if (!Buffer.isBuffer(req.body)) throw new HttpError(415, 'content-type must be application/octet-stream');
+    const result = await callRunner(session.machineId, 'workspace.write', {
+      root: session.cwd,
+      path,
+      containerId: session.containerId ?? undefined,
+      data: req.body.toString('base64'),
+      size: req.body.length,
+    });
+    if (!result.ok) throw new HttpError(400, result.error ?? 'workspace file upload failed');
+    if (result.size !== req.body.length) throw new HttpError(502, 'runner returned an invalid workspace write result');
+    void reply.code(201);
+    return { ok: true, path, size: result.size };
   });
 
   /** List one bounded workspace directory so operators can discover downloadable files. */

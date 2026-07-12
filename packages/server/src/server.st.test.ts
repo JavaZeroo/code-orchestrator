@@ -2614,6 +2614,8 @@ describeSt('server ST: API + runner websocket', () => {
     expect(signUp.statusCode).toBe(200);
     const cookie = signUp.cookies.map(({ name, value }) => `${name}=${value}`).join('; ');
     const bytes = Buffer.from([0, 17, 128, 255, 10]);
+    const uploadedBytes = Buffer.from([255, 0, 128, 13, 10]);
+    let uploaded: Buffer | undefined;
     const runner = await FakeRunner.connect(baseUrl, {
       'workspace.list': (params) => {
         expect(params).toEqual({ root: '/tmp/artifact-work', path: '', containerId: 'artifact-container' });
@@ -2627,6 +2629,13 @@ describeSt('server ST: API + runner websocket', () => {
       'workspace.read': (params) => {
         expect(params).toEqual({ root: '/tmp/artifact-work', path: 'out/result.bin', containerId: 'artifact-container' });
         return { ok: true, basename: 'result.bin', size: bytes.length, data: bytes.toString('base64') };
+      },
+      'workspace.write': (params) => {
+        expect(params).toMatchObject({
+          root: '/tmp/artifact-work', path: 'out/upload.bin', containerId: 'artifact-container', size: uploadedBytes.length,
+        });
+        uploaded = Buffer.from((params as { data: string }).data, 'base64');
+        return { ok: true, size: uploaded?.length };
       },
     });
     runners.push(runner);
@@ -2646,6 +2655,13 @@ describeSt('server ST: API + runner websocket', () => {
       method: 'GET', url: '/api/sessions/session-artifact-st/files?path=out%2Fresult.bin', headers: { host: 'localhost:7620' },
     });
     expect(unauthorized.statusCode).toBe(401);
+    const unauthorizedUpload = await app!.inject({
+      method: 'POST',
+      url: '/api/sessions/session-artifact-st/files?path=out%2Fupload.bin',
+      headers: { host: 'localhost:7620', 'content-type': 'application/octet-stream' },
+      payload: uploadedBytes,
+    });
+    expect(unauthorizedUpload.statusCode).toBe(401);
     const listing = await app!.inject({
       method: 'GET',
       url: '/api/sessions/session-artifact-st/files/list?path=',
@@ -2665,8 +2681,18 @@ describeSt('server ST: API + runner websocket', () => {
     expect(downloaded.statusCode).toBe(200);
     expect(downloaded.headers['content-disposition']).toContain('result.bin');
     expect(downloaded.rawPayload).toEqual(bytes);
+    const upload = await app!.inject({
+      method: 'POST',
+      url: '/api/sessions/session-artifact-st/files?path=out%2Fupload.bin',
+      headers: { host: 'localhost:7620', cookie, 'content-type': 'application/octet-stream' },
+      payload: uploadedBytes,
+    });
+    expect(upload.statusCode).toBe(201);
+    expect(upload.json()).toEqual({ ok: true, path: 'out/upload.bin', size: uploadedBytes.length });
+    expect(uploaded).toEqual(uploadedBytes);
     expect(runner.calls.some((call) => call.method === 'workspace.list')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.read')).toBe(true);
+    expect(runner.calls.some((call) => call.method === 'workspace.write')).toBe(true);
   });
 
   it('posts forge comments through authenticated refs with the requester token', async () => {

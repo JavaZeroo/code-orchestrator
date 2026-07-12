@@ -512,6 +512,12 @@ export const api = {
   workspaceFiles: (sessionId: string, path = '') =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/list?path=${encodeURIComponent(path)}`)
       .then((r) => j<WorkspaceListing>(r)),
+  uploadWorkspaceFile: (sessionId: string, path: string, file: Blob) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: file,
+    }).then((r) => j<{ ok: true; path: string; size: number }>(r)),
   decide: (approvalId: string, behavior: 'allow' | 'deny', message?: string) =>
     post(`/api/approvals/${approvalId}/decide`, {
       decision: behavior === 'allow' ? { behavior } : { behavior, message },

@@ -97,6 +97,19 @@ describe('api client', () => {
     expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files/list?path=reports%2Ffinal');
   });
 
+  it('uploads exact file bytes to an encoded workspace destination', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, path: 'reports/raw.bin', size: 4 }));
+    const file = new Blob([new Uint8Array([0, 1, 128, 255])]);
+    await expect(api.uploadWorkspaceFile('session/one', 'reports/raw.bin', file)).resolves.toEqual({
+      ok: true, path: 'reports/raw.bin', size: 4,
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files?path=reports%2Fraw.bin', {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: file,
+    });
+  });
+
   it('posts JSON bodies for session spawn', async () => {
     const fetch = mockFetch(Response.json({ sessionId: 's1' }));
 
