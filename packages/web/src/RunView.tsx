@@ -405,6 +405,16 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
     }
   }, [runId]);
 
+  const handleEditNote = useCallback(async (noteId: number, markdown: string) => {
+    try {
+      await api.editRunNote(runId, noteId, markdown);
+      toast.success('运行备注已更新');
+    } catch (error) {
+      toast.error(`更新运行备注失败：${error}`);
+      throw error;
+    }
+  }, [runId]);
+
   const handleRetest = useCallback((refId: string) => runRetestAction(refId, {
     request: api.retestForgeRef,
     success: toast.success,
@@ -569,6 +579,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
           activeSessionId={activeSessionId}
           onSend={handleSend}
           onAddNote={handleAddNote}
+          onEditNote={handleEditNote}
           addingNote={addingNote}
           onDecide={handleDecide}
           onRetest={handleRetest}

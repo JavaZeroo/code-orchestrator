@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runNoteMarkdownSchema, runNotePayloadSchema, workflowDefSchema } from './workflow';
+import { runNoteMarkdownSchema, runNotePayloadSchema, runNoteRevisionPayloadSchema, workflowDefSchema } from './workflow';
 
 const base = {
   name: 't',
@@ -47,5 +47,11 @@ describe('run note schema', () => {
       markdown: 'Deployment approved.',
       author: 'operator@example.com',
     })).toEqual({ markdown: 'Deployment approved.', author: 'operator@example.com' });
+  });
+
+  it('validates an append-only run note revision target and Markdown', () => {
+    expect(runNoteRevisionPayloadSchema.parse({ noteId: 9, markdown: '  Proceed.  ' }))
+      .toEqual({ noteId: 9, markdown: 'Proceed.' });
+    expect(runNoteRevisionPayloadSchema.safeParse({ noteId: -1, markdown: 'Proceed.' }).success).toBe(false);
   });
 });

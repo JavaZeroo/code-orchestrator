@@ -178,6 +178,23 @@ describe('api client', () => {
     });
   });
 
+  it('edits session and run notes through their creation event identifiers', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ note: { seq: 19, type: 'session.note.updated' } }))
+      .mockResolvedValueOnce(Response.json({ note: { seq: 43, type: 'run.note.updated' } }));
+    vi.stubGlobal('fetch', fetch);
+
+    await api.editSessionNote('session/1', 18, 'Corrected handoff.');
+    await api.editRunNote('run/1', 42, 'Proceed with deployment.');
+
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/sessions/session%2F1/notes/18', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ markdown: 'Corrected handoff.' }),
+    });
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/runs/run%2F1/notes/42', {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ markdown: 'Proceed with deployment.' }),
+    });
+  });
+
   it('lists archived sessions separately and posts archive state changes', async () => {
     const archivedAt = '2026-07-11T04:00:00.000Z';
     const fetch = vi

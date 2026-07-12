@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   appendSessionNoteWithDependencies,
+  reviseSessionNoteWithDependencies,
   SessionNoteError,
   type SessionNoteDependencies,
 } from './sessionNote';
@@ -8,6 +9,7 @@ import {
 function dependencies(sessionExists = true): SessionNoteDependencies {
   return {
     sessionExists: vi.fn().mockResolvedValue(sessionExists),
+    noteExists: vi.fn().mockResolvedValue(sessionExists),
     publishEvent: vi.fn().mockResolvedValue(42),
   };
 }
@@ -31,6 +33,30 @@ describe('standalone session notes', () => {
     await expect(appendSessionNoteWithDependencies('missing', {
       markdown: 'Do not save.', author: 'operator@example.com',
     }, deps)).rejects.toEqual(new SessionNoteError(404, 'session not found'));
+    expect(deps.publishEvent).not.toHaveBeenCalled();
+  });
+
+  it('appends a scoped revision event for an existing note', async () => {
+    const deps = dependencies();
+    await expect(reviseSessionNoteWithDependencies('session-1', {
+      noteId: 12, markdown: 'Corrected context.',
+    }, deps)).resolves.toEqual({
+      seq: 42,
+      type: 'session.note.updated',
+      sessionId: 'session-1',
+      payload: { noteId: 12, markdown: 'Corrected context.' },
+    });
+    expect(deps.noteExists).toHaveBeenCalledWith('session-1', 12);
+    expect(deps.publishEvent).toHaveBeenCalledWith({
+      type: 'session.note.updated', sessionId: 'session-1', payload: { noteId: 12, markdown: 'Corrected context.' },
+    });
+  });
+
+  it('rejects an unknown or mismatched note without publishing a revision', async () => {
+    const deps = dependencies(false);
+    await expect(reviseSessionNoteWithDependencies('session-1', {
+      noteId: 99, markdown: 'Do not save.',
+    }, deps)).rejects.toEqual(new SessionNoteError(404, 'session note not found'));
     expect(deps.publishEvent).not.toHaveBeenCalled();
   });
 });

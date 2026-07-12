@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ChevronRight, ExternalLink, GitBranch, NotebookPen, RefreshCw, Send, Wrench } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronRight, ExternalLink, GitBranch, NotebookPen, Pencil, RefreshCw, Send, Wrench, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { RUN_NOTE_MAX_LENGTH } from '@co/protocol';
@@ -9,6 +9,7 @@ import { Markdown } from './components/Markdown';
 import { Button } from './components/ui/button';
 import { Badge, StatusDot, Textarea, type BadgeTone } from './components/ui/primitives';
 import { cn } from './lib/utils';
+import { latestNoteRevisions } from './lib/noteRevisions';
 
 // ---- 复用常量（与 FlowGraph / RunView 同源）----
 
@@ -263,17 +264,43 @@ export function RunHistoryAction({
   );
 }
 
-export function RunNoteCard({ note }: { note: RunNotePayload }) {
+export function RunNoteCard({ note, noteId, onEdit }: {
+  note: RunNotePayload;
+  noteId?: number;
+  onEdit?: (noteId: number, markdown: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(note.markdown);
+  const [saving, setSaving] = useState(false);
+  const save = () => {
+    const markdown = draft.trim();
+    if (!onEdit || noteId === undefined || !markdown || saving) return;
+    setSaving(true);
+    void onEdit(noteId, markdown)
+      .then(() => setEditing(false), () => {})
+      .finally(() => setSaving(false));
+  };
   return (
     <article className="self-stretch rounded-lg border border-human/35 bg-human/5 px-3 py-2.5">
       <div className="mb-1.5 flex items-center gap-2">
         <NotebookPen size={13} className="shrink-0 text-human" />
         <span className="text-xs font-medium text-human">运行备注</span>
         <span className="text-xs text-dim">{note.author}</span>
+        {onEdit && noteId !== undefined && !editing && (
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setDraft(note.markdown); setEditing(true); }}>
+            <Pencil size={12} /> 编辑
+          </Button>
+        )}
       </div>
-      <div className="text-sm text-ink-2">
-        <Markdown text={note.markdown} />
-      </div>
+      {editing ? (
+        <div className="flex flex-col gap-2">
+          <Textarea aria-label="编辑运行备注" value={draft} maxLength={RUN_NOTE_MAX_LENGTH} disabled={saving} onChange={(e) => setDraft(e.target.value)} />
+          <div className="flex justify-end gap-1">
+            <Button variant="ghost" size="sm" disabled={saving} onClick={() => setEditing(false)}><X size={12} /> 取消</Button>
+            <Button variant="outline" size="sm" disabled={saving || !draft.trim()} onClick={save}><Check size={12} /> {saving ? '保存中…' : '保存'}</Button>
+          </div>
+        </div>
+      ) : <div className="text-sm text-ink-2"><Markdown text={note.markdown} /></div>}
     </article>
   );
 }
@@ -333,6 +360,7 @@ interface RunTimelineProps {
   activeSessionId: string | null;
   onSend: (text: string) => void;
   onAddNote: (markdown: string) => Promise<void>;
+  onEditNote: (noteId: number, markdown: string) => Promise<void>;
   addingNote: boolean;
   onDecide: (id: string, b: 'allow' | 'deny') => void;
   onRetest: (refId: string) => Promise<void>;
@@ -356,6 +384,7 @@ export function RunTimeline({
   activeSessionId,
   onSend,
   onAddNote,
+  onEditNote,
   addingNote,
   onDecide,
   onRetest,
@@ -478,6 +507,7 @@ export function RunTimeline({
 
   const items = useMemo(() => {
     const out: TimelineItem[] = [];
+    const noteRevisions = latestNoteRevisions(events, 'run.note.updated');
 
     // ① 按 sessionId 分组连续 session.message
     let segSessionId: string | null = null;
@@ -547,7 +577,11 @@ export function RunTimeline({
             out.push({
               key: `note-${row.seq}`,
               seq: row.seq,
-              el: <RunNoteCard note={{ markdown: note.markdown, author: note.author }} />,
+              el: <RunNoteCard
+                note={{ markdown: noteRevisions.get(row.seq) ?? note.markdown, author: note.author }}
+                noteId={row.seq}
+                onEdit={onEditNote}
+              />,
             });
           }
         } else if (row.type === 'run.node.state') {
@@ -643,7 +677,7 @@ export function RunTimeline({
     flushSegment();
 
     return out.sort((a, b) => a.seq - b.seq);
-  }, [events, nodeBySession, nodeDefById, forgeRefByKey, approvals, expandedSegments, nodes, run.id, onDecide, retestProgress, handleRetest]);
+  }, [events, nodeBySession, nodeDefById, forgeRefByKey, approvals, expandedSegments, nodes, run.id, onDecide, onEditNote, retestProgress, handleRetest]);
 
   // ---- 智能滚动（仿 SessionView）----
 

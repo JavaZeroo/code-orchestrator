@@ -1039,6 +1039,29 @@ describeSt('server ST: API + runner websocket', () => {
         runId,
         payload: { markdown, author: email },
       });
+      const noteId = created.json().note.seq as number;
+      const revisedMarkdown = '**Proceed** during the approved change window.';
+      const liveRevision = waitForClientEvent(client, (event) => event.type === 'run.note.updated');
+      const revised = await app!.inject({
+        method: 'PATCH',
+        url: `/api/runs/${runId}/notes/${noteId}`,
+        headers: { host: 'localhost:7620', cookie },
+        payload: { markdown: `  ${revisedMarkdown}  ` },
+      });
+      expect(revised.statusCode).toBe(200);
+      expect(revised.json()).toMatchObject({
+        note: { type: 'run.note.updated', runId, payload: { noteId, markdown: revisedMarkdown } },
+      });
+      await expect(liveRevision).resolves.toMatchObject({
+        type: 'run.note.updated', runId, payload: { noteId, markdown: revisedMarkdown },
+      });
+      const mismatched = await app!.inject({
+        method: 'PATCH',
+        url: `/api/runs/missing-run/notes/${noteId}`,
+        headers: { host: 'localhost:7620', cookie },
+        payload: { markdown: 'Must not be persisted.' },
+      });
+      expect(mismatched.statusCode).toBe(404);
       expect(runner.calls).toHaveLength(runnerCallsBeforeNote);
 
       const blank = await app!.inject({
@@ -1067,6 +1090,12 @@ describeSt('server ST: API + runner websocket', () => {
         type: 'run.note',
         payload: { markdown, author: email },
       });
+      const persistedRevisions = await db
+        .select()
+        .from(schema.events)
+        .where(and(eq(schema.events.runId, runId), eq(schema.events.type, 'run.note.updated')));
+      expect(persistedRevisions).toHaveLength(1);
+      expect(persistedRevisions[0]).toMatchObject({ payload: { noteId, markdown: revisedMarkdown } });
 
       const thread = await app!.inject({
         method: 'GET',
@@ -1075,7 +1104,10 @@ describeSt('server ST: API + runner websocket', () => {
       });
       expect(thread.statusCode).toBe(200);
       expect(thread.json()).toMatchObject({
-        events: [expect.objectContaining({ type: 'run.note', runId, payload: { markdown, author: email } })],
+        events: [
+          expect.objectContaining({ type: 'run.note', runId, payload: { markdown, author: email } }),
+          expect.objectContaining({ type: 'run.note.updated', runId, payload: { noteId, markdown: revisedMarkdown } }),
+        ],
       });
     } finally {
       await closeWebSocket(client);
@@ -1094,7 +1126,10 @@ describeSt('server ST: API + runner websocket', () => {
     });
     expect(reloadedThread.statusCode).toBe(200);
     expect(reloadedThread.json()).toMatchObject({
-      events: [expect.objectContaining({ type: 'run.note', runId, payload: { markdown, author: email } })],
+      events: [
+        expect.objectContaining({ type: 'run.note', runId, payload: { markdown, author: email } }),
+        expect.objectContaining({ type: 'run.note.updated', runId, payload: { noteId: expect.any(Number), markdown: '**Proceed** during the approved change window.' } }),
+      ],
     });
   });
 
@@ -1163,6 +1198,29 @@ describeSt('server ST: API + runner websocket', () => {
         sessionId,
         payload: { markdown, author: email },
       });
+      const noteId = created.json().note.seq as number;
+      const revisedMarkdown = '**Handoff corrected**: inspect the database migration first.';
+      const liveRevision = waitForClientEvent(client, (event) => event.type === 'session.note.updated');
+      const revised = await app!.inject({
+        method: 'PATCH',
+        url: `/api/sessions/${sessionId}/notes/${noteId}`,
+        headers: { host: 'localhost:7620', cookie },
+        payload: { markdown: `  ${revisedMarkdown}  ` },
+      });
+      expect(revised.statusCode).toBe(200);
+      expect(revised.json()).toMatchObject({
+        note: { type: 'session.note.updated', sessionId, payload: { noteId, markdown: revisedMarkdown } },
+      });
+      await expect(liveRevision).resolves.toMatchObject({
+        type: 'session.note.updated', sessionId, payload: { noteId, markdown: revisedMarkdown },
+      });
+      const mismatched = await app!.inject({
+        method: 'PATCH',
+        url: `/api/sessions/missing-session/notes/${noteId}`,
+        headers: { host: 'localhost:7620', cookie },
+        payload: { markdown: 'Must not be persisted.' },
+      });
+      expect(mismatched.statusCode).toBe(404);
       expect(runner.calls).toHaveLength(runnerCallsBeforeNote);
 
       const blank = await app!.inject({
@@ -1191,6 +1249,12 @@ describeSt('server ST: API + runner websocket', () => {
         type: 'session.note',
         payload: { markdown, author: email },
       });
+      const persistedRevisions = await db
+        .select()
+        .from(schema.events)
+        .where(and(eq(schema.events.sessionId, sessionId), eq(schema.events.type, 'session.note.updated')));
+      expect(persistedRevisions).toHaveLength(1);
+      expect(persistedRevisions[0]).toMatchObject({ payload: { noteId, markdown: revisedMarkdown } });
     } finally {
       await closeWebSocket(client);
       await runner.close();
@@ -1208,11 +1272,10 @@ describeSt('server ST: API + runner websocket', () => {
     });
     expect(history.statusCode).toBe(200);
     expect(history.json()).toMatchObject({
-      events: [expect.objectContaining({
-        type: 'session.note',
-        sessionId,
-        payload: { markdown, author: email },
-      })],
+      events: [
+        expect.objectContaining({ type: 'session.note', sessionId, payload: { markdown, author: email } }),
+        expect.objectContaining({ type: 'session.note.updated', sessionId, payload: { noteId: expect.any(Number), markdown: '**Handoff corrected**: inspect the database migration first.' } }),
+      ],
     });
   });
 

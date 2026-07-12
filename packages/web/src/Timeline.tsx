@@ -1,11 +1,13 @@
-import { ChevronRight, NotebookPen, Paperclip } from 'lucide-react';
+import { Check, ChevronRight, NotebookPen, Paperclip, Pencil, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { ApprovalRequest, EventRow, SessionEnvelope, SessionNotePayload, UserInputAnswers } from './api';
 import { Markdown } from './components/Markdown';
 import { TextDiff } from './components/DiffView';
 import { Button } from './components/ui/button';
-import { Badge, Input } from './components/ui/primitives';
+import { Badge, Input, Textarea } from './components/ui/primitives';
+import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { cn } from './lib/utils';
+import { latestNoteRevisions } from './lib/noteRevisions';
 
 const fmtHm = (ms: number) => {
   const d = new Date(ms);
@@ -337,15 +339,43 @@ export interface RenderItem {
   seq: number;
 }
 
-export function SessionNoteCard({ note }: { note: SessionNotePayload }) {
+export function SessionNoteCard({ note, noteId, onEdit }: {
+  note: SessionNotePayload;
+  noteId?: number;
+  onEdit?: (noteId: number, markdown: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(note.markdown);
+  const [saving, setSaving] = useState(false);
+  const save = () => {
+    const markdown = draft.trim();
+    if (!onEdit || noteId === undefined || !markdown || saving) return;
+    setSaving(true);
+    void onEdit(noteId, markdown)
+      .then(() => setEditing(false), () => {})
+      .finally(() => setSaving(false));
+  };
   return (
     <article className="my-1 self-stretch rounded-lg border border-human/35 bg-human/5 px-3 py-2.5">
       <div className="mb-1.5 flex items-center gap-2">
         <NotebookPen size={13} className="shrink-0 text-human" />
         <span className="text-xs font-medium text-human">会话备注</span>
         <span className="text-xs text-dim">{note.author}</span>
+        {onEdit && noteId !== undefined && !editing && (
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setDraft(note.markdown); setEditing(true); }}>
+            <Pencil size={12} /> 编辑
+          </Button>
+        )}
       </div>
-      <div className="text-sm text-ink-2"><Markdown text={note.markdown} /></div>
+      {editing ? (
+        <div className="flex flex-col gap-2">
+          <Textarea aria-label="编辑会话备注" value={draft} maxLength={SESSION_NOTE_MAX_LENGTH} disabled={saving} onChange={(e) => setDraft(e.target.value)} />
+          <div className="flex justify-end gap-1">
+            <Button variant="ghost" size="sm" disabled={saving} onClick={() => setEditing(false)}><X size={12} /> 取消</Button>
+            <Button variant="outline" size="sm" disabled={saving || !draft.trim()} onClick={save}><Check size={12} /> {saving ? '保存中…' : '保存'}</Button>
+          </div>
+        </div>
+      ) : <div className="text-sm text-ink-2"><Markdown text={note.markdown} /></div>}
     </article>
   );
 }
@@ -441,12 +471,14 @@ export function Timeline({
   approvals,
   onDecide,
   onAnswer,
+  onEditNote,
   cwd,
 }: {
   events: EventRow[];
   approvals: Map<string, ApprovalItem>;
   onDecide: (id: string, b: 'allow' | 'deny') => void;
   onAnswer: (id: string, answers: UserInputAnswers) => void;
+  onEditNote?: (noteId: number, markdown: string) => Promise<void>;
   cwd?: string;
 }) {
   const items = useMemo(() => {
@@ -454,6 +486,7 @@ export function Timeline({
     const rendered = foldSessionEvents(events, { cwd });
     // ② 审批卡
     const approvalsItems: RenderItem[] = [];
+    const revisions = latestNoteRevisions(events, 'session.note.updated');
     for (const row of events) {
       if (row.type === 'approval.requested') {
         const req = row.payload as ApprovalRequest;
@@ -463,13 +496,17 @@ export function Timeline({
         approvalsItems.push({
           key: `note-${row.seq}`,
           seq: row.seq,
-          el: <SessionNoteCard note={row.payload as SessionNotePayload} />,
+          el: <SessionNoteCard
+            note={{ ...(row.payload as SessionNotePayload), markdown: revisions.get(row.seq) ?? (row.payload as SessionNotePayload).markdown }}
+            noteId={row.seq}
+            onEdit={onEditNote}
+          />,
         });
       }
     }
     // ③ 合并后按 seq 排序
     return [...rendered, ...approvalsItems].sort((a, b) => a.seq - b.seq);
-  }, [events, approvals, onDecide, onAnswer, cwd]);
+  }, [events, approvals, onDecide, onAnswer, onEditNote, cwd]);
 
   return <div className="flex flex-col gap-1 px-4 py-4">{items.map((it) => it.el && <div key={it.key} className="flex flex-col">{it.el}</div>)}</div>;
 }
