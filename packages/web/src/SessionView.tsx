@@ -1,8 +1,8 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Download, File, Folder, FolderPlus, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Send, Square, Trash2, Upload, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Download, File, Folder, FolderPlus, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Search, Send, Square, Trash2, Upload, X } from 'lucide-react';
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, isWorkspaceTextPreviewCandidate, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers, type WorkspaceEntry } from './api';
+import { api, isWorkspaceTextPreviewCandidate, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers, type WorkspaceEntry, type WorkspaceSearchMatch } from './api';
 import { UnifiedDiff } from './components/DiffView';
 import { RejectionFeedback, type ApprovalDecisionHandler } from './components/RejectionFeedback';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
@@ -156,6 +156,17 @@ export function workspaceChildPath(path: string, name: string): string {
 
 export function workspaceParentPath(path: string): string {
   return path.split('/').slice(0, -1).join('/');
+}
+
+export function workspaceSearchTarget(match: WorkspaceSearchMatch):
+  | { kind: 'directory'; path: string }
+  | { kind: 'file'; path: string; entry: WorkspaceEntry } {
+  if (match.type === 'directory') return { kind: 'directory', path: match.path };
+  return {
+    kind: 'file',
+    path: match.path,
+    entry: { name: match.path.split('/').at(-1) ?? match.path, type: 'file', size: match.size },
+  };
 }
 
 export const WORKSPACE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
@@ -347,6 +358,35 @@ export function WorkspaceBrowserEntries({
   );
 }
 
+export function WorkspaceSearchResults({
+  matches,
+  disabled,
+  onSelect,
+}: {
+  matches: WorkspaceSearchMatch[];
+  disabled: boolean;
+  onSelect: (match: WorkspaceSearchMatch) => void;
+}) {
+  if (matches.length === 0) return <div className="py-8 text-center text-sm text-faint">未找到匹配的文件或文件夹</div>;
+  return (
+    <div className="max-h-80 overflow-y-auto rounded-md border border-line">
+      {matches.map((match) => (
+        <button
+          key={`${match.type}:${match.path}`}
+          type="button"
+          disabled={disabled}
+          className="flex w-full items-center gap-2 border-b border-line px-3 py-2 text-left text-sm text-ink last:border-b-0 hover:bg-panel-2 disabled:opacity-50"
+          onClick={() => onSelect(match)}
+        >
+          {match.type === 'directory' ? <Folder size={15} className="text-accent" /> : <File size={15} className="text-dim" />}
+          <span className="min-w-0 flex-1 truncate font-mono">{match.path}</span>
+          {match.type === 'file' && match.size !== undefined && <span className="text-xs text-faint">{match.size.toLocaleString()} B</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function WorkspaceFilePreview({
   path,
   text,
@@ -393,6 +433,10 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMatches, setSearchMatches] = useState<WorkspaceSearchMatch[] | null>(null);
+  const [searchTruncated, setSearchTruncated] = useState(false);
+  const [searching, setSearching] = useState(false);
   const [listingVersion, setListingVersion] = useState(0);
   const previewRequestRef = useRef(0);
   useEffect(() => {
@@ -416,6 +460,9 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       setEntries([]);
       setError(null);
       setPreview(null);
+      setSearchQuery('');
+      setSearchMatches(null);
+      setSearchTruncated(false);
       previewRequestRef.current += 1;
     }
     onOpenChange(nextOpen);
@@ -428,8 +475,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .catch((error) => toast.error(`下载失败：${error}`))
       .finally(() => setDownloading(false));
   };
-  const selectFile = (entry: WorkspaceEntry) => {
-    const relativePath = workspaceChildPath(path, entry.name);
+  const openFile = (relativePath: string, entry: WorkspaceEntry) => {
     if (!isWorkspaceTextPreviewCandidate(entry)) {
       downloadFile(relativePath);
       return;
@@ -449,6 +495,28 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .finally(() => {
         if (previewRequestRef.current === requestId) setPreviewing(false);
       });
+  };
+  const selectFile = (entry: WorkspaceEntry) => openFile(workspaceChildPath(path, entry.name), entry);
+  const searchWorkspace = () => {
+    const query = searchQuery.trim();
+    if (!query || searching) return;
+    setSearching(true);
+    setError(null);
+    void api.searchWorkspaceFiles(sessionId, query)
+      .then((result) => { setSearchMatches(result.matches); setSearchTruncated(result.truncated); })
+      .catch((err) => setError(String(err)))
+      .finally(() => setSearching(false));
+  };
+  const selectSearchMatch = (match: WorkspaceSearchMatch) => {
+    const target = workspaceSearchTarget(match);
+    if (target.kind === 'directory') {
+      setPath(target.path);
+      setSearchQuery('');
+      setSearchMatches(null);
+      setSearchTruncated(false);
+      return;
+    }
+    openFile(target.path, target.entry);
   };
   const uploadFile = (file: File) => {
     if (uploading) return;
@@ -500,6 +568,26 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
           onBack={() => { previewRequestRef.current += 1; setPreviewing(false); setPreview(null); }}
           onDownload={() => downloadFile(preview.path, false)}
         /> : <div className="space-y-3">
+          <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); searchWorkspace(); }}>
+            <div className="relative min-w-0 flex-1">
+              <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-faint" />
+              <input
+                type="search"
+                aria-label="按文件名搜索工作区"
+                maxLength={100}
+                value={searchQuery}
+                className="h-8 w-full rounded-md border border-line bg-bg-2 pl-8 pr-2 text-sm text-ink outline-none focus:border-accent"
+                placeholder="递归搜索文件名"
+                onChange={(event) => {
+                  setSearchQuery(event.currentTarget.value);
+                  if (!event.currentTarget.value.trim()) { setSearchMatches(null); setSearchTruncated(false); }
+                }}
+              />
+            </div>
+            <Button type="submit" variant="outline" size="sm" disabled={!searchQuery.trim() || searching || downloading}>
+              {searching ? '搜索中…' : '搜索'}
+            </Button>
+          </form>
           <div className="flex items-center gap-2">
             <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || deleting || renaming} onClick={() => setPath(workspaceParentPath(path))}>
               <ChevronLeft size={14} />
@@ -508,7 +596,9 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
             <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || deleting || renaming} creating={creating} onCreate={createFolder} />
             <WorkspaceUploadAction disabled={loading || downloading || creating || deleting || renaming} uploading={uploading} onFile={uploadFile} />
           </div>
-          {loading ? <div className="py-8 text-center text-sm text-dim">加载中…</div>
+          {searchMatches !== null
+            ? <WorkspaceSearchResults matches={searchMatches} disabled={downloading || searching} onSelect={selectSearchMatch} />
+            : loading ? <div className="py-8 text-center text-sm text-dim">加载中…</div>
             : error ? <div className="py-8 text-center text-sm text-danger">目录加载失败：{error}</div>
             : <WorkspaceBrowserEntries
                 entries={entries}
@@ -518,8 +608,9 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
                 onDelete={deleteEntry}
                 onRename={renameEntry}
               />}
-          {truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
-          <div className="text-xs text-faint">可新建文件夹，重命名或删除当前目录中的文件和空文件夹，或上传文件；支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
+          {searchMatches !== null && searchTruncated && <div className="text-xs text-faint">仅显示前 100 个匹配结果，请缩小搜索范围。</div>}
+          {searchMatches === null && truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
+          <div className="text-xs text-faint">可按文件名递归搜索并直接打开结果；也可新建文件夹，重命名或删除当前目录中的文件和空文件夹，或上传文件。支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
         </div>}
       </DialogContent>
     </Dialog>

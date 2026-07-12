@@ -56,6 +56,16 @@ describe('createRunnerMethodHandler', () => {
     });
   });
 
+  it('dispatches workspace.search through the bounded recursive filename search', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-search-'));
+    await import('node:fs/promises').then(({ mkdir }) => mkdir(join(root, 'reports')));
+    await writeFile(join(root, 'reports', 'answer.txt'), 'runner bytes');
+    const result = await handler()('workspace.search', { root, query: 'answer' });
+    expect(result).toEqual({
+      ok: true, matches: [{ path: 'reports/answer.txt', type: 'file', size: 12 }], truncated: false,
+    });
+  });
+
   it('dispatches workspace.delete through the confined file deleter', async () => {
     const root = await mkdtemp(join(tmpdir(), 'co-method-delete-'));
     await writeFile(join(root, 'answer.txt'), 'runner bytes');

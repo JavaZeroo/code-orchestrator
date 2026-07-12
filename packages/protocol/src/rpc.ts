@@ -232,6 +232,24 @@ export const runnerMethods = {
       error: z.string().optional(),
     }),
   },
+  /** Recursively search filenames beneath a session workspace. Responses and traversal are bounded. */
+  'workspace.search': {
+    params: z.object({
+      root: z.string().min(1),
+      query: z.string().trim().min(1).max(100),
+      containerId: z.string().min(1).optional(),
+    }),
+    result: z.object({
+      ok: z.boolean(),
+      matches: z.array(z.object({
+        path: z.string().min(1),
+        type: z.enum(['file', 'directory']),
+        size: z.number().int().nonnegative().optional(),
+      })).max(100).optional(),
+      truncated: z.boolean().optional(),
+      error: z.string().optional(),
+    }),
+  },
   /** 容器生命周期（design-v2 Q3，M1 substrate）：co 拥有容器——起/执行/销毁。
    *  devices/gpus 由 accelerator 适配器在 M2 填充（Ascend → --device 列表；卡在建容器时绑定）。 */
   'container.run': {
