@@ -6,6 +6,7 @@ import type { ApprovalRequest, EventRow, ForgeRefRow, NodeStateRow, RunNotePaylo
 import { api } from './api';
 import { foldSessionEvents, type ApprovalItem } from './Timeline';
 import { Markdown } from './components/Markdown';
+import { RejectionFeedback, type ApprovalDecisionHandler } from './components/RejectionFeedback';
 import { Button } from './components/ui/button';
 import { Badge, StatusDot, Textarea, type BadgeTone } from './components/ui/primitives';
 import { cn } from './lib/utils';
@@ -255,7 +256,7 @@ export function ForgeCard({ forgeRef, prState, ciState, retestState = 'idle', on
 }
 
 /** Gate 审批卡（带按钮） */
-function GateCard({ item, onDecide }: { item: ApprovalItem; onDecide: (id: string, b: 'allow' | 'deny') => void }) {
+function GateCard({ item, onDecide }: { item: ApprovalItem; onDecide: ApprovalDecisionHandler }) {
   const { request, status, decidedBy } = item;
 
   return (
@@ -275,9 +276,9 @@ function GateCard({ item, onDecide }: { item: ApprovalItem; onDecide: (id: strin
         <div className="text-xs text-dim mb-2">决策人：{decidedBy}</div>
       )}
       {status === 'pending' && (
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="success" size="sm" onClick={() => onDecide(request.id, 'allow')}>批准</Button>
-          <Button variant="danger" size="sm" onClick={() => onDecide(request.id, 'deny')}>拒绝</Button>
+          <RejectionFeedback approvalId={request.id} onDecide={onDecide} />
         </div>
       )}
     </div>
@@ -401,7 +402,7 @@ interface RunTimelineProps {
   onAddNote: (markdown: string) => Promise<void>;
   onEditNote: (noteId: number, markdown: string) => Promise<void>;
   addingNote: boolean;
-  onDecide: (id: string, b: 'allow' | 'deny') => void;
+  onDecide: ApprovalDecisionHandler;
   onRetest: (refId: string) => Promise<void>;
   onComment: (refId: string, body: string) => Promise<void>;
   hasEarlier: boolean;
