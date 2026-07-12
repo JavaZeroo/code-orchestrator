@@ -175,7 +175,7 @@ export const runnerMethods = {
       error: z.string().optional(),
     }),
   },
-  /** Delete one regular file beneath a session workspace without following symlinks. */
+  /** Delete one regular file or empty directory beneath a session workspace without following symlinks. */
   'workspace.delete': {
     params: z.object({
       root: z.string().min(1),

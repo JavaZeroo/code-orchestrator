@@ -28,7 +28,7 @@ import {
   workspaceChildPath,
   workspaceParentPath,
   downloadSessionArtifact,
-  deleteConfirmedWorkspaceFile,
+  deleteConfirmedWorkspaceEntry,
 } from './SessionView';
 
 const session: SessionRow = {
@@ -187,7 +187,7 @@ describe('SessionView artifact download action', () => {
     expect(workspaceParentPath('reports/daily')).toBe('reports');
     expect(workspaceParentPath('reports')).toBe('');
     expect(markup).toContain('删除 result.bin');
-    expect(markup).not.toContain('删除 reports');
+    expect(markup).toContain('删除 reports');
     expect(markup).toContain('重命名 reports');
     expect(markup).toContain('重命名 result.bin');
   });
@@ -213,13 +213,16 @@ describe('SessionView artifact download action', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it('deletes only after confirmation and reports whether deletion occurred', async () => {
+  it('deletes files and empty folders only after type-aware confirmation', async () => {
     const request = vi.fn().mockResolvedValue({ ok: true, path: 'reports/old.bin' });
-    await expect(deleteConfirmedWorkspaceFile('session-1', 'reports/old.bin', request, () => false)).resolves.toBe(false);
+    const confirmDelete = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    await expect(deleteConfirmedWorkspaceEntry('session-1', 'reports/old.bin', 'file', request, confirmDelete)).resolves.toBe(false);
     expect(request).not.toHaveBeenCalled();
+    expect(confirmDelete).toHaveBeenCalledWith('reports/old.bin', 'file');
 
-    await expect(deleteConfirmedWorkspaceFile('session-1', 'reports/old.bin', request, () => true)).resolves.toBe(true);
-    expect(request).toHaveBeenCalledWith('session-1', 'reports/old.bin');
+    await expect(deleteConfirmedWorkspaceEntry('session-1', 'reports/archive', 'directory', request, confirmDelete)).resolves.toBe(true);
+    expect(confirmDelete).toHaveBeenCalledWith('reports/archive', 'directory');
+    expect(request).toHaveBeenCalledWith('session-1', 'reports/archive');
   });
 
   it('offers one-file upload and targets the currently open directory', async () => {

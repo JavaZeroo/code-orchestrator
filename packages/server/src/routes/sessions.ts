@@ -337,7 +337,7 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     return { ok: true, path, size: result.size };
   });
 
-  /** Delete one regular file from the host or container session workspace. */
+  /** Delete one regular file or empty directory from the host or container session workspace. */
   app.delete<{ Params: { id: string }; Querystring: { path?: string } }>('/api/sessions/:id/files', async (req) => {
     const session = await findSession(req.params.id);
     const { path } = workspaceFileQuerySchema.parse(req.query);
@@ -346,7 +346,7 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       path,
       containerId: session.containerId ?? undefined,
     });
-    if (!result.ok) throw new HttpError(400, result.error ?? 'workspace file deletion failed');
+    if (!result.ok) throw new HttpError(400, result.error ?? 'workspace entry deletion failed');
     return { ok: true, path };
   });
 

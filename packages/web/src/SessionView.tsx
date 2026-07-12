@@ -243,13 +243,16 @@ export function WorkspaceCreateFolderAction({
   </Button>;
 }
 
-export async function deleteConfirmedWorkspaceFile(
+export async function deleteConfirmedWorkspaceEntry(
   sessionId: string,
   path: string,
+  type: WorkspaceEntry['type'],
   request = api.deleteWorkspaceFile,
-  confirmDelete: (path: string) => boolean = (target) => confirm(`确定删除工作区文件 /${target}？此操作无法撤销。`),
+  confirmDelete: (path: string, type: WorkspaceEntry['type']) => boolean = (target, targetType) => confirm(
+    `确定删除工作区${targetType === 'directory' ? '空文件夹' : '文件'} /${target}？此操作无法撤销。`,
+  ),
 ): Promise<boolean> {
-  if (!confirmDelete(path)) return false;
+  if (!confirmDelete(path, type)) return false;
   await request(sessionId, path);
   return true;
 }
@@ -327,7 +330,7 @@ export function WorkspaceBrowserEntries({
           >
             <Pencil size={13} />
           </Button>
-          {entry.type === 'file' && <Button
+          <Button
             type="button"
             variant="ghost"
             size="icon-sm"
@@ -337,7 +340,7 @@ export function WorkspaceBrowserEntries({
             onClick={() => onDelete(entry)}
           >
             <Trash2 size={13} />
-          </Button>}
+          </Button>
         </div>
       ))}
     </div>
@@ -463,14 +466,14 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .catch((error) => toast.error(`创建失败：${error}`))
       .finally(() => setCreating(false));
   };
-  const deleteFile = (entry: WorkspaceEntry) => {
+  const deleteEntry = (entry: WorkspaceEntry) => {
     if (deleting) return;
     const relativePath = workspaceChildPath(path, entry.name);
     setDeleting(true);
-    void deleteConfirmedWorkspaceFile(sessionId, relativePath)
+    void deleteConfirmedWorkspaceEntry(sessionId, relativePath, entry.type)
       .then((deleted) => {
         if (!deleted) return;
-        toast.success('文件已删除');
+        toast.success(entry.type === 'directory' ? '文件夹已删除' : '文件已删除');
         setListingVersion((version) => version + 1);
       })
       .catch((error) => toast.error(`删除失败：${error}`))
@@ -512,11 +515,11 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
                 disabled={downloading || uploading || creating || deleting || renaming}
                 onDirectory={(name) => setPath(workspaceChildPath(path, name))}
                 onFile={selectFile}
-                onDelete={deleteFile}
+                onDelete={deleteEntry}
                 onRename={renameEntry}
               />}
           {truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
-          <div className="text-xs text-faint">可新建文件夹，重命名文件或文件夹，或上传、删除当前目录中的文件；支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
+          <div className="text-xs text-faint">可新建文件夹，重命名或删除当前目录中的文件和空文件夹，或上传文件；支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
         </div>}
       </DialogContent>
     </Dialog>

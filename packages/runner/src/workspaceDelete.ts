@@ -1,4 +1,4 @@
-import { lstat, realpath, unlink } from 'node:fs/promises';
+import { lstat, realpath, rmdir, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -30,25 +30,33 @@ export async function deleteHostWorkspaceFile(root: string, path: string): Promi
     const target = resolve(parent, basename(requested));
     const targetStat = await lstat(target);
     if (targetStat.isSymbolicLink()) throw new Error('workspace symlinks cannot be deleted');
-    if (!targetStat.isFile()) throw new Error('path is not a regular file');
-    await unlink(target);
+    if (targetStat.isFile()) await unlink(target);
+    else if (targetStat.isDirectory()) await rmdir(target);
+    else throw new Error('path is not a regular file or directory');
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
-const deleteContainerFile: ContainerDelete = async (containerId, root, path) => {
-  const script = String.raw`set -eu
+export const containerWorkspaceDeleteScript = String.raw`set -eu
 root=$(readlink -f -- "$1")
 target="$root/$2"
-parent=$(readlink -f -- "\${target%/*}")
+parent=$(readlink -f -- "$(dirname -- "$target")")
 case "$parent/" in "$root/"*) ;; *) echo 'path escapes the workspace' >&2; exit 42;; esac
 [ "$target" != "$root" ] || { echo 'workspace root cannot be deleted' >&2; exit 43; }
 [ ! -L "$target" ] || { echo 'workspace symlinks cannot be deleted' >&2; exit 44; }
-[ -f "$target" ] || { echo 'path is not a regular file' >&2; exit 45; }
-rm -f -- "$target"`;
-  await run('docker', ['exec', containerId, 'sh', '-c', script, 'sh', root, path]);
+if [ -f "$target" ]; then
+  rm -f -- "$target"
+elif [ -d "$target" ]; then
+  rmdir -- "$target"
+else
+  echo 'path is not a regular file or directory' >&2
+  exit 45
+fi`;
+
+const deleteContainerFile: ContainerDelete = async (containerId, root, path) => {
+  await run('docker', ['exec', containerId, 'sh', '-c', containerWorkspaceDeleteScript, 'sh', root, path]);
 };
 
 export async function deleteWorkspaceFile(
