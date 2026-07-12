@@ -1,6 +1,6 @@
-import { ChevronRight, Paperclip } from 'lucide-react';
+import { ChevronRight, NotebookPen, Paperclip } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import type { ApprovalRequest, EventRow, SessionEnvelope, UserInputAnswers } from './api';
+import type { ApprovalRequest, EventRow, SessionEnvelope, SessionNotePayload, UserInputAnswers } from './api';
 import { Markdown } from './components/Markdown';
 import { TextDiff } from './components/DiffView';
 import { Button } from './components/ui/button';
@@ -337,6 +337,19 @@ export interface RenderItem {
   seq: number;
 }
 
+export function SessionNoteCard({ note }: { note: SessionNotePayload }) {
+  return (
+    <article className="my-1 self-stretch rounded-lg border border-human/35 bg-human/5 px-3 py-2.5">
+      <div className="mb-1.5 flex items-center gap-2">
+        <NotebookPen size={13} className="shrink-0 text-human" />
+        <span className="text-xs font-medium text-human">会话备注</span>
+        <span className="text-xs text-dim">{note.author}</span>
+      </div>
+      <div className="text-sm text-ink-2"><Markdown text={note.markdown} /></div>
+    </article>
+  );
+}
+
 /** 把 session.message 事件折叠成渲染项：文本块、单行工具调用、thinking、file/service/turn 分隔。
  *  不处理 approval.requested —— 由调用方自行合并。 */
 export function foldSessionEvents(events: EventRow[], opts?: { cwd?: string }): RenderItem[] {
@@ -446,6 +459,12 @@ export function Timeline({
         const req = row.payload as ApprovalRequest;
         const item = approvals.get(req.id) ?? { request: req, status: 'pending' as const };
         approvalsItems.push({ key: `ap-${req.id}`, seq: row.seq, el: <ApprovalCard item={item} onDecide={onDecide} onAnswer={onAnswer} /> });
+      } else if (row.type === 'session.note') {
+        approvalsItems.push({
+          key: `note-${row.seq}`,
+          seq: row.seq,
+          el: <SessionNoteCard note={row.payload as SessionNotePayload} />,
+        });
       }
     }
     // ③ 合并后按 seq 排序

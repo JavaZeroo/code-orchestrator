@@ -1,4 +1,4 @@
-import type { ApprovalRequest, RunNotePayload, SessionAgent, SessionEnvelope, SessionState, WorkflowDef } from '@co/protocol';
+import type { ApprovalRequest, RunNotePayload, SessionAgent, SessionEnvelope, SessionNotePayload, SessionState, WorkflowDef } from '@co/protocol';
 
 export interface EventRow {
   seq: number;
@@ -12,6 +12,12 @@ export interface RunNoteEventRow extends EventRow {
   type: 'run.note';
   runId: string;
   payload: RunNotePayload;
+}
+
+export interface SessionNoteEventRow extends EventRow {
+  type: 'session.note';
+  sessionId: string;
+  payload: SessionNotePayload;
 }
 
 export interface SessionEventPage {
@@ -102,7 +108,7 @@ export interface ComponentSourceRow {
   createdAt: string;
 }
 
-export type { ApprovalRequest, RunNotePayload, SessionEnvelope, SessionState, WorkflowDef };
+export type { ApprovalRequest, RunNotePayload, SessionEnvelope, SessionNotePayload, SessionState, WorkflowDef };
 export type { SessionAgent };
 
 export interface WorkflowDefRow {
@@ -329,6 +335,9 @@ export const api = {
     const suffix = query.size > 0 ? `?${query.toString()}` : '';
     return fetch(`/api/sessions/${sessionId}/events${suffix}`).then((r) => j<SessionEventPage>(r));
   },
+  addSessionNote: (sessionId: string, markdown: string) =>
+    post(`/api/sessions/${encodeURIComponent(sessionId)}/notes`, { markdown })
+      .then((r) => j<{ note: SessionNoteEventRow }>(r)),
   spawn: (body: { projectId?: string | null; prompt?: string; agent?: SessionAgent; model?: string; effort?: Effort;
                   machineId?: string; cwd?: string; container?: boolean;
                   designer?: boolean; taskIntake?: boolean }) =>

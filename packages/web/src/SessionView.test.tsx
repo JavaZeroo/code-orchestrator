@@ -11,6 +11,8 @@ import {
   SESSION_TITLE_MAX_LENGTH,
   sessionArchiveMode,
   SessionArchiveAction,
+  SessionNoteComposer,
+  sessionNoteAction,
   SessionTitleEditor,
   TranscriptExportAction,
 } from './SessionView';
@@ -180,5 +182,39 @@ describe('SessionView title editor', () => {
     expect(normalizeSessionTitle('  Incident review  ')).toBe('Incident review');
     expect(normalizeSessionTitle('   ')).toBeNull();
     expect(normalizeSessionTitle('x'.repeat(SESSION_TITLE_MAX_LENGTH + 1))).toBeNull();
+  });
+});
+
+describe('standalone session note composer', () => {
+  it('remains available independently of agent state and disables blank notes', () => {
+    const empty = renderToStaticMarkup(
+      <SessionNoteComposer value="   " saving={false} onChange={vi.fn()} onSubmit={vi.fn()} />,
+    );
+    const ready = renderToStaticMarkup(
+      <SessionNoteComposer value="Dead session handoff" saving={false} onChange={vi.fn()} onSubmit={vi.fn()} />,
+    );
+    expect(empty).toContain('不会发送给 Agent');
+    expect(empty).toContain('disabled=""');
+    expect(ready).not.toContain('disabled=""');
+  });
+
+  it('reports action success and failure without dispatching another operation', async () => {
+    const note = {
+      seq: 7,
+      type: 'session.note' as const,
+      sessionId: 'session-1',
+      payload: { markdown: 'Handoff', author: 'operator@example.com' },
+    };
+    const success = vi.fn();
+    const error = vi.fn();
+    const request = vi.fn().mockResolvedValue({ note });
+    await expect(sessionNoteAction('session-1', 'Handoff', { request, success, error })).resolves.toEqual(note);
+    expect(request).toHaveBeenCalledWith('session-1', 'Handoff');
+    expect(success).toHaveBeenCalledWith('会话备注已添加');
+
+    const failure = new Error('not found');
+    const rejected = vi.fn().mockRejectedValue(failure);
+    await expect(sessionNoteAction('missing', 'Handoff', { request: rejected, success, error })).rejects.toBe(failure);
+    expect(error).toHaveBeenCalledWith('添加会话备注失败：not found');
   });
 });

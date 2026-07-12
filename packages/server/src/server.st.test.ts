@@ -106,12 +106,23 @@ interface ClientEvent {
   payload: unknown;
 }
 
-async function connectClientEvents(baseUrl: string, sessionId: string): Promise<WebSocket> {
-  const ws = new WebSocket(`${baseUrl.replace(/^http/, 'ws')}/ws/client?sessionId=${sessionId}`);
+async function connectClientEvents(baseUrl: string, sessionId: string, cookie?: string): Promise<WebSocket> {
+  const ws = new WebSocket(`${baseUrl.replace(/^http/, 'ws')}/ws/client?sessionId=${sessionId}`, {
+    headers: cookie ? { cookie } : undefined,
+  });
   await new Promise<void>((resolve, reject) => {
     ws.once('open', resolve);
     ws.once('error', reject);
   });
+  const ready = waitForClientEvent(ws, (event) => event.type === 'st.client.ready');
+  const emitReady = () => bus.emit('event', { type: 'st.client.ready', sessionId, payload: {} });
+  const timer = setInterval(emitReady, 10);
+  emitReady();
+  try {
+    await ready;
+  } finally {
+    clearInterval(timer);
+  }
   return ws;
 }
 
@@ -1084,6 +1095,124 @@ describeSt('server ST: API + runner websocket', () => {
     expect(reloadedThread.statusCode).toBe(200);
     expect(reloadedThread.json()).toMatchObject({
       events: [expect.objectContaining({ type: 'run.note', runId, payload: { markdown, author: email } })],
+    });
+  });
+
+  it('persists notes on ended standalone sessions through REST, websocket, and reloaded history', async () => {
+    await app!.close();
+    app = null;
+    await closeDb();
+    await startApp(true);
+
+    const email = 'session-note-operator@example.com';
+    const signUp = await app!.inject({
+      method: 'POST',
+      url: '/api/auth/sign-up/email',
+      headers: { host: 'localhost:7620', origin: 'http://localhost:7620' },
+      payload: { name: 'Session Note Operator', email, password: 'system-test-password' },
+    });
+    expect(signUp.statusCode).toBe(200);
+    const cookie = signUp.cookies.map(({ name, value }) => `${name}=${value}`).join('; ');
+
+    const runner = await FakeRunner.connect(baseUrl);
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: {
+        id: 'm-session-note',
+        name: 'Session Note Runner',
+        labels: ['dev'],
+        resources: [],
+        runnerVersion: 'st',
+        startedAt: Date.now(),
+      },
+    });
+
+    const sessionId = 'ended-standalone-session-note-st';
+    const db = getDb();
+    await db.insert(schema.sessions).values({
+      id: sessionId,
+      machineId: 'm-session-note',
+      agent: 'claude',
+      cwd: '/tmp/session-note-work',
+      state: 'dead',
+    });
+
+    const client = await connectClientEvents(baseUrl, sessionId, cookie);
+    const markdown = '**Handoff**: inspect the failed deployment before resuming.';
+    try {
+      const liveNote = waitForClientEvent(client, (event) => event.type === 'session.note');
+      const runnerCallsBeforeNote = runner.calls.length;
+      const created = await app!.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/notes`,
+        headers: { host: 'localhost:7620', cookie },
+        payload: { markdown: `  ${markdown}  ` },
+      });
+
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).toMatchObject({
+        note: {
+          seq: expect.any(Number),
+          type: 'session.note',
+          sessionId,
+          payload: { markdown, author: email },
+        },
+      });
+      await expect(liveNote).resolves.toMatchObject({
+        type: 'session.note',
+        sessionId,
+        payload: { markdown, author: email },
+      });
+      expect(runner.calls).toHaveLength(runnerCallsBeforeNote);
+
+      const blank = await app!.inject({
+        method: 'POST',
+        url: `/api/sessions/${sessionId}/notes`,
+        headers: { host: 'localhost:7620', cookie },
+        payload: { markdown: ' \n\t ' },
+      });
+      expect(blank.statusCode).toBe(400);
+      const missing = await app!.inject({
+        method: 'POST',
+        url: '/api/sessions/missing-session/notes',
+        headers: { host: 'localhost:7620', cookie },
+        payload: { markdown: 'Must not be persisted.' },
+      });
+      expect(missing.statusCode).toBe(404);
+
+      const persisted = await db
+        .select()
+        .from(schema.events)
+        .where(and(eq(schema.events.sessionId, sessionId), eq(schema.events.type, 'session.note')));
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0]).toMatchObject({
+        sessionId,
+        runId: null,
+        type: 'session.note',
+        payload: { markdown, author: email },
+      });
+    } finally {
+      await closeWebSocket(client);
+      await runner.close();
+    }
+
+    await app!.close();
+    app = null;
+    await closeDb();
+    await startApp(true);
+
+    const history = await app!.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/events`,
+      headers: { host: 'localhost:7620', cookie },
+    });
+    expect(history.statusCode).toBe(200);
+    expect(history.json()).toMatchObject({
+      events: [expect.objectContaining({
+        type: 'session.note',
+        sessionId,
+        payload: { markdown, author: email },
+      })],
     });
   });
 

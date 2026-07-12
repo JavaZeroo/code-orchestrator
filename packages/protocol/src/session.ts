@@ -13,3 +13,11 @@ export const sessionStateSchema = z.enum([
   'dead',
 ]);
 export type SessionState = z.infer<typeof sessionStateSchema>;
+
+export const SESSION_NOTE_MAX_LENGTH = 20_000;
+export const sessionNoteMarkdownSchema = z.string().trim().min(1).max(SESSION_NOTE_MAX_LENGTH);
+export const sessionNotePayloadSchema = z.object({
+  markdown: sessionNoteMarkdownSchema,
+  author: z.string().trim().min(1),
+}).strict();
+export type SessionNotePayload = z.infer<typeof sessionNotePayloadSchema>;
