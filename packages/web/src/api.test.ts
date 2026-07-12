@@ -120,6 +120,17 @@ describe('api client', () => {
     });
   });
 
+  it('creates an encoded workspace directory path', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, path: 'reports/daily results' }));
+    await expect(api.createWorkspaceDirectory('session/one', 'reports/daily results')).resolves.toEqual({
+      ok: true, path: 'reports/daily results',
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/sessions/session%2Fone/files/directories?path=reports%2Fdaily%20results',
+      { method: 'POST' },
+    );
+  });
+
   it('posts JSON bodies for session spawn', async () => {
     const fetch = mockFetch(Response.json({ sessionId: 's1' }));
 

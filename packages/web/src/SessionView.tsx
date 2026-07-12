@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Download, File, Folder, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Send, Square, Trash2, Upload, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Download, File, Folder, FolderPlus, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Send, Square, Trash2, Upload, X } from 'lucide-react';
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -174,6 +174,52 @@ export async function uploadSelectedWorkspaceFile(
   return destination;
 }
 
+export function normalizeWorkspaceFolderName(value: string): string | null {
+  const name = value.trim();
+  return name && name !== '.' && name !== '..' && !/[\\/]/.test(name) ? name : null;
+}
+
+export async function createNamedWorkspaceFolder(
+  sessionId: string,
+  directory: string,
+  value: string,
+  request = api.createWorkspaceDirectory,
+): Promise<string> {
+  const name = normalizeWorkspaceFolderName(value);
+  if (!name) throw new Error('文件夹名称不能为空，且不能包含路径分隔符');
+  const destination = workspaceChildPath(directory, name);
+  await request(sessionId, destination);
+  return destination;
+}
+
+export function requestWorkspaceFolderName(
+  onCreate: (name: string) => void,
+  ask: () => string | null = () => prompt('请输入新文件夹名称'),
+): void {
+  const name = ask();
+  if (name !== null) onCreate(name);
+}
+
+export function WorkspaceCreateFolderAction({
+  disabled,
+  creating,
+  onCreate,
+}: {
+  disabled: boolean;
+  creating: boolean;
+  onCreate: (name: string) => void;
+}) {
+  return <Button
+    type="button"
+    variant="outline"
+    size="sm"
+    disabled={disabled || creating}
+    onClick={() => requestWorkspaceFolderName(onCreate)}
+  >
+    <FolderPlus size={13} /> {creating ? '创建中…' : '新建文件夹'}
+  </Button>;
+}
+
 export async function deleteConfirmedWorkspaceFile(
   sessionId: string,
   path: string,
@@ -305,6 +351,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [preview, setPreview] = useState<{ path: string; text?: string; error?: string } | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [listingVersion, setListingVersion] = useState(0);
   const previewRequestRef = useRef(0);
@@ -371,6 +418,14 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .catch((error) => toast.error(`上传失败：${error}`))
       .finally(() => setUploading(false));
   };
+  const createFolder = (name: string) => {
+    if (creating) return;
+    setCreating(true);
+    void createNamedWorkspaceFolder(sessionId, path, name)
+      .then(() => { toast.success('文件夹已创建'); setListingVersion((version) => version + 1); })
+      .catch((error) => toast.error(`创建失败：${error}`))
+      .finally(() => setCreating(false));
+  };
   const deleteFile = (entry: WorkspaceEntry) => {
     if (deleting) return;
     const relativePath = workspaceChildPath(path, entry.name);
@@ -397,23 +452,24 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
           onDownload={() => downloadFile(preview.path, false)}
         /> : <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || deleting} onClick={() => setPath(workspaceParentPath(path))}>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || deleting} onClick={() => setPath(workspaceParentPath(path))}>
               <ChevronLeft size={14} />
             </Button>
             <div className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={path || '/'}>/{path}</div>
-            <WorkspaceUploadAction disabled={loading || downloading || deleting} uploading={uploading} onFile={uploadFile} />
+            <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || deleting} creating={creating} onCreate={createFolder} />
+            <WorkspaceUploadAction disabled={loading || downloading || creating || deleting} uploading={uploading} onFile={uploadFile} />
           </div>
           {loading ? <div className="py-8 text-center text-sm text-dim">加载中…</div>
             : error ? <div className="py-8 text-center text-sm text-danger">目录加载失败：{error}</div>
             : <WorkspaceBrowserEntries
                 entries={entries}
-                disabled={downloading || uploading || deleting}
+                disabled={downloading || uploading || creating || deleting}
                 onDirectory={(name) => setPath(workspaceChildPath(path, name))}
                 onFile={selectFile}
                 onDelete={deleteFile}
               />}
           {truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
-          <div className="text-xs text-faint">可上传或删除当前目录中的文件；支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
+          <div className="text-xs text-faint">可新建文件夹，或上传、删除当前目录中的文件；支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
         </div>}
       </DialogContent>
     </Dialog>

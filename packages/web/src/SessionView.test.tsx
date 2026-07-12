@@ -16,9 +16,12 @@ import {
   SessionTitleEditor,
   TranscriptExportAction,
   WorkspaceBrowserEntries,
+  WorkspaceCreateFolderAction,
   WorkspaceFilePreview,
   WorkspaceUploadAction,
   uploadSelectedWorkspaceFile,
+  createNamedWorkspaceFolder,
+  requestWorkspaceFolderName,
   WORKSPACE_UPLOAD_MAX_BYTES,
   workspaceChildPath,
   workspaceParentPath,
@@ -205,6 +208,30 @@ describe('SessionView artifact download action', () => {
     const request = vi.fn().mockResolvedValue({ ok: true, path: 'reports/raw.bin', size: 3 });
     await expect(uploadSelectedWorkspaceFile('session-1', 'reports', file, request)).resolves.toBe('reports/raw.bin');
     expect(request).toHaveBeenCalledWith('session-1', 'reports/raw.bin', file);
+  });
+
+  it('creates a named folder in the current directory from the browser action', async () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceCreateFolderAction disabled={false} creating={false} onCreate={vi.fn()} />,
+    );
+    expect(markup).toContain('新建文件夹');
+
+    const onCreate = vi.fn();
+    requestWorkspaceFolderName(onCreate, () => 'daily results');
+    expect(onCreate).toHaveBeenCalledWith('daily results');
+
+    const request = vi.fn().mockResolvedValue({ ok: true, path: 'reports/daily results' });
+    await expect(createNamedWorkspaceFolder('session-1', 'reports', ' daily results ', request))
+      .resolves.toBe('reports/daily results');
+    expect(request).toHaveBeenCalledWith('session-1', 'reports/daily results');
+  });
+
+  it('rejects folder names that could address a different directory', async () => {
+    const request = vi.fn();
+    for (const name of ['', '.', '..', '../escape', 'nested/folder', 'nested\\folder']) {
+      await expect(createNamedWorkspaceFolder('session-1', 'reports', name, request)).rejects.toThrow('文件夹名称');
+    }
+    expect(request).not.toHaveBeenCalled();
   });
 
   it('rejects oversized files before starting an upload', async () => {

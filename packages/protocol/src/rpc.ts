@@ -187,6 +187,18 @@ export const runnerMethods = {
       error: z.string().optional(),
     }),
   },
+  /** Create one directory beneath a session workspace without following escaped symlinks. */
+  'workspace.mkdir': {
+    params: z.object({
+      root: z.string().min(1),
+      path: z.string().min(1),
+      containerId: z.string().min(1).optional(),
+    }),
+    result: z.object({
+      ok: z.boolean(),
+      error: z.string().optional(),
+    }),
+  },
   /** List one directory beneath a session workspace. Responses are capped and never follow escaped symlinks. */
   'workspace.list': {
     params: z.object({

@@ -349,6 +349,20 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     return { ok: true, path };
   });
 
+  /** Create one directory in the host or container session workspace. */
+  app.post<{ Params: { id: string }; Querystring: { path?: string } }>('/api/sessions/:id/files/directories', async (req, reply) => {
+    const session = await findSession(req.params.id);
+    const { path } = workspaceFileQuerySchema.parse(req.query);
+    const result = await callRunner(session.machineId, 'workspace.mkdir', {
+      root: session.cwd,
+      path,
+      containerId: session.containerId ?? undefined,
+    });
+    if (!result.ok) throw new HttpError(400, result.error ?? 'workspace directory creation failed');
+    void reply.code(201);
+    return { ok: true, path };
+  });
+
   /** List one bounded workspace directory so operators can discover downloadable files. */
   app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/sessions/:id/files/list', async (req) => {
     const session = await findSession(req.params.id);
