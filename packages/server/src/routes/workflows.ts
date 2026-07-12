@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { createId } from '@paralleldrive/cuid2';
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from 'drizzle-orm';
 import * as z from 'zod';
 import { workflowDefSchema } from '@co/protocol';
 import { getDb, schema } from '../db/index';
@@ -38,6 +38,7 @@ const reviseBodySchema = z.object({
 });
 
 const listRunsQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
+const RUN_THREAD_PAGE_SIZE = 2000;
 
 export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/workflows', async (req, reply) => {
@@ -293,11 +294,16 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
   });
 
   /** 合流时间线：run 级事件 + 所有关联会话消息 + forge refs，按 seq 升序 */
-  app.get<{ Params: { id: string }; Querystring: { since?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { before?: string; since?: string } }>(
     '/api/runs/:id/thread',
     async (req, reply) => {
       const db = getDb();
       const since = Number(req.query.since ?? 0);
+      const before = Number(req.query.before ?? 0);
+      if (since > 0 && before > 0) {
+        void reply.code(400);
+        return { error: 'since and before cursors cannot be combined' };
+      }
 
       // ① run + def + nodes（复用 /:id 逻辑）
       const runs = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, req.params.id)).limit(1);
@@ -328,28 +334,36 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
         .where(eq(schema.sessions.runId, run.id));
       const sessionIds = sessionRows.map((r) => r.id);
 
-      // ③ 合流事件：runId 匹配 OR sessionId 属于本 run
-      //    首次加载返回最新 2000 条（desc+limit+reverse）；since>0 时增量拉取 >since 的事件
+      // ③ 合流事件：runId 匹配 OR sessionId 属于本 run。
+      //    首次加载返回最新一页；before>0 向更早翻页；since>0 增量拉取。
       const baseConditions = [eq(schema.events.runId, run.id)];
       if (sessionIds.length > 0) {
         baseConditions.push(inArray(schema.events.sessionId, sessionIds));
       }
+      const eventScope = or(...baseConditions)!;
       let events;
+      let page;
       if (since > 0) {
         events = await db
           .select()
           .from(schema.events)
-          .where(and(or(...baseConditions), gt(schema.events.seq, since)))
+          .where(and(eventScope, gt(schema.events.seq, since)))
           .orderBy(asc(schema.events.seq))
-          .limit(2000);
+          .limit(RUN_THREAD_PAGE_SIZE);
+        page = { hasEarlier: false, before: null };
       } else {
         const latest = await db
           .select()
           .from(schema.events)
-          .where(or(...baseConditions))
+          .where(before > 0 ? and(eventScope, lt(schema.events.seq, before)) : eventScope)
           .orderBy(desc(schema.events.seq))
-          .limit(2000);
-        events = latest.reverse();
+          .limit(RUN_THREAD_PAGE_SIZE + 1);
+        const hasEarlier = latest.length > RUN_THREAD_PAGE_SIZE;
+        events = latest.slice(0, RUN_THREAD_PAGE_SIZE).reverse();
+        page = {
+          hasEarlier,
+          before: hasEarlier ? (events[0]?.seq ?? null) : null,
+        };
       }
 
       // ④ forge refs
@@ -358,7 +372,7 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
         .from(schema.forgeRefs)
         .where(eq(schema.forgeRefs.runId, run.id));
 
-      return { run, def: defs[0], nodes, events, forgeRefs };
+      return { run, def: defs[0], nodes, events, forgeRefs, page };
     },
   );
 }

@@ -258,7 +258,12 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
   const [threadNodes, setThreadNodes] = useState<NodeStateRow[]>([]);
   const [threadForgeRefs, setThreadForgeRefs] = useState<ForgeRefRow[]>([]);
 
-  const threadEvents = useRunEvents(runId);
+  const {
+    events: threadEvents,
+    hasEarlier: threadHasEarlier,
+    loadingEarlier: threadLoadingEarlier,
+    loadEarlier: loadEarlierThreadEvents,
+  } = useRunEvents(runId);
 
   // thread 模式 refresh：重新拉 run/def/nodes/forgeRefs（轻量查询，仿 graph 模式 5s 轮询）
   const refreshThread = useCallback(() => {
@@ -503,6 +508,9 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
           onSend={handleSend}
           onDecide={handleDecide}
           onRetest={handleRetest}
+          hasEarlier={threadHasEarlier}
+          loadingEarlier={threadLoadingEarlier}
+          onLoadEarlier={loadEarlierThreadEvents}
           onOpenSession={onOpenSession}
         />
       ) : mode === 'graph' ? (

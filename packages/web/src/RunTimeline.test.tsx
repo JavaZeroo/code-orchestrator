@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { ForgeRefRow } from './api';
-import { ForgeCard, isForgeRetestEligible } from './RunTimeline';
+import { ForgeCard, isForgeRetestEligible, RunHistoryAction } from './RunTimeline';
 
 const gitcodePr: ForgeRefRow = {
   id: 'ref/1',
@@ -39,5 +39,19 @@ describe('ForgeCard retest action', () => {
     expect(posting).toContain('发送中…');
     expect(pending).toContain('disabled=""');
     expect(pending).toContain('等待 CI 确认');
+  });
+});
+
+describe('RunHistoryAction', () => {
+  it('shows an enabled history control until earlier run events are exhausted', () => {
+    const visible = renderToStaticMarkup(<RunHistoryAction visible loading={false} onLoad={vi.fn()} />);
+    const loading = renderToStaticMarkup(<RunHistoryAction visible loading onLoad={vi.fn()} />);
+    const exhausted = renderToStaticMarkup(<RunHistoryAction visible={false} loading={false} onLoad={vi.fn()} />);
+
+    expect(visible).toContain('加载更早记录');
+    expect(visible).not.toContain('disabled=""');
+    expect(loading).toContain('disabled=""');
+    expect(loading).toContain('加载中…');
+    expect(exhausted).toBe('');
   });
 });

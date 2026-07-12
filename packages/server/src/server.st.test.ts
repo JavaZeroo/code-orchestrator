@@ -548,6 +548,101 @@ describeSt('server ST: API + runner websocket', () => {
     expect(forward.events.map((event) => event.seq)).toEqual([live!.seq]);
   });
 
+  it('pages backward through mixed run and linked-session events without gaps or duplicates', async () => {
+    const db = getDb();
+    const defId = 'workflow-run-history-def';
+    const runId = 'workflow-run-history-st';
+    const sessionIds = ['run-history-session-a', 'run-history-session-b'];
+    const graph = {
+      name: 'Auditable pipeline',
+      nodes: [{ id: 'implement', type: 'agent', prompt: 'Implement the change' }],
+      edges: [],
+    };
+    await db.insert(schema.machines).values({ id: 'm-run-history', name: 'Run History Runner' });
+    await db.insert(schema.workflowDefs).values({ id: defId, name: graph.name, graph });
+    await db.insert(schema.workflowRuns).values({ id: runId, defId });
+    await db.insert(schema.sessions).values(sessionIds.map((id, index) => ({
+      id,
+      machineId: 'm-run-history',
+      agent: 'claude',
+      cwd: `/tmp/run-history-${index}`,
+      state: 'dead',
+      runId,
+      nodeId: `node-${index}`,
+    })));
+    await db.insert(schema.events).values({
+      runId: 'another-run',
+      type: 'run.started',
+      payload: { marker: 'unrelated-before' },
+    });
+
+    const runEventTypes = ['run.node.state', 'approval.requested', 'forge.ci'] as const;
+    const inserted = await db
+      .insert(schema.events)
+      .values(Array.from({ length: 4005 }, (_, index) => index % 2 === 0
+        ? {
+            runId,
+            type: runEventTypes[index % runEventTypes.length]!,
+            payload: { index: index + 1, source: 'run' },
+          }
+        : {
+            sessionId: sessionIds[Math.floor(index / 2) % sessionIds.length]!,
+            type: 'session.message',
+            payload: { index: index + 1, source: 'session' },
+          }))
+      .returning({ seq: schema.events.seq });
+    const allSeqs = inserted.map((row) => row.seq).sort((left, right) => left - right);
+    await db.insert(schema.events).values({
+      sessionId: 'unlinked-session',
+      type: 'session.message',
+      payload: { marker: 'unrelated-after' },
+    });
+
+    type RunThreadPage = {
+      events: Array<{ seq: number; type: string }>;
+      page: { hasEarlier: boolean; before: number | null };
+    };
+    const getPage = async (suffix = '') => {
+      const response = await app!.inject({
+        method: 'GET',
+        url: `/api/runs/${runId}/thread${suffix}`,
+      });
+      expect(response.statusCode).toBe(200);
+      return response.json<RunThreadPage>();
+    };
+
+    const newest = await getPage();
+    expect(newest.events.map((event) => event.seq)).toEqual(allSeqs.slice(2005));
+    expect(newest.page).toEqual({ hasEarlier: true, before: allSeqs[2005] });
+
+    const middle = await getPage(`?before=${newest.page.before}`);
+    expect(middle.events.map((event) => event.seq)).toEqual(allSeqs.slice(5, 2005));
+    expect(middle.page).toEqual({ hasEarlier: true, before: allSeqs[5] });
+
+    const oldest = await getPage(`?before=${middle.page.before}`);
+    expect(oldest.events.map((event) => event.seq)).toEqual(allSeqs.slice(0, 5));
+    expect(oldest.page).toEqual({ hasEarlier: false, before: null });
+
+    const pagedEvents = [...oldest.events, ...middle.events, ...newest.events];
+    const pagedSeqs = pagedEvents.map((event) => event.seq);
+    expect(pagedSeqs).toEqual(allSeqs);
+    expect(new Set(pagedSeqs).size).toBe(allSeqs.length);
+    expect(new Set(pagedEvents.map((event) => event.type))).toEqual(new Set([
+      'run.node.state',
+      'approval.requested',
+      'forge.ci',
+      'session.message',
+    ]));
+
+    const [live] = await db
+      .insert(schema.events)
+      .values({ sessionId: sessionIds[0], type: 'session.message', payload: { marker: 'live' } })
+      .returning({ seq: schema.events.seq });
+    const forward = await getPage(`?since=${allSeqs[allSeqs.length - 1]}`);
+    expect(forward.events.map((event) => event.seq)).toEqual([live!.seq]);
+    expect(forward.page).toEqual({ hasEarlier: false, before: null });
+  });
+
   it('persists trimmed session titles and rejects invalid or unknown renames', async () => {
     const db = getDb();
     await db.insert(schema.machines).values({ id: 'm-rename', name: 'Rename Runner' });

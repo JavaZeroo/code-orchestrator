@@ -37,6 +37,24 @@ describe('api client', () => {
     expect(fetch).toHaveBeenNthCalledWith(3, '/api/sessions/s1/events?before=8');
   });
 
+  it('constructs initial, forward, and backward run thread cursors', async () => {
+    const initialPage = { events: [], page: { hasEarlier: true, before: 8 } };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(initialPage))
+      .mockResolvedValueOnce(Response.json({ events: [], page: { hasEarlier: false, before: null } }))
+      .mockResolvedValueOnce(Response.json({ events: [], page: { hasEarlier: false, before: null } }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.runThread('run-1')).resolves.toEqual(initialPage);
+    await api.runThread('run-1', { since: 12 });
+    await api.runThread('run-1', { before: 8 });
+
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/runs/run-1/thread');
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/runs/run-1/thread?since=12');
+    expect(fetch).toHaveBeenNthCalledWith(3, '/api/runs/run-1/thread?before=8');
+  });
+
   it('fetches one session by its encoded ID', async () => {
     const fetch = mockFetch(Response.json({ session: { id: 'session/older', state: 'dead' } }));
 
