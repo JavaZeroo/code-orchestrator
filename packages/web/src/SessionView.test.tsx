@@ -12,6 +12,7 @@ import {
   sessionArchiveMode,
   SessionArchiveAction,
   SessionTitleEditor,
+  TranscriptExportAction,
 } from './SessionView';
 
 const session: SessionRow = {
@@ -121,6 +122,22 @@ describe('SessionView earlier history action', () => {
 
     expect(markup).toContain('disabled=""');
     expect(markup).toContain('加载中…');
+  });
+});
+
+describe('SessionView transcript export action', () => {
+  it('is always available and disables repeated exports while history is loading', () => {
+    const ready = renderToStaticMarkup(
+      <TranscriptExportAction exporting={false} onExport={vi.fn()} />,
+    );
+    const exporting = renderToStaticMarkup(
+      <TranscriptExportAction exporting onExport={vi.fn()} />,
+    );
+
+    expect(ready).toContain('导出记录');
+    expect(ready).not.toContain('disabled=""');
+    expect(exporting).toContain('disabled=""');
+    expect(exporting).toContain('导出中…');
   });
 });
 
