@@ -1,4 +1,4 @@
-import { access, mkdtemp, stat, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -67,6 +67,14 @@ describe('createRunnerMethodHandler', () => {
     const root = await mkdtemp(join(tmpdir(), 'co-method-mkdir-'));
     await expect(handler()('workspace.mkdir', { root, path: 'reports' })).resolves.toEqual({ ok: true });
     await expect(stat(join(root, 'reports')).then((value) => value.isDirectory())).resolves.toBe(true);
+  });
+
+  it('dispatches workspace.rename through the confined entry renamer', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-rename-'));
+    await writeFile(join(root, 'draft.txt'), 'runner bytes');
+    await expect(handler()('workspace.rename', { root, path: 'draft.txt', newName: 'final.txt' }))
+      .resolves.toEqual({ ok: true, path: 'final.txt' });
+    await expect(readFile(join(root, 'final.txt'), 'utf8')).resolves.toBe('runner bytes');
   });
 
   it('rejects unsupported opencode session spawn without creating a session', async () => {

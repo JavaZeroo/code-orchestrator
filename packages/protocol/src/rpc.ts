@@ -199,6 +199,20 @@ export const runnerMethods = {
       error: z.string().optional(),
     }),
   },
+  /** Rename one regular file or directory within its current workspace directory. */
+  'workspace.rename': {
+    params: z.object({
+      root: z.string().min(1),
+      path: z.string().min(1),
+      newName: z.string().min(1),
+      containerId: z.string().min(1).optional(),
+    }),
+    result: z.object({
+      ok: z.boolean(),
+      path: z.string().optional(),
+      error: z.string().optional(),
+    }),
+  },
   /** List one directory beneath a session workspace. Responses are capped and never follow escaped symlinks. */
   'workspace.list': {
     params: z.object({

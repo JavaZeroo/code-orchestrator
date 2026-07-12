@@ -179,6 +179,29 @@ export function normalizeWorkspaceFolderName(value: string): string | null {
   return name && name !== '.' && name !== '..' && !/[\\/]/.test(name) ? name : null;
 }
 
+export const normalizeWorkspaceEntryName = normalizeWorkspaceFolderName;
+
+export async function renameNamedWorkspaceEntry(
+  sessionId: string,
+  path: string,
+  value: string,
+  request = api.renameWorkspaceEntry,
+): Promise<string> {
+  const name = normalizeWorkspaceEntryName(value);
+  if (!name) throw new Error('新名称不能为空，且不能包含路径分隔符');
+  const result = await request(sessionId, path, name);
+  return result.path;
+}
+
+export function requestWorkspaceEntryName(
+  entry: WorkspaceEntry,
+  onRename: (entry: WorkspaceEntry, name: string) => void,
+  ask: (message: string, initial: string) => string | null = (message, initial) => prompt(message, initial),
+): void {
+  const name = ask(`请输入 ${entry.name} 的新名称`, entry.name);
+  if (name !== null) onRename(entry, name);
+}
+
 export async function createNamedWorkspaceFolder(
   sessionId: string,
   directory: string,
@@ -266,12 +289,14 @@ export function WorkspaceBrowserEntries({
   onDirectory,
   onFile,
   onDelete,
+  onRename,
 }: {
   entries: WorkspaceEntry[];
   disabled: boolean;
   onDirectory: (name: string) => void;
   onFile: (entry: WorkspaceEntry) => void;
   onDelete: (entry: WorkspaceEntry) => void;
+  onRename: (entry: WorkspaceEntry, name: string) => void;
 }) {
   if (entries.length === 0) return <div className="py-8 text-center text-sm text-faint">此目录为空</div>;
   return (
@@ -291,6 +316,17 @@ export function WorkspaceBrowserEntries({
             <span className="min-w-0 flex-1 truncate font-mono">{entry.name}</span>
             {entry.type === 'file' && entry.size !== undefined && <span className="text-xs text-faint">{entry.size.toLocaleString()} B</span>}
           </button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 text-dim"
+            aria-label={`重命名 ${entry.name}`}
+            disabled={disabled}
+            onClick={() => requestWorkspaceEntryName(entry, onRename)}
+          >
+            <Pencil size={13} />
+          </Button>
           {entry.type === 'file' && <Button
             type="button"
             variant="ghost"
@@ -353,6 +389,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   const [listingVersion, setListingVersion] = useState(0);
   const previewRequestRef = useRef(0);
   useEffect(() => {
@@ -439,6 +476,15 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .catch((error) => toast.error(`删除失败：${error}`))
       .finally(() => setDeleting(false));
   };
+  const renameEntry = (entry: WorkspaceEntry, name: string) => {
+    if (renaming) return;
+    const relativePath = workspaceChildPath(path, entry.name);
+    setRenaming(true);
+    void renameNamedWorkspaceEntry(sessionId, relativePath, name)
+      .then(() => { toast.success('名称已更新'); setListingVersion((version) => version + 1); })
+      .catch((error) => toast.error(`重命名失败：${error}`))
+      .finally(() => setRenaming(false));
+  };
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent>
@@ -452,24 +498,25 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
           onDownload={() => downloadFile(preview.path, false)}
         /> : <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || deleting} onClick={() => setPath(workspaceParentPath(path))}>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || deleting || renaming} onClick={() => setPath(workspaceParentPath(path))}>
               <ChevronLeft size={14} />
             </Button>
             <div className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={path || '/'}>/{path}</div>
-            <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || deleting} creating={creating} onCreate={createFolder} />
-            <WorkspaceUploadAction disabled={loading || downloading || creating || deleting} uploading={uploading} onFile={uploadFile} />
+            <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || deleting || renaming} creating={creating} onCreate={createFolder} />
+            <WorkspaceUploadAction disabled={loading || downloading || creating || deleting || renaming} uploading={uploading} onFile={uploadFile} />
           </div>
           {loading ? <div className="py-8 text-center text-sm text-dim">加载中…</div>
             : error ? <div className="py-8 text-center text-sm text-danger">目录加载失败：{error}</div>
             : <WorkspaceBrowserEntries
                 entries={entries}
-                disabled={downloading || uploading || creating || deleting}
+                disabled={downloading || uploading || creating || deleting || renaming}
                 onDirectory={(name) => setPath(workspaceChildPath(path, name))}
                 onFile={selectFile}
                 onDelete={deleteFile}
+                onRename={renameEntry}
               />}
           {truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
-          <div className="text-xs text-faint">可新建文件夹，或上传、删除当前目录中的文件；支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
+          <div className="text-xs text-faint">可新建文件夹，重命名文件或文件夹，或上传、删除当前目录中的文件；支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
         </div>}
       </DialogContent>
     </Dialog>

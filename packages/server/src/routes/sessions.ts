@@ -53,6 +53,7 @@ const listSessionsQuerySchema = z.object({ archived: z.enum(['true', 'false']).d
 const decideBodySchema = z.object({ decision: approvalDecisionSchema, decidedBy: z.string().optional() });
 const workspaceFileQuerySchema = z.object({ path: z.string().min(1) });
 const workspaceListQuerySchema = z.object({ path: z.string().default('') });
+const workspaceRenameBodySchema = z.object({ name: z.string().min(1) }).strict();
 const WORKSPACE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const EVENT_PAGE_SIZE = 2000;
 
@@ -361,6 +362,21 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     if (!result.ok) throw new HttpError(400, result.error ?? 'workspace directory creation failed');
     void reply.code(201);
     return { ok: true, path };
+  });
+
+  /** Rename one file or directory without moving it out of its current workspace directory. */
+  app.patch<{ Params: { id: string }; Querystring: { path?: string }; Body: unknown }>('/api/sessions/:id/files', async (req) => {
+    const session = await findSession(req.params.id);
+    const { path } = workspaceFileQuerySchema.parse(req.query);
+    const { name } = workspaceRenameBodySchema.parse(req.body);
+    const result = await callRunner(session.machineId, 'workspace.rename', {
+      root: session.cwd,
+      path,
+      newName: name,
+      containerId: session.containerId ?? undefined,
+    });
+    if (!result.ok || result.path === undefined) throw new HttpError(400, result.error ?? 'workspace entry rename failed');
+    return { ok: true, path: result.path };
   });
 
   /** List one bounded workspace directory so operators can discover downloadable files. */

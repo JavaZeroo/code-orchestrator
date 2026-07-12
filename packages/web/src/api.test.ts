@@ -131,6 +131,18 @@ describe('api client', () => {
     );
   });
 
+  it('renames an encoded workspace entry with a JSON name', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, path: 'reports/final result.txt' }));
+    await expect(api.renameWorkspaceEntry('session/one', 'reports/draft.txt', 'final result.txt')).resolves.toEqual({
+      ok: true, path: 'reports/final result.txt',
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files?path=reports%2Fdraft.txt', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'final result.txt' }),
+    });
+  });
+
   it('posts JSON bodies for session spawn', async () => {
     const fetch = mockFetch(Response.json({ sessionId: 's1' }));
 

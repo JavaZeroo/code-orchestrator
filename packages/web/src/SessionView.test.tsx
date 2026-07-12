@@ -22,6 +22,8 @@ import {
   uploadSelectedWorkspaceFile,
   createNamedWorkspaceFolder,
   requestWorkspaceFolderName,
+  renameNamedWorkspaceEntry,
+  requestWorkspaceEntryName,
   WORKSPACE_UPLOAD_MAX_BYTES,
   workspaceChildPath,
   workspaceParentPath,
@@ -174,6 +176,7 @@ describe('SessionView artifact download action', () => {
         onDirectory={vi.fn()}
         onFile={vi.fn()}
         onDelete={vi.fn()}
+        onRename={vi.fn()}
       />,
     );
     expect(markup).toContain('reports');
@@ -185,6 +188,29 @@ describe('SessionView artifact download action', () => {
     expect(workspaceParentPath('reports')).toBe('');
     expect(markup).toContain('删除 result.bin');
     expect(markup).not.toContain('删除 reports');
+    expect(markup).toContain('重命名 reports');
+    expect(markup).toContain('重命名 result.bin');
+  });
+
+  it('renames a file or folder with a single-entry name', async () => {
+    const entry = { name: 'draft.txt', type: 'file' as const, size: 5 };
+    const onRename = vi.fn();
+    requestWorkspaceEntryName(entry, onRename, () => 'final.txt');
+    expect(onRename).toHaveBeenCalledWith(entry, 'final.txt');
+
+    const request = vi.fn().mockResolvedValue({ ok: true, path: 'reports/final.txt' });
+    await expect(renameNamedWorkspaceEntry('session-1', 'reports/draft.txt', ' final.txt ', request))
+      .resolves.toBe('reports/final.txt');
+    expect(request).toHaveBeenCalledWith('session-1', 'reports/draft.txt', 'final.txt');
+  });
+
+  it('rejects rename values that address another directory', async () => {
+    const request = vi.fn();
+    for (const name of ['', '.', '..', '../escape', 'nested/file', 'nested\\file']) {
+      await expect(renameNamedWorkspaceEntry('session-1', 'reports/draft.txt', name, request))
+        .rejects.toThrow('新名称');
+    }
+    expect(request).not.toHaveBeenCalled();
   });
 
   it('deletes only after confirmation and reports whether deletion occurred', async () => {
