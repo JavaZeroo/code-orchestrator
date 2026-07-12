@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { ForgeRefRow } from './api';
-import { ForgeCard, isForgeRetestEligible, RunHistoryAction, RunNoteCard, RunNoteComposer } from './RunTimeline';
+import { ForgeCard, isForgeCommentEligible, isForgeRetestEligible, RunHistoryAction, RunNoteCard, RunNoteComposer } from './RunTimeline';
 
 const gitcodePr: ForgeRefRow = {
   id: 'ref/1',
@@ -39,6 +39,23 @@ describe('ForgeCard retest action', () => {
     expect(posting).toContain('发送中…');
     expect(pending).toContain('disabled=""');
     expect(pending).toContain('等待 CI 确认');
+  });
+});
+
+describe('ForgeCard comment action', () => {
+  it('renders a composer only for persisted active PR refs on either forge', () => {
+    expect(isForgeCommentEligible(gitcodePr)).toBe(true);
+    expect(isForgeCommentEligible({ ...gitcodePr, forge: 'github' })).toBe(true);
+    expect(isForgeCommentEligible({ ...gitcodePr, id: '' })).toBe(false);
+    expect(isForgeCommentEligible({ ...gitcodePr, active: 'no' })).toBe(false);
+    expect(isForgeCommentEligible({ ...gitcodePr, kind: 'issue' })).toBe(false);
+
+    const eligible = renderToStaticMarkup(<ForgeCard forgeRef={gitcodePr} onComment={vi.fn()} />);
+    const issue = renderToStaticMarkup(<ForgeCard forgeRef={{ ...gitcodePr, kind: 'issue' }} onComment={vi.fn()} />);
+    expect(eligible).toContain('发布 PR 评论');
+    expect(eligible).toContain('评论 gitcode PR #8377');
+    expect(eligible).toContain('disabled=""');
+    expect(issue).not.toContain('发布 PR 评论');
   });
 });
 

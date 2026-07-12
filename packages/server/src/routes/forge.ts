@@ -5,6 +5,7 @@ import * as z from 'zod';
 import { getDb, schema } from '../db/index';
 import { pollOnce } from '../forge/poller';
 import { getForge } from '../forge/registry';
+import { ForgeCommentError, forgeCommentService } from '../forge/comment';
 import { ForgeRetestError, forgeRetestService } from '../forge/retest';
 import { anyForgeToken, userForgeToken } from '../forge/tokens';
 
@@ -17,6 +18,8 @@ const createRefSchema = z.object({
   runId: z.string().optional(),
   nodeId: z.string().optional(),
 });
+
+const createCommentSchema = z.object({ body: z.string().trim().min(1).max(10_000) });
 
 export async function registerForgeRoutes(app: FastifyInstance): Promise<void> {
   /** 手工登记要跟踪的 PR（agent 输出中的 PR URL 会被引擎自动登记） */
@@ -46,6 +49,16 @@ export async function registerForgeRoutes(app: FastifyInstance): Promise<void> {
       if (err instanceof ForgeRetestError) {
         return reply.code(err.statusCode).send({ error: err.message });
       }
+      throw err;
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/api/forge/refs/:id/comments', async (req, reply) => {
+    const body = createCommentSchema.parse(req.body);
+    try {
+      return await forgeCommentService.request(req.params.id, body.body, req.user?.id);
+    } catch (err) {
+      if (err instanceof ForgeCommentError) return reply.code(err.statusCode).send({ error: err.message });
       throw err;
     }
   });

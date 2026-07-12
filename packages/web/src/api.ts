@@ -406,6 +406,9 @@ export const api = {
   retestForgeRef: (refId: string) =>
     fetch(`/api/forge/refs/${encodeURIComponent(refId)}/retest`, { method: 'POST' })
       .then((r) => j<{ ok: true; confirmation: 'pending' }>(r)),
+  commentForgeRef: (refId: string, body: string) =>
+    post(`/api/forge/refs/${encodeURIComponent(refId)}/comments`, { body })
+      .then((r) => j<{ ok: true; commentId: number }>(r)),
   pendingApprovals: () =>
     fetch('/api/approvals?status=pending').then((r) => j<{ approvals: ApprovalRow[] }>(r)).then((d) => d.approvals),
   send: (sessionId: string, text: string) => post(`/api/sessions/${sessionId}/send`, { text }).then((r) => j(r)),
