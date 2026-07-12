@@ -15,8 +15,10 @@ import {
   sessionNoteAction,
   SessionTitleEditor,
   TranscriptExportAction,
+  WorkspaceBrowserEntries,
+  workspaceChildPath,
+  workspaceParentPath,
   downloadSessionArtifact,
-  canDownloadArtifact,
 } from './SessionView';
 
 const session: SessionRow = {
@@ -156,10 +158,22 @@ describe('SessionView artifact download action', () => {
     expect(download).toHaveBeenCalledWith(expect.any(Blob), 'final report.txt');
   });
 
-  it('allows one download only after a path is entered and while idle', () => {
-    expect(canDownloadArtifact('   ', false)).toBe(false);
-    expect(canDownloadArtifact('out/result.bin', true)).toBe(false);
-    expect(canDownloadArtifact('out/result.bin', false)).toBe(true);
+  it('renders discoverable directories and downloadable files', () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceBrowserEntries
+        entries={[{ name: 'reports', type: 'directory' }, { name: 'result.bin', type: 'file', size: 42 }]}
+        disabled={false}
+        onDirectory={vi.fn()}
+        onFile={vi.fn()}
+      />,
+    );
+    expect(markup).toContain('reports');
+    expect(markup).toContain('result.bin');
+    expect(markup).toContain('42 B');
+    expect(workspaceChildPath('', 'reports')).toBe('reports');
+    expect(workspaceChildPath('reports', 'daily')).toBe('reports/daily');
+    expect(workspaceParentPath('reports/daily')).toBe('reports');
+    expect(workspaceParentPath('reports')).toBe('');
   });
 });
 

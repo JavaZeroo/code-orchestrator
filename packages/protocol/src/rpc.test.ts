@@ -47,6 +47,18 @@ describe('runnerMethods contracts', () => {
     expect(() => runnerMethods['workspace.read'].params.parse({ root: '/work', path: '' })).toThrow();
   });
 
+  it('validates workspace directory listings for host and container sessions', () => {
+    expect(runnerMethods['workspace.list'].params.parse({ root: '/work' })).toEqual({ root: '/work', path: '' });
+    expect(runnerMethods['workspace.list'].params.parse({ root: '/workspace', path: 'out', containerId: 'c1' }))
+      .toEqual({ root: '/workspace', path: 'out', containerId: 'c1' });
+    expect(runnerMethods['workspace.list'].result.parse({
+      ok: true,
+      path: 'out',
+      entries: [{ name: 'models', type: 'directory' }, { name: 'result.bin', type: 'file', size: 42 }],
+      truncated: false,
+    })).toMatchObject({ entries: [{ type: 'directory' }, { type: 'file', size: 42 }] });
+  });
+
   it('accepts containerized session.spawn parameters', () => {
     const parsed = runnerMethods['session.spawn'].params.parse({
       sessionId: 's1',

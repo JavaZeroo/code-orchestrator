@@ -8,6 +8,7 @@ import { provisionWorkspace } from './workspace';
 import { containerExec, containerRm, containerRun } from './container';
 import { ContainerSession } from './container-agent/container-session';
 import { readWorkspaceFile } from './workspaceFile';
+import { listWorkspaceDirectory } from './workspaceList';
 
 const EXEC_DEFAULT_TIMEOUT_MS = 60_000;
 const EXEC_MAX_BUFFER = 10 * 1024 * 1024;
@@ -109,6 +110,9 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
       }
       case 'workspace.read': {
         return readWorkspaceFile(runnerMethods['workspace.read'].params.parse(params));
+      }
+      case 'workspace.list': {
+        return listWorkspaceDirectory(runnerMethods['workspace.list'].params.parse(params));
       }
       case 'container.run': {
         return containerRun(runnerMethods['container.run'].params.parse(params));
