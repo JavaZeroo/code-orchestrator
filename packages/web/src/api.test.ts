@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, type WorkflowDef } from './api';
+import { api, decodeWorkspaceTextPreview, WORKSPACE_TEXT_PREVIEW_MAX_BYTES, type WorkflowDef } from './api';
 
 function mockFetch(response: Response) {
   const fetch = vi.fn().mockResolvedValue(response);
@@ -67,6 +67,27 @@ describe('api client', () => {
     const fetch = mockFetch(response);
     await expect(api.workspaceFile('session/one', 'reports/final result.bin')).resolves.toBe(response);
     expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files?path=reports%2Ffinal%20result.bin');
+  });
+
+  it('loads an encoded workspace file as an inline UTF-8 preview', async () => {
+    const fetch = mockFetch(new Response('# Report\nAll checks passed.'));
+    await expect(api.workspaceTextPreview('session/one', 'reports/final report.md')).resolves.toEqual({
+      kind: 'text',
+      text: '# Report\nAll checks passed.',
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files?path=reports%2Ffinal%20report.md');
+  });
+
+  it('rejects binary and oversized responses instead of rendering them as text', async () => {
+    await expect(decodeWorkspaceTextPreview(new Response(new Uint8Array([0xff, 0xfe, 0x00])))).resolves.toEqual({ kind: 'binary' });
+    await expect(decodeWorkspaceTextPreview(new Response('small', {
+      headers: { 'content-length': String(WORKSPACE_TEXT_PREVIEW_MAX_BYTES + 1) },
+    }))).resolves.toEqual({ kind: 'oversized' });
+  });
+
+  it('surfaces preview request errors', async () => {
+    mockFetch(new Response('workspace file unavailable', { status: 400 }));
+    await expect(api.workspaceTextPreview('session-1', 'missing.txt')).rejects.toThrow('400: workspace file unavailable');
   });
 
   it('requests an encoded workspace directory listing', async () => {

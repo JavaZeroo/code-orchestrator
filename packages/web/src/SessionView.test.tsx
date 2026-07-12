@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import type { SessionRow } from './api';
+import { isWorkspaceTextPreviewCandidate, WORKSPACE_TEXT_PREVIEW_MAX_BYTES, type SessionRow } from './api';
 import {
   ForkAction,
   isSessionForkable,
@@ -16,6 +16,7 @@ import {
   SessionTitleEditor,
   TranscriptExportAction,
   WorkspaceBrowserEntries,
+  WorkspaceFilePreview,
   workspaceChildPath,
   workspaceParentPath,
   downloadSessionArtifact,
@@ -174,6 +175,45 @@ describe('SessionView artifact download action', () => {
     expect(workspaceChildPath('reports', 'daily')).toBe('reports/daily');
     expect(workspaceParentPath('reports/daily')).toBe('reports');
     expect(workspaceParentPath('reports')).toBe('');
+  });
+
+  it('only offers inline preview for bounded, recognized text files', () => {
+    expect(isWorkspaceTextPreviewCandidate({ name: 'report.md', type: 'file', size: 42 })).toBe(true);
+    expect(isWorkspaceTextPreviewCandidate({ name: 'Dockerfile', type: 'file', size: 42 })).toBe(true);
+    expect(isWorkspaceTextPreviewCandidate({ name: 'result.bin', type: 'file', size: 42 })).toBe(false);
+    expect(isWorkspaceTextPreviewCandidate({ name: 'report.txt', type: 'file', size: WORKSPACE_TEXT_PREVIEW_MAX_BYTES + 1 })).toBe(false);
+    expect(isWorkspaceTextPreviewCandidate({ name: 'report.txt', type: 'file' })).toBe(false);
+  });
+
+  it('renders readable preview content with back navigation and explicit download', () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceFilePreview
+        path="reports/final.md"
+        text={'# Final report\nReady to ship.'}
+        downloading={false}
+        onBack={vi.fn()}
+        onDownload={vi.fn()}
+      />,
+    );
+    expect(markup).toContain('返回目录列表');
+    expect(markup).toContain('reports/final.md');
+    expect(markup).toContain('# Final report');
+    expect(markup).toContain('下载');
+  });
+
+  it('keeps download available when a preview cannot be loaded', () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceFilePreview
+        path="reports/final.txt"
+        error="预览加载失败：network unavailable"
+        downloading={false}
+        onBack={vi.fn()}
+        onDownload={vi.fn()}
+      />,
+    );
+    expect(markup).toContain('预览加载失败');
+    expect(markup).toContain('返回目录列表');
+    expect(markup).toContain('下载');
   });
 });
 
