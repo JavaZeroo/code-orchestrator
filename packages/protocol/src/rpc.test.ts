@@ -72,6 +72,15 @@ describe('runnerMethods contracts', () => {
       .toEqual({ ok: false, error: 'not a regular file' });
   });
 
+  it('validates workspace directory creation for host and container sessions', () => {
+    expect(runnerMethods['workspace.mkdir'].params.parse({ root: '/work', path: 'reports/daily' }))
+      .toEqual({ root: '/work', path: 'reports/daily' });
+    expect(runnerMethods['workspace.mkdir'].params.parse({
+      root: '/workspace', path: 'reports', containerId: 'c1',
+    })).toEqual({ root: '/workspace', path: 'reports', containerId: 'c1' });
+    expect(() => runnerMethods['workspace.mkdir'].params.parse({ root: '/work', path: '' })).toThrow();
+  });
+
   it('validates workspace directory listings for host and container sessions', () => {
     expect(runnerMethods['workspace.list'].params.parse({ root: '/work' })).toEqual({ root: '/work', path: '' });
     expect(runnerMethods['workspace.list'].params.parse({ root: '/workspace', path: 'out', containerId: 'c1' }))

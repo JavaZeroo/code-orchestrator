@@ -2617,6 +2617,7 @@ describeSt('server ST: API + runner websocket', () => {
     const uploadedBytes = Buffer.from([255, 0, 128, 13, 10]);
     let uploaded: Buffer | undefined;
     let deletedPath: string | undefined;
+    let createdDirectory: string | undefined;
     const runner = await FakeRunner.connect(baseUrl, {
       'workspace.list': (params) => {
         expect(params).toEqual({ root: '/tmp/artifact-work', path: '', containerId: 'artifact-container' });
@@ -2643,6 +2644,13 @@ describeSt('server ST: API + runner websocket', () => {
           root: '/tmp/artifact-work', path: 'out/old.bin', containerId: 'artifact-container',
         });
         deletedPath = (params as { path: string }).path;
+        return { ok: true };
+      },
+      'workspace.mkdir': (params) => {
+        expect(params).toEqual({
+          root: '/tmp/artifact-work', path: 'out/new-folder', containerId: 'artifact-container',
+        });
+        createdDirectory = (params as { path: string }).path;
         return { ok: true };
       },
     });
@@ -2676,6 +2684,12 @@ describeSt('server ST: API + runner websocket', () => {
       headers: { host: 'localhost:7620' },
     });
     expect(unauthorizedDelete.statusCode).toBe(401);
+    const unauthorizedMkdir = await app!.inject({
+      method: 'POST',
+      url: '/api/sessions/session-artifact-st/files/directories?path=out%2Fnew-folder',
+      headers: { host: 'localhost:7620' },
+    });
+    expect(unauthorizedMkdir.statusCode).toBe(401);
     const listing = await app!.inject({
       method: 'GET',
       url: '/api/sessions/session-artifact-st/files/list?path=',
@@ -2712,10 +2726,19 @@ describeSt('server ST: API + runner websocket', () => {
     expect(deletion.statusCode).toBe(200);
     expect(deletion.json()).toEqual({ ok: true, path: 'out/old.bin' });
     expect(deletedPath).toBe('out/old.bin');
+    const creation = await app!.inject({
+      method: 'POST',
+      url: '/api/sessions/session-artifact-st/files/directories?path=out%2Fnew-folder',
+      headers: { host: 'localhost:7620', cookie },
+    });
+    expect(creation.statusCode).toBe(201);
+    expect(creation.json()).toEqual({ ok: true, path: 'out/new-folder' });
+    expect(createdDirectory).toBe('out/new-folder');
     expect(runner.calls.some((call) => call.method === 'workspace.list')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.read')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.write')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.delete')).toBe(true);
+    expect(runner.calls.some((call) => call.method === 'workspace.mkdir')).toBe(true);
   });
 
   it('posts forge comments through authenticated refs with the requester token', async () => {
