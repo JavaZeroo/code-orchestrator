@@ -174,14 +174,21 @@ export function isForgeRetestEligible(forgeRef: ForgeRefRow): boolean {
   return Boolean(forgeRef.id) && forgeRef.forge === 'gitcode' && forgeRef.kind === 'pr' && forgeRef.active === 'yes';
 }
 
+export function isForgeCommentEligible(forgeRef: ForgeRefRow): boolean {
+  return Boolean(forgeRef.id) && forgeRef.kind === 'pr' && forgeRef.active === 'yes';
+}
+
 /** PR·CI 状态卡 */
-export function ForgeCard({ forgeRef, prState, ciState, retestState = 'idle', onRetest }: {
+export function ForgeCard({ forgeRef, prState, ciState, retestState = 'idle', onRetest, onComment }: {
   forgeRef: ForgeRefRow;
   prState?: string;
   ciState?: string;
   retestState?: ForgeRetestState;
   onRetest?: () => void;
+  onComment?: (body: string) => Promise<void>;
 }) {
+  const [comment, setComment] = useState('');
+  const [postingComment, setPostingComment] = useState(false);
   const url = forgePrUrl(forgeRef.forge, forgeRef.repo, forgeRef.number);
   const ciLabel = ciState === 'passed' ? '✔ CI 已过'
     : ciState === 'failed' ? '✖ CI 失败'
@@ -191,6 +198,15 @@ export function ForgeCard({ forgeRef, prState, ciState, retestState = 'idle', on
   const ciTone: BadgeTone = ciState === 'passed' ? 'ok' : ciState === 'failed' ? 'danger' : ciState === 'running' ? 'run' : 'neutral';
   const canRetest = Boolean(onRetest) && isForgeRetestEligible(forgeRef);
   const retestLabel = retestState === 'posting' ? '发送中…' : retestState === 'pending' ? '等待 CI 确认' : '重跑 CI';
+  const canComment = Boolean(onComment) && isForgeCommentEligible(forgeRef);
+  const submitComment = () => {
+    const body = comment.trim();
+    if (!onComment || !body || postingComment) return;
+    setPostingComment(true);
+    void onComment(body)
+      .then(() => setComment(''), () => {})
+      .finally(() => setPostingComment(false));
+  };
 
   return (
     <div className="self-stretch rounded-lg border border-line bg-panel/60 px-3 py-2">
@@ -211,6 +227,29 @@ export function ForgeCard({ forgeRef, prState, ciState, retestState = 'idle', on
           </a>
         </div>
       </div>
+      {canComment && (
+        <div className="mt-2 flex gap-2 border-t border-line/60 pt-2">
+          <Textarea
+            aria-label={`评论 ${forgeRef.forge} PR #${forgeRef.number}`}
+            value={comment}
+            rows={2}
+            maxLength={10_000}
+            placeholder="发布 PR 评论"
+            disabled={postingComment}
+            className="resize-none"
+            onChange={(event) => setComment(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && comment.trim() && !postingComment) {
+                event.preventDefault();
+                submitComment();
+              }
+            }}
+          />
+          <Button variant="outline" size="sm" className="h-auto shrink-0" disabled={postingComment || !comment.trim()} onClick={submitComment}>
+            <Send size={12} /> {postingComment ? '发布中…' : '发布评论'}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -364,6 +403,7 @@ interface RunTimelineProps {
   addingNote: boolean;
   onDecide: (id: string, b: 'allow' | 'deny') => void;
   onRetest: (refId: string) => Promise<void>;
+  onComment: (refId: string, body: string) => Promise<void>;
   hasEarlier: boolean;
   loadingEarlier: boolean;
   onLoadEarlier: () => Promise<{ events: EventRow[] } | undefined>;
@@ -388,6 +428,7 @@ export function RunTimeline({
   addingNote,
   onDecide,
   onRetest,
+  onComment,
   hasEarlier,
   loadingEarlier,
   onLoadEarlier,
@@ -599,7 +640,7 @@ export function RunTimeline({
           out.push({
             key: `fr-${row.seq}`,
             seq: row.seq,
-            el: <ForgeCard forgeRef={fr ?? { id: '', forge: p.forge as 'gitcode' | 'github', kind: 'pr', repo: p.repo, number: p.number, runId: run.id, nodeId: p.nodeId ?? null, sessionId: null, ciStatus: null, snapshot: null, active: 'yes' }} retestState={fr ? retestProgress[fr.id]?.phase : undefined} onRetest={fr ? () => handleRetest(fr) : undefined} />,
+            el: <ForgeCard forgeRef={fr ?? { id: '', forge: p.forge as 'gitcode' | 'github', kind: 'pr', repo: p.repo, number: p.number, runId: run.id, nodeId: p.nodeId ?? null, sessionId: null, ciStatus: null, snapshot: null, active: 'yes' }} retestState={fr ? retestProgress[fr.id]?.phase : undefined} onRetest={fr ? () => handleRetest(fr) : undefined} onComment={fr ? (body) => onComment(fr.id, body) : undefined} />,
           });
         } else if (row.type === 'forge.pr_state') {
           const p = row.payload as { forge: string; repo: string; number: number; state: string };
@@ -607,7 +648,7 @@ export function RunTimeline({
           out.push({
             key: `prs-${row.seq}`,
             seq: row.seq,
-            el: <ForgeCard forgeRef={fr ?? { id: '', forge: p.forge as 'gitcode' | 'github', kind: 'pr', repo: p.repo, number: p.number, runId: run.id, nodeId: null, sessionId: null, ciStatus: null, snapshot: null, active: 'yes' }} prState={p.state} retestState={fr ? retestProgress[fr.id]?.phase : undefined} onRetest={fr ? () => handleRetest(fr) : undefined} />,
+            el: <ForgeCard forgeRef={fr ?? { id: '', forge: p.forge as 'gitcode' | 'github', kind: 'pr', repo: p.repo, number: p.number, runId: run.id, nodeId: null, sessionId: null, ciStatus: null, snapshot: null, active: 'yes' }} prState={p.state} retestState={fr ? retestProgress[fr.id]?.phase : undefined} onRetest={fr ? () => handleRetest(fr) : undefined} onComment={fr ? (body) => onComment(fr.id, body) : undefined} />,
           });
         } else if (row.type === 'forge.ci') {
           const p = row.payload as { forge: string; repo: string; number: number; state: string };
@@ -615,7 +656,7 @@ export function RunTimeline({
           out.push({
             key: `ci-${row.seq}`,
             seq: row.seq,
-            el: <ForgeCard forgeRef={fr ?? { id: '', forge: p.forge as 'gitcode' | 'github', kind: 'pr', repo: p.repo, number: p.number, runId: run.id, nodeId: null, sessionId: null, ciStatus: null, snapshot: null, active: 'yes' }} ciState={p.state} retestState={fr ? retestProgress[fr.id]?.phase : undefined} onRetest={fr ? () => handleRetest(fr) : undefined} />,
+            el: <ForgeCard forgeRef={fr ?? { id: '', forge: p.forge as 'gitcode' | 'github', kind: 'pr', repo: p.repo, number: p.number, runId: run.id, nodeId: null, sessionId: null, ciStatus: null, snapshot: null, active: 'yes' }} ciState={p.state} retestState={fr ? retestProgress[fr.id]?.phase : undefined} onRetest={fr ? () => handleRetest(fr) : undefined} onComment={fr ? (body) => onComment(fr.id, body) : undefined} />,
           });
         } else if (row.type === 'forge.conflict') {
           const p = row.payload as { forge: string; repo: string; number: number };
@@ -677,7 +718,7 @@ export function RunTimeline({
     flushSegment();
 
     return out.sort((a, b) => a.seq - b.seq);
-  }, [events, nodeBySession, nodeDefById, forgeRefByKey, approvals, expandedSegments, nodes, run.id, onDecide, onEditNote, retestProgress, handleRetest]);
+  }, [events, nodeBySession, nodeDefById, forgeRefByKey, approvals, expandedSegments, nodes, run.id, onDecide, onEditNote, onComment, retestProgress, handleRetest]);
 
   // ---- 智能滚动（仿 SessionView）----
 

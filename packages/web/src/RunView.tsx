@@ -115,6 +115,23 @@ export async function runRetestAction(refId: string, deps: RunRetestActionDepend
   }
 }
 
+export interface RunForgeCommentActionDependencies {
+  request(refId: string, body: string): Promise<{ ok: true; commentId: number }>;
+  success(message: string): void;
+  error(message: string): void;
+}
+
+export async function runForgeCommentAction(refId: string, body: string, deps: RunForgeCommentActionDependencies): Promise<void> {
+  try {
+    await deps.request(refId, body);
+    deps.success('PR 评论已发布');
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    deps.error(`PR 评论发布失败：${detail}`);
+    throw err;
+  }
+}
+
 export interface RunNoteActionDependencies {
   request(runId: string, markdown: string): Promise<{ note: RunNoteEventRow }>;
   success(message: string): void;
@@ -422,6 +439,12 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
     refresh: refreshThread,
   }), [refreshThread]);
 
+  const handleForgeComment = useCallback((refId: string, body: string) => runForgeCommentAction(refId, body, {
+    request: api.commentForgeRef,
+    success: toast.success,
+    error: toast.error,
+  }), []);
+
   const handleRetry = useCallback(() => {
     if (!retryEligible || retrying) return;
     setRetrying(true);
@@ -583,6 +606,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
           addingNote={addingNote}
           onDecide={handleDecide}
           onRetest={handleRetest}
+          onComment={handleForgeComment}
           hasEarlier={threadHasEarlier}
           loadingEarlier={threadLoadingEarlier}
           onLoadEarlier={loadEarlierThreadEvents}

@@ -313,6 +313,17 @@ describe('api client', () => {
     expect(fetch).toHaveBeenCalledWith('/api/forge/refs/ref%2F1/retest', { method: 'POST' });
   });
 
+  it('posts a comment to the encoded tracked PR ref', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, commentId: 73 }));
+
+    await expect(api.commentForgeRef('ref/1', 'Please rerun the checks.')).resolves.toEqual({ ok: true, commentId: 73 });
+    expect(fetch).toHaveBeenCalledWith('/api/forge/refs/ref%2F1/comments', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ body: 'Please rerun the checks.' }),
+    });
+  });
+
   it('starts a recorded requirement through its encoded intake resource', async () => {
     const fetch = mockFetch(Response.json({ runId: 'run-1' }, { status: 201 }));
 

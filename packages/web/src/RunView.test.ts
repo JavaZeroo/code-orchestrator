@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   isRunRetryEligible,
   runArchiveMode,
+  runForgeCommentAction,
   runProgressionMode,
   runNoteAction,
   RunArchiveAction,
@@ -14,6 +15,7 @@ import {
   RunTitleEditor,
   RunTranscriptExportAction,
   type RunRetryActionDependencies,
+  type RunForgeCommentActionDependencies,
   type RunNoteActionDependencies,
   type RunRetestActionDependencies,
 } from './RunView';
@@ -59,6 +61,15 @@ function noteDependencies(overrides: Partial<RunNoteActionDependencies> = {}) {
   } satisfies RunNoteActionDependencies;
 }
 
+function commentDependencies(overrides: Partial<RunForgeCommentActionDependencies> = {}) {
+  return {
+    request: vi.fn().mockResolvedValue({ ok: true, commentId: 73 }),
+    success: vi.fn(),
+    error: vi.fn(),
+    ...overrides,
+  } satisfies RunForgeCommentActionDependencies;
+}
+
 describe('runRetestAction', () => {
   it('reports pending confirmation and refreshes the run thread', async () => {
     const deps = dependencies();
@@ -79,6 +90,24 @@ describe('runRetestAction', () => {
     expect(deps.error).toHaveBeenCalledWith('CI 重跑失败：403: missing GitCode token');
     expect(deps.success).not.toHaveBeenCalled();
     expect(deps.refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('runForgeCommentAction', () => {
+  it('reports a successful PR comment post', async () => {
+    const deps = commentDependencies();
+    await runForgeCommentAction('ref/1', 'Please rerun the checks.', deps);
+    expect(deps.request).toHaveBeenCalledWith('ref/1', 'Please rerun the checks.');
+    expect(deps.success).toHaveBeenCalledWith('PR 评论已发布');
+    expect(deps.error).not.toHaveBeenCalled();
+  });
+
+  it('reports and rethrows failures so the composer preserves its draft', async () => {
+    const failure = new Error('403: missing GitHub token');
+    const deps = commentDependencies({ request: vi.fn().mockRejectedValue(failure) });
+    await expect(runForgeCommentAction('ref/1', 'Keep this draft', deps)).rejects.toBe(failure);
+    expect(deps.error).toHaveBeenCalledWith('PR 评论发布失败：403: missing GitHub token');
+    expect(deps.success).not.toHaveBeenCalled();
   });
 });
 

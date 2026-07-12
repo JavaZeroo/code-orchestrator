@@ -2532,7 +2532,7 @@ describeSt('server ST: API + runner websocket', () => {
     expect(finalRows).toEqual([{ status: 'running' }]);
   });
 
-  it('posts /retest through REST with the authenticated requester token', async () => {
+  it('posts forge comments through authenticated refs with the requester token', async () => {
     await app!.close();
     app = null;
     await closeDb();
@@ -2556,6 +2556,7 @@ describeSt('server ST: API + runner websocket', () => {
     await db.insert(schema.forgeTokens).values([
       { userId: 'other-user', forge: 'gitcode', tokenEnc: encryptSecret('wrong-user-token') },
       { userId: operator!.id, forge: 'gitcode', tokenEnc: encryptSecret('requester-gitcode-token') },
+      { userId: operator!.id, forge: 'github', tokenEnc: encryptSecret('requester-github-token') },
     ]);
     await db.insert(schema.forgeRefs).values({
       id: 'gitcode-retest-ref',
@@ -2564,6 +2565,15 @@ describeSt('server ST: API + runner websocket', () => {
       repo: 'mindspore/mindformers',
       number: 8377,
       runId: 'run-retest',
+      active: 'yes',
+    });
+    await db.insert(schema.forgeRefs).values({
+      id: 'github-comment-ref',
+      forge: 'github',
+      kind: 'pr',
+      repo: 'acme/widgets',
+      number: 42,
+      runId: 'run-comment',
       active: 'yes',
     });
 
@@ -2581,5 +2591,22 @@ describeSt('server ST: API + runner websocket', () => {
     expect(url).toBe('https://api.gitcode.com/api/v5/repos/mindspore/mindformers/pulls/8377/comments');
     expect(init).toMatchObject({ method: 'POST', body: JSON.stringify({ body: '/retest' }) });
     expect((init?.headers as Record<string, string>).authorization).toBe('Bearer requester-gitcode-token');
+
+    outbound.mockClear();
+    outbound.mockResolvedValue(Response.json({ id: 902 }));
+    const comment = await app!.inject({
+      method: 'POST',
+      url: '/api/forge/refs/github-comment-ref/comments',
+      headers: { host: 'localhost:7620', cookie },
+      payload: { body: '  Please rerun the failed checks.  ' },
+    });
+
+    expect(comment.statusCode).toBe(200);
+    expect(comment.json()).toEqual({ ok: true, commentId: 902 });
+    expect(outbound).toHaveBeenCalledTimes(1);
+    const [commentUrl, commentInit] = outbound.mock.calls[0]!;
+    expect(commentUrl).toBe('https://api.github.com/repos/acme/widgets/issues/42/comments');
+    expect(commentInit).toMatchObject({ method: 'POST', body: JSON.stringify({ body: 'Please rerun the failed checks.' }) });
+    expect((commentInit?.headers as Record<string, string>).authorization).toBe('Bearer requester-github-token');
   });
 });
