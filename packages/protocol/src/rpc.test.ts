@@ -47,6 +47,21 @@ describe('runnerMethods contracts', () => {
     expect(() => runnerMethods['workspace.read'].params.parse({ root: '/work', path: '' })).toThrow();
   });
 
+  it('validates bounded workspace file writes for host and container sessions', () => {
+    const data = Buffer.from([0, 1, 255]).toString('base64');
+    expect(runnerMethods['workspace.write'].params.parse({ root: '/work', path: 'out/result.bin', data, size: 3 }))
+      .toEqual({ root: '/work', path: 'out/result.bin', data, size: 3 });
+    expect(runnerMethods['workspace.write'].params.parse({
+      root: '/workspace', path: 'x', data: '', size: 0, containerId: 'c1',
+    })).toMatchObject({ containerId: 'c1' });
+    expect(() => runnerMethods['workspace.write'].params.parse({
+      root: '/work', path: 'large.bin', data: '', size: 10 * 1024 * 1024 + 1,
+    })).toThrow();
+    expect(() => runnerMethods['workspace.write'].params.parse({
+      root: '/work', path: 'bad.bin', data: 'not base64!', size: 3,
+    })).toThrow();
+  });
+
   it('validates workspace directory listings for host and container sessions', () => {
     expect(runnerMethods['workspace.list'].params.parse({ root: '/work' })).toEqual({ root: '/work', path: '' });
     expect(runnerMethods['workspace.list'].params.parse({ root: '/workspace', path: 'out', containerId: 'c1' }))

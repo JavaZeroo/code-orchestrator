@@ -160,6 +160,21 @@ export const runnerMethods = {
       error: z.string().optional(),
     }),
   },
+  /** Write one bounded regular file beneath a session workspace. Payloads are capped at 10 MiB. */
+  'workspace.write': {
+    params: z.object({
+      root: z.string().min(1),
+      path: z.string().min(1),
+      data: z.string().max(14 * 1024 * 1024).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+      size: z.number().int().nonnegative().max(10 * 1024 * 1024),
+      containerId: z.string().min(1).optional(),
+    }),
+    result: z.object({
+      ok: z.boolean(),
+      size: z.number().int().nonnegative().optional(),
+      error: z.string().optional(),
+    }),
+  },
   /** List one directory beneath a session workspace. Responses are capped and never follow escaped symlinks. */
   'workspace.list': {
     params: z.object({

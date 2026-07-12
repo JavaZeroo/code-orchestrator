@@ -37,6 +37,16 @@ describe('createRunnerMethodHandler', () => {
     });
   });
 
+  it('dispatches workspace.write through the confined binary writer', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-write-'));
+    const bytes = Buffer.from([0, 128, 255]);
+    const result = await handler()('workspace.write', {
+      root, path: 'answer.bin', data: bytes.toString('base64'), size: bytes.length,
+    });
+    expect(result).toEqual({ ok: true, size: bytes.length });
+    await expect(import('node:fs/promises').then(({ readFile }) => readFile(join(root, 'answer.bin')))).resolves.toEqual(bytes);
+  });
+
   it('dispatches workspace.list through the confined directory reader', async () => {
     const root = await mkdtemp(join(tmpdir(), 'co-method-list-'));
     await writeFile(join(root, 'answer.txt'), 'runner bytes');

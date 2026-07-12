@@ -17,6 +17,9 @@ import {
   TranscriptExportAction,
   WorkspaceBrowserEntries,
   WorkspaceFilePreview,
+  WorkspaceUploadAction,
+  uploadSelectedWorkspaceFile,
+  WORKSPACE_UPLOAD_MAX_BYTES,
   workspaceChildPath,
   workspaceParentPath,
   downloadSessionArtifact,
@@ -175,6 +178,27 @@ describe('SessionView artifact download action', () => {
     expect(workspaceChildPath('reports', 'daily')).toBe('reports/daily');
     expect(workspaceParentPath('reports/daily')).toBe('reports');
     expect(workspaceParentPath('reports')).toBe('');
+  });
+
+  it('offers one-file upload and targets the currently open directory', async () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceUploadAction disabled={false} uploading={false} onFile={vi.fn()} />,
+    );
+    expect(markup).toContain('上传文件');
+    expect(markup).toContain('type="file"');
+    expect(markup).not.toContain('multiple');
+
+    const file = new File([new Uint8Array([0, 128, 255])], 'raw.bin');
+    const request = vi.fn().mockResolvedValue({ ok: true, path: 'reports/raw.bin', size: 3 });
+    await expect(uploadSelectedWorkspaceFile('session-1', 'reports', file, request)).resolves.toBe('reports/raw.bin');
+    expect(request).toHaveBeenCalledWith('session-1', 'reports/raw.bin', file);
+  });
+
+  it('rejects oversized files before starting an upload', async () => {
+    const file = { name: 'large.bin', size: WORKSPACE_UPLOAD_MAX_BYTES + 1 } as File;
+    const request = vi.fn();
+    await expect(uploadSelectedWorkspaceFile('session-1', '', file, request)).rejects.toThrow('上限');
+    expect(request).not.toHaveBeenCalled();
   });
 
   it('only offers inline preview for bounded, recognized text files', () => {

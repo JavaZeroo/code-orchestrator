@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Download, File, Folder, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Download, File, Folder, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Send, Square, Upload, X } from 'lucide-react';
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -158,6 +158,51 @@ export function workspaceParentPath(path: string): string {
   return path.split('/').slice(0, -1).join('/');
 }
 
+export const WORKSPACE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+export async function uploadSelectedWorkspaceFile(
+  sessionId: string,
+  directory: string,
+  file: File,
+  request = api.uploadWorkspaceFile,
+): Promise<string> {
+  if (file.size > WORKSPACE_UPLOAD_MAX_BYTES) {
+    throw new Error(`文件超过 ${WORKSPACE_UPLOAD_MAX_BYTES} 字节上限`);
+  }
+  const destination = workspaceChildPath(directory, file.name);
+  await request(sessionId, destination, file);
+  return destination;
+}
+
+export function WorkspaceUploadAction({
+  disabled,
+  uploading,
+  onFile,
+}: {
+  disabled: boolean;
+  uploading: boolean;
+  onFile: (file: File) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return <>
+    <Button type="button" variant="outline" size="sm" disabled={disabled || uploading} onClick={() => inputRef.current?.click()}>
+      <Upload size={13} /> {uploading ? '上传中…' : '上传文件'}
+    </Button>
+    <input
+      ref={inputRef}
+      type="file"
+      aria-label="选择要上传的文件"
+      className="hidden"
+      disabled={disabled || uploading}
+      onChange={(event) => {
+        const file = event.currentTarget.files?.[0];
+        event.currentTarget.value = '';
+        if (file) onFile(file);
+      }}
+    />
+  </>;
+}
+
 export function WorkspaceBrowserEntries({
   entries,
   disabled,
@@ -231,6 +276,8 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [downloading, setDownloading] = useState(false);
   const [preview, setPreview] = useState<{ path: string; text?: string; error?: string } | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [listingVersion, setListingVersion] = useState(0);
   const previewRequestRef = useRef(0);
   useEffect(() => {
     if (!open) return;
@@ -246,7 +293,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .catch((err) => { if (!cancelled) setError(String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [open, path, sessionId]);
+  }, [open, path, sessionId, listingVersion]);
   const close = (nextOpen: boolean) => {
     if (!nextOpen) {
       setPath('');
@@ -287,6 +334,14 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
         if (previewRequestRef.current === requestId) setPreviewing(false);
       });
   };
+  const uploadFile = (file: File) => {
+    if (uploading) return;
+    setUploading(true);
+    void uploadSelectedWorkspaceFile(sessionId, path, file)
+      .then(() => { toast.success('文件已上传'); setListingVersion((version) => version + 1); })
+      .catch((error) => toast.error(`上传失败：${error}`))
+      .finally(() => setUploading(false));
+  };
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent>
@@ -300,21 +355,22 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
           onDownload={() => downloadFile(preview.path, false)}
         /> : <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading} onClick={() => setPath(workspaceParentPath(path))}>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading} onClick={() => setPath(workspaceParentPath(path))}>
               <ChevronLeft size={14} />
             </Button>
             <div className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={path || '/'}>/{path}</div>
+            <WorkspaceUploadAction disabled={loading || downloading} uploading={uploading} onFile={uploadFile} />
           </div>
           {loading ? <div className="py-8 text-center text-sm text-dim">加载中…</div>
             : error ? <div className="py-8 text-center text-sm text-danger">目录加载失败：{error}</div>
             : <WorkspaceBrowserEntries
                 entries={entries}
-                disabled={downloading}
+                disabled={downloading || uploading}
                 onDirectory={(name) => setPath(workspaceChildPath(path, name))}
                 onFile={selectFile}
               />}
           {truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
-          <div className="text-xs text-faint">支持的 UTF-8 文本文件可在线预览；其他文件将直接下载。单个文件上限 10 MiB。</div>
+          <div className="text-xs text-faint">可上传一个文件到当前目录；支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
         </div>}
       </DialogContent>
     </Dialog>
