@@ -6,6 +6,14 @@
 import * as z from 'zod';
 import { sessionAgentSchema } from './session';
 
+export const RUN_NOTE_MAX_LENGTH = 20_000;
+export const runNoteMarkdownSchema = z.string().trim().min(1).max(RUN_NOTE_MAX_LENGTH);
+export const runNotePayloadSchema = z.object({
+  markdown: runNoteMarkdownSchema,
+  author: z.string().trim().min(1),
+}).strict();
+export type RunNotePayload = z.infer<typeof runNotePayloadSchema>;
+
 const nodeBase = z.object({
   id: z.string().min(1),
   title: z.string().optional(),

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { ForgeRefRow } from './api';
-import { ForgeCard, isForgeRetestEligible, RunHistoryAction } from './RunTimeline';
+import { ForgeCard, isForgeRetestEligible, RunHistoryAction, RunNoteCard, RunNoteComposer } from './RunTimeline';
 
 const gitcodePr: ForgeRefRow = {
   id: 'ref/1',
@@ -53,5 +53,44 @@ describe('RunHistoryAction', () => {
     expect(loading).toContain('disabled=""');
     expect(loading).toContain('加载中…');
     expect(exhausted).toBe('');
+  });
+});
+
+describe('workflow run notes', () => {
+  it('renders the persisted author and Markdown as a distinct timeline card', () => {
+    const markup = renderToStaticMarkup(
+      <RunNoteCard note={{ markdown: '**Hold** deployment until approval.', author: 'operator@example.com' }} />,
+    );
+
+    expect(markup).toContain('运行备注');
+    expect(markup).toContain('operator@example.com');
+    expect(markup).toContain('<strong>Hold</strong> deployment until approval.');
+  });
+
+  it('offers an independent note composer and disables it only while saving', () => {
+    const ready = renderToStaticMarkup(
+      <RunNoteComposer
+        value="## Release decision"
+        saving={false}
+        onChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+    const saving = renderToStaticMarkup(
+      <RunNoteComposer
+        value="## Release decision"
+        saving
+        onChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    expect(ready).toContain('aria-label="运行备注"');
+    expect(ready).toContain('Markdown');
+    expect(ready).toContain('不会发送给 Agent');
+    expect(ready).toContain('添加备注');
+    expect(ready).not.toContain('disabled=""');
+    expect(saving).toContain('disabled=""');
+    expect(saving).toContain('保存中…');
   });
 });

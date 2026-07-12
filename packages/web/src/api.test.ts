@@ -144,6 +144,23 @@ describe('api client', () => {
     });
   });
 
+  it('appends Markdown notes to an encoded workflow run resource', async () => {
+    const note = {
+      seq: 42,
+      type: 'run.note',
+      runId: 'run/1',
+      payload: { markdown: '**Hold** deployment.', author: 'operator@example.com' },
+    };
+    const fetch = mockFetch(Response.json({ note }, { status: 201 }));
+
+    await expect(api.addRunNote('run/1', '**Hold** deployment.')).resolves.toEqual({ note });
+    expect(fetch).toHaveBeenCalledWith('/api/runs/run%2F1/notes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ markdown: '**Hold** deployment.' }),
+    });
+  });
+
   it('lists archived sessions separately and posts archive state changes', async () => {
     const archivedAt = '2026-07-11T04:00:00.000Z';
     const fetch = vi

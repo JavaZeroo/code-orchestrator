@@ -180,6 +180,14 @@ describe('workflow run transcript collection', () => {
 describe('workflow run transcript Markdown', () => {
   it('formats run metadata, node outcomes, messages, tool activity, approvals, and forge references', () => {
     const events: EventRow[] = [
+      {
+        seq: 12,
+        type: 'run.note',
+        payload: {
+          markdown: '**Hold** deployment until the change window opens.',
+          author: 'operator@example.com',
+        },
+      },
       { seq: 11, type: 'run.finished', payload: { status: 'done' } },
       { seq: 10, type: 'run.node.state', payload: { nodeId: 'approve', status: 'done' } },
       {
@@ -256,6 +264,9 @@ describe('workflow run transcript Markdown', () => {
     expect(markdown).toContain('**Decided by:** ` operator@example.com `');
     expect(markdown).toContain('### Node · Build production · Forge reference registered');
     expect(markdown).toContain('### Run · Run finished');
+    expect(markdown).toContain('### Run · Operator note');
+    expect(markdown).toContain('**Author:** ` operator@example.com `');
+    expect(markdown).toContain('**Hold** deployment until the change window opens.');
 
     expect(markdown.indexOf('Deploy the release.')).toBeLessThan(markdown.indexOf('I will validate the release.'));
     expect(markdown.indexOf('I will validate the release.')).toBeLessThan(markdown.indexOf('Tool call · Bash'));
@@ -263,6 +274,7 @@ describe('workflow run transcript Markdown', () => {
     expect(markdown.indexOf('Tool result · Bash')).toBeLessThan(markdown.indexOf('Approval requested'));
     expect(markdown.indexOf('Approval requested')).toBeLessThan(markdown.indexOf('Approval outcome'));
     expect(markdown.indexOf('Approval outcome')).toBeLessThan(markdown.indexOf('Forge reference registered'));
+    expect(markdown.indexOf('Run finished')).toBeLessThan(markdown.indexOf('Operator note'));
   });
 
   it('builds a bounded filename without path separators or reserved characters', () => {

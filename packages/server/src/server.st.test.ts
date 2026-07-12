@@ -6,6 +6,7 @@ import { createApp } from './app';
 import { closeDb, getDb, schema } from './db/index';
 import { and, eq } from 'drizzle-orm';
 import { resumeActiveRuns, scheduleTick, serializeRunProgression } from './engine/engine';
+import { bus } from './events';
 import { encryptSecret } from './services/crypto';
 import { markTaskDone, reconcileQueueOnce, type QueuedTask } from './services/taskQueue';
 import { getForge } from './forge/registry';
@@ -100,6 +101,8 @@ class FakeRunner {
 interface ClientEvent {
   type: string;
   sessionId?: string;
+  runId?: string;
+  seq?: number;
   payload: unknown;
 }
 
@@ -109,6 +112,26 @@ async function connectClientEvents(baseUrl: string, sessionId: string): Promise<
     ws.once('open', resolve);
     ws.once('error', reject);
   });
+  return ws;
+}
+
+async function connectRunEvents(baseUrl: string, runId: string, cookie?: string): Promise<WebSocket> {
+  const ws = new WebSocket(`${baseUrl.replace(/^http/, 'ws')}/ws/client?runId=${encodeURIComponent(runId)}`, {
+    headers: cookie ? { cookie } : undefined,
+  });
+  await new Promise<void>((resolve, reject) => {
+    ws.once('open', resolve);
+    ws.once('error', reject);
+  });
+  const ready = waitForClientEvent(ws, (event) => event.type === 'st.client.ready');
+  const emitReady = () => bus.emit('event', { type: 'st.client.ready', runId, payload: {} });
+  const timer = setInterval(emitReady, 10);
+  emitReady();
+  try {
+    await ready;
+  } finally {
+    clearInterval(timer);
+  }
   return ws;
 }
 
@@ -920,6 +943,148 @@ describeSt('server ST: API + runner websocket', () => {
 
     const [unchanged] = await getDb().select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
     expect(unchanged?.title).toBe('Production rollout');
+  });
+
+  it('persists operator notes from REST to the live and reloaded run thread without runner dispatch', async () => {
+    await app!.close();
+    app = null;
+    await closeDb();
+    await startApp(true);
+
+    const email = 'run-note-operator@example.com';
+    const signUp = await app!.inject({
+      method: 'POST',
+      url: '/api/auth/sign-up/email',
+      headers: { host: 'localhost:7620', origin: 'http://localhost:7620' },
+      payload: { name: 'Run Note Operator', email, password: 'system-test-password' },
+    });
+    expect(signUp.statusCode).toBe(200);
+    const cookie = signUp.cookies.map(({ name, value }) => `${name}=${value}`).join('; ');
+    expect(cookie).not.toBe('');
+
+    const runner = await FakeRunner.connect(baseUrl);
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: {
+        id: 'm-run-note',
+        name: 'Run Note Runner',
+        labels: ['dev'],
+        resources: [],
+        runnerVersion: 'st',
+        startedAt: Date.now(),
+      },
+    });
+
+    const db = getDb();
+    const defId = 'workflow-run-note-def';
+    const runId = 'workflow-run-note-st';
+    const sessionId = 'workflow-run-note-session';
+    const graph = {
+      name: 'Run note pipeline',
+      nodes: [{ id: 'implement', type: 'agent', prompt: 'Ship the release' }],
+      edges: [],
+    };
+    await db.insert(schema.workflowDefs).values({ id: defId, name: graph.name, graph });
+    await db.insert(schema.workflowRuns).values({ id: runId, defId, status: 'running' });
+    await db.insert(schema.sessions).values({
+      id: sessionId,
+      machineId: 'm-run-note',
+      agent: 'claude',
+      cwd: '/tmp/run-note-work',
+      state: 'thinking',
+      runId,
+      nodeId: 'implement',
+    });
+    await db.insert(schema.nodeStates).values({
+      runId,
+      nodeId: 'implement',
+      status: 'running',
+      sessionId,
+    });
+
+    const client = await connectRunEvents(baseUrl, runId, cookie);
+    const markdown = '**Hold** deployment until the change window opens.';
+    try {
+      const liveNote = waitForClientEvent(client, (event) => event.type === 'run.note');
+      const runnerCallsBeforeNote = runner.calls.length;
+      const created = await app!.inject({
+        method: 'POST',
+        url: `/api/runs/${runId}/notes`,
+        headers: { host: 'localhost:7620', cookie },
+        payload: { markdown: `  ${markdown}  ` },
+      });
+
+      expect(created.statusCode).toBe(201);
+      expect(created.json()).toMatchObject({
+        note: {
+          seq: expect.any(Number),
+          type: 'run.note',
+          runId,
+          payload: { markdown, author: email },
+        },
+      });
+      await expect(liveNote).resolves.toMatchObject({
+        type: 'run.note',
+        runId,
+        payload: { markdown, author: email },
+      });
+      expect(runner.calls).toHaveLength(runnerCallsBeforeNote);
+
+      const blank = await app!.inject({
+        method: 'POST',
+        url: `/api/runs/${runId}/notes`,
+        headers: { host: 'localhost:7620', cookie },
+        payload: { markdown: ' \n\t ' },
+      });
+      expect(blank.statusCode).toBe(400);
+      const missing = await app!.inject({
+        method: 'POST',
+        url: '/api/runs/missing-run/notes',
+        headers: { host: 'localhost:7620', cookie },
+        payload: { markdown: 'Must not be persisted.' },
+      });
+      expect(missing.statusCode).toBe(404);
+
+      const persisted = await db
+        .select()
+        .from(schema.events)
+        .where(and(eq(schema.events.runId, runId), eq(schema.events.type, 'run.note')));
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0]).toMatchObject({
+        runId,
+        sessionId: null,
+        type: 'run.note',
+        payload: { markdown, author: email },
+      });
+
+      const thread = await app!.inject({
+        method: 'GET',
+        url: `/api/runs/${runId}/thread`,
+        headers: { host: 'localhost:7620', cookie },
+      });
+      expect(thread.statusCode).toBe(200);
+      expect(thread.json()).toMatchObject({
+        events: [expect.objectContaining({ type: 'run.note', runId, payload: { markdown, author: email } })],
+      });
+    } finally {
+      await closeWebSocket(client);
+      await runner.close();
+    }
+
+    await app!.close();
+    app = null;
+    await closeDb();
+    await startApp(true);
+
+    const reloadedThread = await app!.inject({
+      method: 'GET',
+      url: `/api/runs/${runId}/thread`,
+      headers: { host: 'localhost:7620', cookie },
+    });
+    expect(reloadedThread.statusCode).toBe(200);
+    expect(reloadedThread.json()).toMatchObject({
+      events: [expect.objectContaining({ type: 'run.note', runId, payload: { markdown, author: email } })],
+    });
   });
 
   it('archives and restores a terminal workflow run without changing linked history', async () => {
