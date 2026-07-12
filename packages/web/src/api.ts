@@ -1,10 +1,17 @@
-import type { ApprovalRequest, SessionAgent, SessionEnvelope, SessionState, WorkflowDef } from '@co/protocol';
+import type { ApprovalRequest, RunNotePayload, SessionAgent, SessionEnvelope, SessionState, WorkflowDef } from '@co/protocol';
 
 export interface EventRow {
   seq: number;
   type: string;
   sessionId?: string | null;
+  runId?: string | null;
   payload: unknown;
+}
+
+export interface RunNoteEventRow extends EventRow {
+  type: 'run.note';
+  runId: string;
+  payload: RunNotePayload;
 }
 
 export interface SessionEventPage {
@@ -95,7 +102,7 @@ export interface ComponentSourceRow {
   createdAt: string;
 }
 
-export type { ApprovalRequest, SessionEnvelope, SessionState, WorkflowDef };
+export type { ApprovalRequest, RunNotePayload, SessionEnvelope, SessionState, WorkflowDef };
 export type { SessionAgent };
 
 export interface WorkflowDefRow {
@@ -347,6 +354,9 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title }),
     }).then((r) => j<{ ok: true; run: Pick<RunRow, 'id' | 'title'> }>(r)),
+  addRunNote: (runId: string, markdown: string) =>
+    post(`/api/runs/${encodeURIComponent(runId)}/notes`, { markdown })
+      .then((r) => j<{ note: RunNoteEventRow }>(r)),
   cancelRun: (runId: string) => post(`/api/runs/${runId}/cancel`, {}).then((r) => j<{ ok: boolean }>(r)),
   pauseRun: (runId: string) => post(`/api/runs/${runId}/pause`, {}).then((r) => j<RunProgressionResult>(r)),
   resumeRun: (runId: string) => post(`/api/runs/${runId}/resume`, {}).then((r) => j<RunProgressionResult>(r)),

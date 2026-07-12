@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { createId } from '@paralleldrive/cuid2';
 import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from 'drizzle-orm';
 import * as z from 'zod';
-import { workflowDefSchema } from '@co/protocol';
+import { runNoteMarkdownSchema, workflowDefSchema } from '@co/protocol';
 import { getDb, schema } from '../db/index';
 import { publish } from '../events';
 import { callRunner } from '../ws/runnerHub';
@@ -10,6 +10,7 @@ import { EngineError, startRun } from '../engine/engine';
 import { archiveWorkflowRun, restoreWorkflowRun, WorkflowRunArchiveError } from '../services/workflowRunArchive';
 import { pauseWorkflowRun, resumeWorkflowRun, WorkflowRunProgressionError } from '../services/workflowRunProgression';
 import { retryWorkflowRun, WorkflowRunRetryError } from '../services/workflowRunRetry';
+import { appendWorkflowRunNote, WorkflowRunNoteError } from '../services/workflowRunNote';
 import { reviseWorkflowDefinition, WorkflowRevisionError } from '../services/workflowRevision';
 
 const createBodySchema = z.object({
@@ -30,6 +31,10 @@ const patchDefSchema = z.object({
 
 const patchRunSchema = z.object({
   title: z.string().trim().min(1).max(120),
+}).strict();
+
+const createRunNoteSchema = z.object({
+  markdown: runNoteMarkdownSchema,
 }).strict();
 
 const reviseBodySchema = z.object({
@@ -145,6 +150,24 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       return { error: 'run not found' };
     }
     return { ok: true, run };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/runs/:id/notes', async (req, reply) => {
+    const body = createRunNoteSchema.parse(req.body);
+    try {
+      const note = await appendWorkflowRunNote(req.params.id, {
+        markdown: body.markdown,
+        author: req.user?.email ?? 'ui',
+      });
+      void reply.code(201);
+      return { note };
+    } catch (err) {
+      if (err instanceof WorkflowRunNoteError) {
+        void reply.code(err.statusCode);
+        return { error: err.message };
+      }
+      throw err;
+    }
   });
 
   app.post<{ Params: { id: string } }>('/api/runs/:id/retry', async (req, reply) => {

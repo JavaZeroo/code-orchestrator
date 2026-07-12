@@ -5,6 +5,7 @@ import {
   isRunRetryEligible,
   runArchiveMode,
   runProgressionMode,
+  runNoteAction,
   RunArchiveAction,
   RunProgressionAction,
   runRetryAction,
@@ -13,6 +14,7 @@ import {
   RunTitleEditor,
   RunTranscriptExportAction,
   type RunRetryActionDependencies,
+  type RunNoteActionDependencies,
   type RunRetestActionDependencies,
 } from './RunView';
 import { RUN_TITLE_MAX_LENGTH } from './lib/runTitle';
@@ -41,6 +43,22 @@ function retryDependencies(overrides: Partial<RunRetryActionDependencies> = {}) 
   } satisfies RunRetryActionDependencies;
 }
 
+function noteDependencies(overrides: Partial<RunNoteActionDependencies> = {}) {
+  return {
+    request: vi.fn().mockResolvedValue({
+      note: {
+        seq: 17,
+        type: 'run.note',
+        runId: 'run-1',
+        payload: { markdown: '**Hold** deployment.', author: 'operator@example.com' },
+      },
+    }),
+    success: vi.fn(),
+    error: vi.fn(),
+    ...overrides,
+  } satisfies RunNoteActionDependencies;
+}
+
 describe('runRetestAction', () => {
   it('reports pending confirmation and refreshes the run thread', async () => {
     const deps = dependencies();
@@ -61,6 +79,28 @@ describe('runRetestAction', () => {
     expect(deps.error).toHaveBeenCalledWith('CI 重跑失败：403: missing GitCode token');
     expect(deps.success).not.toHaveBeenCalled();
     expect(deps.refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe('runNoteAction', () => {
+  it('appends Markdown without sending it to an agent session', async () => {
+    const deps = noteDependencies();
+
+    const note = await runNoteAction('run-1', '**Hold** deployment.', deps);
+
+    expect(deps.request).toHaveBeenCalledWith('run-1', '**Hold** deployment.');
+    expect(note.payload).toEqual({ markdown: '**Hold** deployment.', author: 'operator@example.com' });
+    expect(deps.success).toHaveBeenCalledWith('运行备注已添加');
+    expect(deps.error).not.toHaveBeenCalled();
+  });
+
+  it('reports a rejected note and preserves the failure for the composer', async () => {
+    const failure = new Error('404: run not found');
+    const deps = noteDependencies({ request: vi.fn().mockRejectedValue(failure) });
+
+    await expect(runNoteAction('missing', 'Do not save', deps)).rejects.toBe(failure);
+    expect(deps.error).toHaveBeenCalledWith('添加运行备注失败：404: run not found');
+    expect(deps.success).not.toHaveBeenCalled();
   });
 });
 

@@ -541,6 +541,14 @@ function appendRunTimelineEvent(
   const details: string[] = [];
 
   switch (event.type) {
+    case 'run.note': {
+      const details: string[] = [];
+      if (typeof payload.author === 'string') details.push(`- **Author:** ${inlineCode(payload.author)}`);
+      if (typeof payload.markdown === 'string') details.push('', '**Note**', '', payload.markdown);
+      else details.push('', '**Payload**', '', jsonBlock(event.payload));
+      pushEventSection(lines, event, 'Operator note', undefined, details, scope);
+      return;
+    }
     case 'run.started':
       label = 'Run started';
       break;

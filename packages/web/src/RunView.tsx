@@ -1,7 +1,7 @@
 import { Archive, ArchiveRestore, ArrowLeft, Check, Download, ExternalLink, Pause, Pencil, Play, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, type ApprovalRow, type ForgeRefRow, type NodeStateRow, type RunRetryResult, type RunRow, type WorkflowDefRow } from './api';
+import { api, type ApprovalRow, type ForgeRefRow, type NodeStateRow, type RunNoteEventRow, type RunRetryResult, type RunRow, type WorkflowDefRow } from './api';
 import { FlowGraph } from './FlowGraph';
 import { RunTimeline } from './RunTimeline';
 import { Markdown } from './components/Markdown';
@@ -111,6 +111,28 @@ export async function runRetestAction(refId: string, deps: RunRetestActionDepend
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     deps.error(`CI 重跑失败：${detail}`);
+    throw err;
+  }
+}
+
+export interface RunNoteActionDependencies {
+  request(runId: string, markdown: string): Promise<{ note: RunNoteEventRow }>;
+  success(message: string): void;
+  error(message: string): void;
+}
+
+export async function runNoteAction(
+  runId: string,
+  markdown: string,
+  deps: RunNoteActionDependencies,
+): Promise<RunNoteEventRow> {
+  try {
+    const { note } = await deps.request(runId, markdown);
+    deps.success('运行备注已添加');
+    return note;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    deps.error(`添加运行备注失败：${detail}`);
     throw err;
   }
 }
@@ -236,6 +258,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
   const [editingTitle, setEditingTitle] = useState(false);
   const [savingTitle, setSavingTitle] = useState(false);
   const [exportingTranscript, setExportingTranscript] = useState(false);
+  const [addingNote, setAddingNote] = useState(false);
 
   // ---- 共享数据（graph 模式用）----
   const [run, setRun] = useState<RunRow | null>(null);
@@ -368,6 +391,19 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
     if (!sid) return;
     api.send(sid, text).catch((e) => toast.error(`发送失败：${e}`));
   }, [activeSessionId]);
+
+  const handleAddNote = useCallback(async (markdown: string) => {
+    setAddingNote(true);
+    try {
+      await runNoteAction(runId, markdown, {
+        request: api.addRunNote,
+        success: toast.success,
+        error: toast.error,
+      });
+    } finally {
+      setAddingNote(false);
+    }
+  }, [runId]);
 
   const handleRetest = useCallback((refId: string) => runRetestAction(refId, {
     request: api.retestForgeRef,
@@ -532,6 +568,8 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
           forgeRefs={threadForgeRefs}
           activeSessionId={activeSessionId}
           onSend={handleSend}
+          onAddNote={handleAddNote}
+          addingNote={addingNote}
           onDecide={handleDecide}
           onRetest={handleRetest}
           hasEarlier={threadHasEarlier}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { workflowDefSchema } from './workflow';
+import { runNoteMarkdownSchema, runNotePayloadSchema, workflowDefSchema } from './workflow';
 
 const base = {
   name: 't',
@@ -36,5 +36,16 @@ describe('workflowDefSchema', () => {
       edges: [['impl', 'rev']],
     });
     expect(r.success).toBe(true);
+  });
+});
+
+describe('run note schema', () => {
+  it('normalizes Markdown notes and rejects blank content', () => {
+    expect(runNoteMarkdownSchema.parse('  **Hold** until approval.  ')).toBe('**Hold** until approval.');
+    expect(runNoteMarkdownSchema.safeParse(' \n\t ').success).toBe(false);
+    expect(runNotePayloadSchema.parse({
+      markdown: 'Deployment approved.',
+      author: 'operator@example.com',
+    })).toEqual({ markdown: 'Deployment approved.', author: 'operator@example.com' });
   });
 });

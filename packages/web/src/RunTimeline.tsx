@@ -1,7 +1,8 @@
-import { ArrowDown, ArrowUp, ChevronRight, ExternalLink, GitBranch, RefreshCw, Send, Wrench } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronRight, ExternalLink, GitBranch, NotebookPen, RefreshCw, Send, Wrench } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import type { ApprovalRequest, EventRow, ForgeRefRow, NodeStateRow, RunRow, SessionEnvelope, WorkflowDefRow, WorkflowDef } from './api';
+import { RUN_NOTE_MAX_LENGTH } from '@co/protocol';
+import type { ApprovalRequest, EventRow, ForgeRefRow, NodeStateRow, RunNotePayload, RunRow, SessionEnvelope, WorkflowDefRow, WorkflowDef } from './api';
 import { api } from './api';
 import { foldSessionEvents, type ApprovalItem } from './Timeline';
 import { Markdown } from './components/Markdown';
@@ -262,6 +263,64 @@ export function RunHistoryAction({
   );
 }
 
+export function RunNoteCard({ note }: { note: RunNotePayload }) {
+  return (
+    <article className="self-stretch rounded-lg border border-human/35 bg-human/5 px-3 py-2.5">
+      <div className="mb-1.5 flex items-center gap-2">
+        <NotebookPen size={13} className="shrink-0 text-human" />
+        <span className="text-xs font-medium text-human">运行备注</span>
+        <span className="text-xs text-dim">{note.author}</span>
+      </div>
+      <div className="text-sm text-ink-2">
+        <Markdown text={note.markdown} />
+      </div>
+    </article>
+  );
+}
+
+export function RunNoteComposer({
+  value,
+  saving,
+  onChange,
+  onSubmit,
+}: {
+  value: string;
+  saving: boolean;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  const empty = value.trim().length === 0;
+  return (
+    <div className="flex gap-2">
+      <Textarea
+        aria-label="运行备注"
+        value={value}
+        rows={2}
+        maxLength={RUN_NOTE_MAX_LENGTH}
+        placeholder="添加 Markdown 运行备注（不会发送给 Agent）"
+        disabled={saving}
+        className="resize-none"
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !empty && !saving) {
+            event.preventDefault();
+            onSubmit();
+          }
+        }}
+      />
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-auto shrink-0"
+        disabled={saving || empty}
+        onClick={onSubmit}
+      >
+        <NotebookPen size={13} /> {saving ? '保存中…' : '添加备注'}
+      </Button>
+    </div>
+  );
+}
+
 // ---- 主组件 ----
 
 interface RunTimelineProps {
@@ -273,6 +332,8 @@ interface RunTimelineProps {
   /** 当前活跃节点会话 id（用于插话），null 表示无活跃节点 */
   activeSessionId: string | null;
   onSend: (text: string) => void;
+  onAddNote: (markdown: string) => Promise<void>;
+  addingNote: boolean;
   onDecide: (id: string, b: 'allow' | 'deny') => void;
   onRetest: (refId: string) => Promise<void>;
   hasEarlier: boolean;
@@ -294,6 +355,8 @@ export function RunTimeline({
   forgeRefs,
   activeSessionId,
   onSend,
+  onAddNote,
+  addingNote,
   onDecide,
   onRetest,
   hasEarlier,
@@ -302,6 +365,7 @@ export function RunTimeline({
   onOpenSession,
 }: RunTimelineProps) {
   const [text, setText] = useState('');
+  const [noteText, setNoteText] = useState('');
   const [expandedSegments, setExpandedSegments] = useState<Set<string>>(new Set());
   const [retestProgress, setRetestProgress] = useState<Record<string, RetestProgress>>({});
   const retestLocks = useRef(new Set<string>());
@@ -477,7 +541,16 @@ export function RunTimeline({
       } else {
         flushSegment();
 
-        if (row.type === 'run.node.state') {
+        if (row.type === 'run.note') {
+          const note = row.payload as Partial<RunNotePayload>;
+          if (typeof note.markdown === 'string' && typeof note.author === 'string') {
+            out.push({
+              key: `note-${row.seq}`,
+              seq: row.seq,
+              el: <RunNoteCard note={{ markdown: note.markdown, author: note.author }} />,
+            });
+          }
+        } else if (row.type === 'run.node.state') {
           const p = row.payload as { nodeId: string; status: string };
           const nd = nodeDefById.get(p.nodeId);
           const ns = nodes.find((n) => n.nodeId === p.nodeId);
@@ -647,6 +720,14 @@ export function RunTimeline({
     onSend(t);
   };
 
+  const doAddNote = () => {
+    const markdown = noteText.trim();
+    if (!markdown || addingNote) return;
+    void onAddNote(markdown)
+      .then(() => setNoteText(''))
+      .catch(() => {});
+  };
+
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* 时间线区域 */}
@@ -670,25 +751,34 @@ export function RunTimeline({
         )}
       </div>
 
-      {/* 底部插话 */}
-      <footer className="flex gap-2 border-t border-line bg-bg-2/40 px-4 py-3 backdrop-blur-sm">
-        <Textarea
-          value={text}
-          rows={2}
-          placeholder={composerPlaceholder}
-          disabled={composerDisabled}
-          className="resize-none"
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              doSend();
-            }
-          }}
+      {/* 底部备注与插话 */}
+      <footer className="flex flex-col gap-2 border-t border-line bg-bg-2/40 px-4 py-3 backdrop-blur-sm">
+        <RunNoteComposer
+          value={noteText}
+          saving={addingNote}
+          onChange={setNoteText}
+          onSubmit={doAddNote}
         />
-        <Button variant="default" size="icon" className="h-auto w-11 shrink-0" disabled={composerDisabled || !text.trim()} onClick={doSend}>
-          <Send size={15} />
-        </Button>
+        <div className="flex gap-2">
+          <Textarea
+            aria-label="发送给 Agent"
+            value={text}
+            rows={2}
+            placeholder={composerPlaceholder}
+            disabled={composerDisabled}
+            className="resize-none"
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                doSend();
+              }
+            }}
+          />
+          <Button variant="default" size="icon" className="h-auto w-11 shrink-0" disabled={composerDisabled || !text.trim()} onClick={doSend}>
+            <Send size={15} />
+          </Button>
+        </div>
       </footer>
     </div>
   );
