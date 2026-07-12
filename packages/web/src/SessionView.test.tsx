@@ -23,6 +23,7 @@ import {
   workspaceChildPath,
   workspaceParentPath,
   downloadSessionArtifact,
+  deleteConfirmedWorkspaceFile,
 } from './SessionView';
 
 const session: SessionRow = {
@@ -169,6 +170,7 @@ describe('SessionView artifact download action', () => {
         disabled={false}
         onDirectory={vi.fn()}
         onFile={vi.fn()}
+        onDelete={vi.fn()}
       />,
     );
     expect(markup).toContain('reports');
@@ -178,6 +180,17 @@ describe('SessionView artifact download action', () => {
     expect(workspaceChildPath('reports', 'daily')).toBe('reports/daily');
     expect(workspaceParentPath('reports/daily')).toBe('reports');
     expect(workspaceParentPath('reports')).toBe('');
+    expect(markup).toContain('删除 result.bin');
+    expect(markup).not.toContain('删除 reports');
+  });
+
+  it('deletes only after confirmation and reports whether deletion occurred', async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true, path: 'reports/old.bin' });
+    await expect(deleteConfirmedWorkspaceFile('session-1', 'reports/old.bin', request, () => false)).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
+
+    await expect(deleteConfirmedWorkspaceFile('session-1', 'reports/old.bin', request, () => true)).resolves.toBe(true);
+    expect(request).toHaveBeenCalledWith('session-1', 'reports/old.bin');
   });
 
   it('offers one-file upload and targets the currently open directory', async () => {

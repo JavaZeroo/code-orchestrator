@@ -62,6 +62,16 @@ describe('runnerMethods contracts', () => {
     })).toThrow();
   });
 
+  it('validates workspace file deletion for host and container sessions', () => {
+    expect(runnerMethods['workspace.delete'].params.parse({ root: '/work', path: 'out/result.bin' }))
+      .toEqual({ root: '/work', path: 'out/result.bin' });
+    expect(runnerMethods['workspace.delete'].params.parse({ root: '/workspace', path: 'x', containerId: 'c1' }))
+      .toEqual({ root: '/workspace', path: 'x', containerId: 'c1' });
+    expect(() => runnerMethods['workspace.delete'].params.parse({ root: '/work', path: '' })).toThrow();
+    expect(runnerMethods['workspace.delete'].result.parse({ ok: false, error: 'not a regular file' }))
+      .toEqual({ ok: false, error: 'not a regular file' });
+  });
+
   it('validates workspace directory listings for host and container sessions', () => {
     expect(runnerMethods['workspace.list'].params.parse({ root: '/work' })).toEqual({ root: '/work', path: '' });
     expect(runnerMethods['workspace.list'].params.parse({ root: '/workspace', path: 'out', containerId: 'c1' }))

@@ -110,6 +110,16 @@ describe('api client', () => {
     });
   });
 
+  it('deletes an encoded workspace file path', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, path: 'reports/old result.bin' }));
+    await expect(api.deleteWorkspaceFile('session/one', 'reports/old result.bin')).resolves.toEqual({
+      ok: true, path: 'reports/old result.bin',
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files?path=reports%2Fold%20result.bin', {
+      method: 'DELETE',
+    });
+  });
+
   it('posts JSON bodies for session spawn', async () => {
     const fetch = mockFetch(Response.json({ sessionId: 's1' }));
 

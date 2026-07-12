@@ -518,6 +518,10 @@ export const api = {
       headers: { 'content-type': 'application/octet-stream' },
       body: file,
     }).then((r) => j<{ ok: true; path: string; size: number }>(r)),
+  deleteWorkspaceFile: (sessionId: string, path: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`, {
+      method: 'DELETE',
+    }).then((r) => j<{ ok: true; path: string }>(r)),
   decide: (approvalId: string, behavior: 'allow' | 'deny', message?: string) =>
     post(`/api/approvals/${approvalId}/decide`, {
       decision: behavior === 'allow' ? { behavior } : { behavior, message },
