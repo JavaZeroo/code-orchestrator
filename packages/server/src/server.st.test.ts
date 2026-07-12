@@ -2618,6 +2618,7 @@ describeSt('server ST: API + runner websocket', () => {
     let uploaded: Buffer | undefined;
     let deletedPath: string | undefined;
     let createdDirectory: string | undefined;
+    let renamedEntry: { path: string; newName: string } | undefined;
     const runner = await FakeRunner.connect(baseUrl, {
       'workspace.list': (params) => {
         expect(params).toEqual({ root: '/tmp/artifact-work', path: '', containerId: 'artifact-container' });
@@ -2652,6 +2653,13 @@ describeSt('server ST: API + runner websocket', () => {
         });
         createdDirectory = (params as { path: string }).path;
         return { ok: true };
+      },
+      'workspace.rename': (params) => {
+        expect(params).toEqual({
+          root: '/tmp/artifact-work', path: 'out/draft', newName: 'final', containerId: 'artifact-container',
+        });
+        renamedEntry = params as { path: string; newName: string };
+        return { ok: true, path: 'out/final' };
       },
     });
     runners.push(runner);
@@ -2690,6 +2698,13 @@ describeSt('server ST: API + runner websocket', () => {
       headers: { host: 'localhost:7620' },
     });
     expect(unauthorizedMkdir.statusCode).toBe(401);
+    const unauthorizedRename = await app!.inject({
+      method: 'PATCH',
+      url: '/api/sessions/session-artifact-st/files?path=out%2Fdraft',
+      headers: { host: 'localhost:7620', 'content-type': 'application/json' },
+      payload: { name: 'final' },
+    });
+    expect(unauthorizedRename.statusCode).toBe(401);
     const listing = await app!.inject({
       method: 'GET',
       url: '/api/sessions/session-artifact-st/files/list?path=',
@@ -2734,11 +2749,23 @@ describeSt('server ST: API + runner websocket', () => {
     expect(creation.statusCode).toBe(201);
     expect(creation.json()).toEqual({ ok: true, path: 'out/new-folder' });
     expect(createdDirectory).toBe('out/new-folder');
+    const rename = await app!.inject({
+      method: 'PATCH',
+      url: '/api/sessions/session-artifact-st/files?path=out%2Fdraft',
+      headers: { host: 'localhost:7620', cookie, 'content-type': 'application/json' },
+      payload: { name: 'final' },
+    });
+    expect(rename.statusCode).toBe(200);
+    expect(rename.json()).toEqual({ ok: true, path: 'out/final' });
+    expect(renamedEntry).toEqual({
+      root: '/tmp/artifact-work', path: 'out/draft', newName: 'final', containerId: 'artifact-container',
+    });
     expect(runner.calls.some((call) => call.method === 'workspace.list')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.read')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.write')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.delete')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.mkdir')).toBe(true);
+    expect(runner.calls.some((call) => call.method === 'workspace.rename')).toBe(true);
   });
 
   it('posts forge comments through authenticated refs with the requester token', async () => {

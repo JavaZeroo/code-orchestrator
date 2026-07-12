@@ -526,6 +526,12 @@ export const api = {
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/directories?path=${encodeURIComponent(path)}`, {
       method: 'POST',
     }).then((r) => j<{ ok: true; path: string }>(r)),
+  renameWorkspaceEntry: (sessionId: string, path: string, name: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }).then((r) => j<{ ok: true; path: string }>(r)),
   decide: (approvalId: string, behavior: 'allow' | 'deny', message?: string) =>
     post(`/api/approvals/${approvalId}/decide`, {
       decision: behavior === 'allow' ? { behavior } : { behavior, message },
