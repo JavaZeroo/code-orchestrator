@@ -2599,7 +2599,7 @@ describeSt('server ST: API + runner websocket', () => {
     expect(finalRows).toEqual([{ status: 'running' }]);
   });
 
-  it('authorizes workspace artifact downloads and preserves binary bytes across runner RPC', async () => {
+  it('authorizes workspace file operations and forwards container-aware runner RPC', async () => {
     await app!.close();
     app = null;
     await closeDb();
@@ -2616,6 +2616,7 @@ describeSt('server ST: API + runner websocket', () => {
     const bytes = Buffer.from([0, 17, 128, 255, 10]);
     const uploadedBytes = Buffer.from([255, 0, 128, 13, 10]);
     let uploaded: Buffer | undefined;
+    let deletedPath: string | undefined;
     const runner = await FakeRunner.connect(baseUrl, {
       'workspace.list': (params) => {
         expect(params).toEqual({ root: '/tmp/artifact-work', path: '', containerId: 'artifact-container' });
@@ -2636,6 +2637,13 @@ describeSt('server ST: API + runner websocket', () => {
         });
         uploaded = Buffer.from((params as { data: string }).data, 'base64');
         return { ok: true, size: uploaded?.length };
+      },
+      'workspace.delete': (params) => {
+        expect(params).toEqual({
+          root: '/tmp/artifact-work', path: 'out/old.bin', containerId: 'artifact-container',
+        });
+        deletedPath = (params as { path: string }).path;
+        return { ok: true };
       },
     });
     runners.push(runner);
@@ -2662,6 +2670,12 @@ describeSt('server ST: API + runner websocket', () => {
       payload: uploadedBytes,
     });
     expect(unauthorizedUpload.statusCode).toBe(401);
+    const unauthorizedDelete = await app!.inject({
+      method: 'DELETE',
+      url: '/api/sessions/session-artifact-st/files?path=out%2Fold.bin',
+      headers: { host: 'localhost:7620' },
+    });
+    expect(unauthorizedDelete.statusCode).toBe(401);
     const listing = await app!.inject({
       method: 'GET',
       url: '/api/sessions/session-artifact-st/files/list?path=',
@@ -2690,9 +2704,18 @@ describeSt('server ST: API + runner websocket', () => {
     expect(upload.statusCode).toBe(201);
     expect(upload.json()).toEqual({ ok: true, path: 'out/upload.bin', size: uploadedBytes.length });
     expect(uploaded).toEqual(uploadedBytes);
+    const deletion = await app!.inject({
+      method: 'DELETE',
+      url: '/api/sessions/session-artifact-st/files?path=out%2Fold.bin',
+      headers: { host: 'localhost:7620', cookie },
+    });
+    expect(deletion.statusCode).toBe(200);
+    expect(deletion.json()).toEqual({ ok: true, path: 'out/old.bin' });
+    expect(deletedPath).toBe('out/old.bin');
     expect(runner.calls.some((call) => call.method === 'workspace.list')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.read')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.write')).toBe(true);
+    expect(runner.calls.some((call) => call.method === 'workspace.delete')).toBe(true);
   });
 
   it('posts forge comments through authenticated refs with the requester token', async () => {

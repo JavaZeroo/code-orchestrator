@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -54,6 +54,13 @@ describe('createRunnerMethodHandler', () => {
     expect(result).toEqual({
       ok: true, path: '', entries: [{ name: 'answer.txt', type: 'file', size: 12 }], truncated: false,
     });
+  });
+
+  it('dispatches workspace.delete through the confined file deleter', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-delete-'));
+    await writeFile(join(root, 'answer.txt'), 'runner bytes');
+    await expect(handler()('workspace.delete', { root, path: 'answer.txt' })).resolves.toEqual({ ok: true });
+    await expect(access(join(root, 'answer.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('rejects unsupported opencode session spawn without creating a session', async () => {

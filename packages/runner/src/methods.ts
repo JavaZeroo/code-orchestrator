@@ -10,6 +10,7 @@ import { ContainerSession } from './container-agent/container-session';
 import { readWorkspaceFile } from './workspaceFile';
 import { listWorkspaceDirectory } from './workspaceList';
 import { writeWorkspaceFile } from './workspaceWrite';
+import { deleteWorkspaceFile } from './workspaceDelete';
 
 const EXEC_DEFAULT_TIMEOUT_MS = 60_000;
 const EXEC_MAX_BUFFER = 10 * 1024 * 1024;
@@ -114,6 +115,9 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
       }
       case 'workspace.write': {
         return writeWorkspaceFile(runnerMethods['workspace.write'].params.parse(params));
+      }
+      case 'workspace.delete': {
+        return deleteWorkspaceFile(runnerMethods['workspace.delete'].params.parse(params));
       }
       case 'workspace.list': {
         return listWorkspaceDirectory(runnerMethods['workspace.list'].params.parse(params));
