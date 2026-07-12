@@ -11,6 +11,7 @@ import {
   RunRetryAction,
   runRetestAction,
   RunTitleEditor,
+  RunTranscriptExportAction,
   type RunRetryActionDependencies,
   type RunRetestActionDependencies,
 } from './RunView';
@@ -86,6 +87,24 @@ describe('RunView archive action', () => {
     const markup = renderToStaticMarkup(createElement(RunArchiveAction, { mode: 'archive', updating: true, onChange: vi.fn() }));
     expect(markup).toContain('disabled=""');
     expect(markup).toContain('归档中…');
+  });
+});
+
+describe('RunView transcript export action', () => {
+  it('is available and disables repeated exports while complete history is loading', () => {
+    const ready = renderToStaticMarkup(createElement(RunTranscriptExportAction, {
+      exporting: false,
+      onExport: vi.fn(),
+    }));
+    const exporting = renderToStaticMarkup(createElement(RunTranscriptExportAction, {
+      exporting: true,
+      onExport: vi.fn(),
+    }));
+
+    expect(ready).toContain('导出记录');
+    expect(ready).not.toContain('disabled=""');
+    expect(exporting).toContain('disabled=""');
+    expect(exporting).toContain('导出中…');
   });
 });
 
