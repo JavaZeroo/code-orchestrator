@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowLeft, Check, ExternalLink, Pause, Pencil, Play, RefreshCw, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowLeft, Check, Download, ExternalLink, Pause, Pencil, Play, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type ApprovalRow, type ForgeRefRow, type NodeStateRow, type RunRetryResult, type RunRow, type WorkflowDefRow } from './api';
@@ -9,6 +9,7 @@ import { Button } from './components/ui/button';
 import { Badge, StatusDot, type BadgeTone } from './components/ui/primitives';
 import { invalidate } from './lib/queries';
 import { normalizeRunTitle, RUN_TITLE_MAX_LENGTH, runDisplayTitle } from './lib/runTitle';
+import { exportRunTranscript } from './lib/transcript';
 import { useRunEvents } from './useEvents';
 
 const RUN_META: Record<string, { label: string; tone: BadgeTone; live?: boolean }> = {
@@ -212,6 +213,20 @@ export function RunArchiveAction({
   );
 }
 
+export function RunTranscriptExportAction({
+  exporting,
+  onExport,
+}: {
+  exporting: boolean;
+  onExport: () => void;
+}) {
+  return (
+    <Button variant="ghost" size="sm" disabled={exporting} onClick={onExport}>
+      <Download size={13} /> {exporting ? '导出中…' : '导出记录'}
+    </Button>
+  );
+}
+
 export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpenSession: (id: string) => void; onBack: () => void }) {
   const [mode, setMode] = useState<'thread' | 'graph'>('thread');
   const [retrying, setRetrying] = useState(false);
@@ -220,6 +235,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
   const [titleDraft, setTitleDraft] = useState('');
   const [editingTitle, setEditingTitle] = useState(false);
   const [savingTitle, setSavingTitle] = useState(false);
+  const [exportingTranscript, setExportingTranscript] = useState(false);
 
   // ---- 共享数据（graph 模式用）----
   const [run, setRun] = useState<RunRow | null>(null);
@@ -434,6 +450,15 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
       .finally(() => setSavingTitle(false));
   }, [runId]);
 
+  const handleExportTranscript = useCallback(() => {
+    if (exportingTranscript) return;
+    setExportingTranscript(true);
+    void exportRunTranscript(runId, api.runThread)
+      .then(() => toast('运行记录已导出'))
+      .catch((error) => toast.error(`导出运行记录失败：${error}`))
+      .finally(() => setExportingTranscript(false));
+  }, [exportingTranscript, runId]);
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <header className="flex items-center justify-between gap-3 border-b border-line bg-bg-2/40 px-4 py-2.5 backdrop-blur-sm">
@@ -475,6 +500,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
               编排图
             </button>
           </div>
+          <RunTranscriptExportAction exporting={exportingTranscript} onExport={handleExportTranscript} />
           <StatusDot tone={runMeta.tone} live={runMeta.live} />
           <Badge tone={runMeta.tone}>{runMeta.label}</Badge>
           <RunProgressionAction mode={progressionMode} updating={updatingProgression} onChange={handleProgressionChange} />
