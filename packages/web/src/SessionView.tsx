@@ -601,6 +601,9 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
             onEditNote={(noteId, markdown) => api.editSessionNote(session.id, noteId, markdown)
               .then(() => { toast.success('会话备注已更新'); })
               .catch((e) => { toast.error(`更新会话备注失败：${e}`); throw e; })}
+            onDeleteNote={(noteId) => api.deleteSessionNote(session.id, noteId)
+              .then(() => { toast.success('会话备注已删除'); })
+              .catch((e) => { toast.error(`删除会话备注失败：${e}`); throw e; })}
           />
           <div ref={bottomRef} />
         </div>

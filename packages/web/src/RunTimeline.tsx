@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, Check, ChevronRight, ExternalLink, GitBranch, NotebookPen, Pencil, RefreshCw, Send, Wrench, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Check, ChevronRight, ExternalLink, GitBranch, NotebookPen, Pencil, RefreshCw, Send, Trash2, Wrench, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { RUN_NOTE_MAX_LENGTH } from '@co/protocol';
@@ -10,7 +10,7 @@ import { RejectionFeedback, type ApprovalDecisionHandler } from './components/Re
 import { Button } from './components/ui/button';
 import { Badge, StatusDot, Textarea, type BadgeTone } from './components/ui/primitives';
 import { cn } from './lib/utils';
-import { latestNoteRevisions } from './lib/noteRevisions';
+import { deletedNoteIds, latestNoteRevisions } from './lib/noteRevisions';
 
 // ---- 复用常量（与 FlowGraph / RunView 同源）----
 
@@ -304,10 +304,11 @@ export function RunHistoryAction({
   );
 }
 
-export function RunNoteCard({ note, noteId, onEdit }: {
+export function RunNoteCard({ note, noteId, onEdit, onDelete }: {
   note: RunNotePayload;
   noteId?: number;
   onEdit?: (noteId: number, markdown: string) => Promise<void>;
+  onDelete?: (noteId: number) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note.markdown);
@@ -329,6 +330,13 @@ export function RunNoteCard({ note, noteId, onEdit }: {
         {onEdit && noteId !== undefined && !editing && (
           <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setDraft(note.markdown); setEditing(true); }}>
             <Pencil size={12} /> 编辑
+          </Button>
+        )}
+        {onDelete && noteId !== undefined && !editing && (
+          <Button variant="ghost" size="sm" className={onEdit ? undefined : 'ml-auto'} onClick={() => {
+            if (confirm('删除这条运行备注？')) void onDelete(noteId).catch(() => {});
+          }}>
+            <Trash2 size={12} /> 删除
           </Button>
         )}
       </div>
@@ -401,6 +409,7 @@ interface RunTimelineProps {
   onSend: (text: string) => void;
   onAddNote: (markdown: string) => Promise<void>;
   onEditNote: (noteId: number, markdown: string) => Promise<void>;
+  onDeleteNote: (noteId: number) => Promise<void>;
   addingNote: boolean;
   onDecide: ApprovalDecisionHandler;
   onRetest: (refId: string) => Promise<void>;
@@ -426,6 +435,7 @@ export function RunTimeline({
   onSend,
   onAddNote,
   onEditNote,
+  onDeleteNote,
   addingNote,
   onDecide,
   onRetest,
@@ -550,6 +560,7 @@ export function RunTimeline({
   const items = useMemo(() => {
     const out: TimelineItem[] = [];
     const noteRevisions = latestNoteRevisions(events, 'run.note.updated');
+    const deletedNotes = deletedNoteIds(events, 'run.note.deleted');
 
     // ① 按 sessionId 分组连续 session.message
     let segSessionId: string | null = null;
@@ -614,6 +625,7 @@ export function RunTimeline({
         flushSegment();
 
         if (row.type === 'run.note') {
+          if (deletedNotes.has(row.seq)) continue;
           const note = row.payload as Partial<RunNotePayload>;
           if (typeof note.markdown === 'string' && typeof note.author === 'string') {
             out.push({
@@ -623,6 +635,7 @@ export function RunTimeline({
                 note={{ markdown: noteRevisions.get(row.seq) ?? note.markdown, author: note.author }}
                 noteId={row.seq}
                 onEdit={onEditNote}
+                onDelete={onDeleteNote}
               />,
             });
           }
@@ -719,7 +732,7 @@ export function RunTimeline({
     flushSegment();
 
     return out.sort((a, b) => a.seq - b.seq);
-  }, [events, nodeBySession, nodeDefById, forgeRefByKey, approvals, expandedSegments, nodes, run.id, onDecide, onEditNote, onComment, retestProgress, handleRetest]);
+  }, [events, nodeBySession, nodeDefById, forgeRefByKey, approvals, expandedSegments, nodes, run.id, onDecide, onEditNote, onDeleteNote, onComment, retestProgress, handleRetest]);
 
   // ---- 智能滚动（仿 SessionView）----
 

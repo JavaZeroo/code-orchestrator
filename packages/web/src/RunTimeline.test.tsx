@@ -92,6 +92,13 @@ describe('workflow run notes', () => {
     expect(markup).toContain('operator@example.com');
   });
 
+  it('offers deletion for a persisted run note identifier', () => {
+    const markup = renderToStaticMarkup(
+      <RunNoteCard noteId={42} note={{ markdown: 'Remove me.', author: 'operator@example.com' }} onDelete={vi.fn()} />,
+    );
+    expect(markup).toContain('删除');
+  });
+
   it('offers an independent note composer and disables it only while saving', () => {
     const ready = renderToStaticMarkup(
       <RunNoteComposer

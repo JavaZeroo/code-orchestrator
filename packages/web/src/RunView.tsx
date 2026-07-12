@@ -433,6 +433,16 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
     }
   }, [runId]);
 
+  const handleDeleteNote = useCallback(async (noteId: number) => {
+    try {
+      await api.deleteRunNote(runId, noteId);
+      toast.success('运行备注已删除');
+    } catch (error) {
+      toast.error(`删除运行备注失败：${error}`);
+      throw error;
+    }
+  }, [runId]);
+
   const handleRetest = useCallback((refId: string) => runRetestAction(refId, {
     request: api.retestForgeRef,
     success: toast.success,
@@ -604,6 +614,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
           onSend={handleSend}
           onAddNote={handleAddNote}
           onEditNote={handleEditNote}
+          onDeleteNote={handleDeleteNote}
           addingNote={addingNote}
           onDecide={handleDecide}
           onRetest={handleRetest}

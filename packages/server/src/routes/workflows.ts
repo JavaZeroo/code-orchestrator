@@ -10,7 +10,7 @@ import { EngineError, startRun } from '../engine/engine';
 import { archiveWorkflowRun, restoreWorkflowRun, WorkflowRunArchiveError } from '../services/workflowRunArchive';
 import { pauseWorkflowRun, resumeWorkflowRun, WorkflowRunProgressionError } from '../services/workflowRunProgression';
 import { retryWorkflowRun, WorkflowRunRetryError } from '../services/workflowRunRetry';
-import { appendWorkflowRunNote, reviseWorkflowRunNote, WorkflowRunNoteError } from '../services/workflowRunNote';
+import { appendWorkflowRunNote, deleteWorkflowRunNote, reviseWorkflowRunNote, WorkflowRunNoteError } from '../services/workflowRunNote';
 import { reviseWorkflowDefinition, WorkflowRevisionError } from '../services/workflowRevision';
 
 const createBodySchema = z.object({
@@ -177,6 +177,21 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       const note = await reviseWorkflowRunNote(req.params.id, {
         noteId: noteIdSchema.parse(req.params.noteId),
         markdown: body.markdown,
+      });
+      return { note };
+    } catch (err) {
+      if (err instanceof WorkflowRunNoteError) {
+        void reply.code(err.statusCode);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  app.delete<{ Params: { id: string; noteId: string } }>('/api/runs/:id/notes/:noteId', async (req, reply) => {
+    try {
+      const note = await deleteWorkflowRunNote(req.params.id, {
+        noteId: noteIdSchema.parse(req.params.noteId),
       });
       return { note };
     } catch (err) {

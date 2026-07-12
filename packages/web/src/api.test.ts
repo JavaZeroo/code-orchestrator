@@ -195,6 +195,19 @@ describe('api client', () => {
     });
   });
 
+  it('deletes session and run notes through their creation event identifiers', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ note: { seq: 20, type: 'session.note.deleted', payload: { noteId: 18 } } }))
+      .mockResolvedValueOnce(Response.json({ note: { seq: 44, type: 'run.note.deleted', payload: { noteId: 42 } } }));
+    vi.stubGlobal('fetch', fetch);
+
+    await api.deleteSessionNote('session/1', 18);
+    await api.deleteRunNote('run/1', 42);
+
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/sessions/session%2F1/notes/18', { method: 'DELETE' });
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/runs/run%2F1/notes/42', { method: 'DELETE' });
+  });
+
   it('lists archived sessions separately and posts archive state changes', async () => {
     const archivedAt = '2026-07-11T04:00:00.000Z';
     const fetch = vi
