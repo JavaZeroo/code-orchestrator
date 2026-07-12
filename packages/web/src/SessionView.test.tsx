@@ -15,6 +15,8 @@ import {
   sessionNoteAction,
   SessionTitleEditor,
   TranscriptExportAction,
+  downloadSessionArtifact,
+  canDownloadArtifact,
 } from './SessionView';
 
 const session: SessionRow = {
@@ -140,6 +142,24 @@ describe('SessionView transcript export action', () => {
     expect(ready).not.toContain('disabled=""');
     expect(exporting).toContain('disabled=""');
     expect(exporting).toContain('导出中…');
+  });
+});
+
+describe('SessionView artifact download action', () => {
+  it('uses the server filename and downloads the returned bytes', async () => {
+    const request = vi.fn().mockResolvedValue(new Response('artifact bytes', {
+      headers: { 'content-disposition': "attachment; filename*=UTF-8''final%20report.txt" },
+    }));
+    const download = vi.fn();
+    await downloadSessionArtifact('session-1', 'out/report.txt', request, download);
+    expect(request).toHaveBeenCalledWith('session-1', 'out/report.txt');
+    expect(download).toHaveBeenCalledWith(expect.any(Blob), 'final report.txt');
+  });
+
+  it('allows one download only after a path is entered and while idle', () => {
+    expect(canDownloadArtifact('   ', false)).toBe(false);
+    expect(canDownloadArtifact('out/result.bin', true)).toBe(false);
+    expect(canDownloadArtifact('out/result.bin', false)).toBe(true);
   });
 });
 

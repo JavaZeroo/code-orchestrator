@@ -145,6 +145,21 @@ export const runnerMethods = {
       stderr: z.string(),
     }),
   },
+  /** Read one regular file beneath a session workspace. Payloads are capped at 10 MiB. */
+  'workspace.read': {
+    params: z.object({
+      root: z.string().min(1),
+      path: z.string().min(1),
+      containerId: z.string().min(1).optional(),
+    }),
+    result: z.object({
+      ok: z.boolean(),
+      basename: z.string().optional(),
+      size: z.number().int().nonnegative().optional(),
+      data: z.string().optional(),
+      error: z.string().optional(),
+    }),
+  },
   /** 容器生命周期（design-v2 Q3，M1 substrate）：co 拥有容器——起/执行/销毁。
    *  devices/gpus 由 accelerator 适配器在 M2 填充（Ascend → --device 列表；卡在建容器时绑定）。 */
   'container.run': {

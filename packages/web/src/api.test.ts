@@ -62,6 +62,13 @@ describe('api client', () => {
     expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Folder');
   });
 
+  it('constructs an encoded workspace file request', async () => {
+    const response = new Response('bytes');
+    const fetch = mockFetch(response);
+    await expect(api.workspaceFile('session/one', 'reports/final result.bin')).resolves.toBe(response);
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files?path=reports%2Ffinal%20result.bin');
+  });
+
   it('posts JSON bodies for session spawn', async () => {
     const fetch = mockFetch(Response.json({ sessionId: 's1' }));
 

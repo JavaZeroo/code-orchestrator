@@ -51,6 +51,7 @@ const noteIdSchema = z.coerce.number().int().positive();
 const renameBodySchema = z.object({ title: z.string().trim().min(1).max(120) }).strict();
 const listSessionsQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
 const decideBodySchema = z.object({ decision: approvalDecisionSchema, decidedBy: z.string().optional() });
+const workspaceFileQuerySchema = z.object({ path: z.string().min(1) });
 const EVENT_PAGE_SIZE = 2000;
 
 function requireDb() {
@@ -281,6 +282,28 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     }
     const [stat = '', diff = ''] = result.stdout.split("---DIFF---\n");
     return { ok: true, stat: stat.trim(), diff: diff.slice(0, 200_000) };
+  });
+
+  /** Download one bounded regular file from the host or container session workspace. */
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/sessions/:id/files', async (req, reply) => {
+    const session = await findSession(req.params.id);
+    const { path } = workspaceFileQuerySchema.parse(req.query);
+    const result = await callRunner(session.machineId, 'workspace.read', {
+      root: session.cwd,
+      path,
+      containerId: session.containerId ?? undefined,
+    });
+    if (!result.ok || result.data === undefined || result.basename === undefined || result.size === undefined) {
+      throw new HttpError(400, result.error ?? 'workspace file unavailable');
+    }
+    const data = Buffer.from(result.data, 'base64');
+    if (data.length !== result.size) throw new HttpError(502, 'runner returned an invalid workspace file');
+    const fallback = result.basename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_') || 'artifact';
+    void reply
+      .header('content-type', 'application/octet-stream')
+      .header('content-length', String(data.length))
+      .header('content-disposition', `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(result.basename)}`)
+      .send(data);
   });
 
   app.get<{ Params: { id: string }; Querystring: { before?: string; since?: string } }>(

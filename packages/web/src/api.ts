@@ -323,6 +323,18 @@ async function j<T>(r: Response): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+async function ok(r: Response): Promise<Response> {
+  if (r.status === 401) {
+    window.dispatchEvent(new Event('co:unauthorized'));
+    throw new Error('未登录或会话已过期');
+  }
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    throw new Error(`${r.status}: ${body.slice(0, 300)}`);
+  }
+  return r;
+}
+
 const post = (url: string, body: unknown) =>
   fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
@@ -444,6 +456,8 @@ export const api = {
   interrupt: (sessionId: string) => post(`/api/sessions/${sessionId}/interrupt`, {}).then((r) => j(r)),
   sessionDiff: (sessionId: string) =>
     fetch(`/api/sessions/${sessionId}/diff`).then((r) => j<{ ok: boolean; stat?: string; diff?: string; error?: string }>(r)),
+  workspaceFile: (sessionId: string, path: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`).then(ok),
   decide: (approvalId: string, behavior: 'allow' | 'deny', message?: string) =>
     post(`/api/approvals/${approvalId}/decide`, {
       decision: behavior === 'allow' ? { behavior } : { behavior, message },

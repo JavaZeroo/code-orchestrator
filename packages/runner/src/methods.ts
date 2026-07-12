@@ -7,6 +7,7 @@ import { addSession, getSession, listSessionStates, removeSession, type RunnerSe
 import { provisionWorkspace } from './workspace';
 import { containerExec, containerRm, containerRun } from './container';
 import { ContainerSession } from './container-agent/container-session';
+import { readWorkspaceFile } from './workspaceFile';
 
 const EXEC_DEFAULT_TIMEOUT_MS = 60_000;
 const EXEC_MAX_BUFFER = 10 * 1024 * 1024;
@@ -105,6 +106,9 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
       case 'workspace.provision': {
         const p = runnerMethods['workspace.provision'].params.parse(params);
         return provisionWorkspace(p);
+      }
+      case 'workspace.read': {
+        return readWorkspaceFile(runnerMethods['workspace.read'].params.parse(params));
       }
       case 'container.run': {
         return containerRun(runnerMethods['container.run'].params.parse(params));

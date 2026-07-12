@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createRunnerMethodHandler } from './methods';
 
@@ -20,6 +23,18 @@ describe('createRunnerMethodHandler', () => {
     });
 
     expect(result).toEqual({ exitCode: 7, stdout: '', stderr: 'bad' });
+  });
+
+  it('dispatches workspace.read through the bounded file reader', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-file-'));
+    await writeFile(join(root, 'answer.txt'), 'runner bytes');
+    const result = await handler()('workspace.read', { root, path: 'answer.txt' });
+    expect(result).toEqual({
+      ok: true,
+      basename: 'answer.txt',
+      size: 12,
+      data: Buffer.from('runner bytes').toString('base64'),
+    });
   });
 
   it('rejects unsupported opencode session spawn without creating a session', async () => {

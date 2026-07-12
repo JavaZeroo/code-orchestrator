@@ -131,6 +131,65 @@ function DiffDialog({ sessionId, open, onOpenChange }: { sessionId: string; open
   );
 }
 
+export async function downloadSessionArtifact(
+  sessionId: string,
+  path: string,
+  request = api.workspaceFile,
+  download: (blob: Blob, filename: string) => void = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  },
+): Promise<void> {
+  const response = await request(sessionId, path);
+  const encoded = response.headers.get('content-disposition')?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const filename = encoded ? decodeURIComponent(encoded) : path.split(/[\\/]/).pop() || 'artifact';
+  download(await response.blob(), filename);
+}
+
+export function canDownloadArtifact(path: string, downloading: boolean): boolean {
+  return path.trim().length > 0 && !downloading;
+}
+
+export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sessionId: string; open: boolean; onOpenChange: (v: boolean) => void }) {
+  const [path, setPath] = useState('');
+  const [downloading, setDownloading] = useState(false);
+  const submit = () => {
+    const relativePath = path.trim();
+    if (!canDownloadArtifact(relativePath, downloading)) return;
+    setDownloading(true);
+    void downloadSessionArtifact(sessionId, relativePath)
+      .then(() => { toast.success('文件已下载'); onOpenChange(false); setPath(''); })
+      .catch((error) => toast.error(`下载失败：${error}`))
+      .finally(() => setDownloading(false));
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogTitle>下载工作区文件</DialogTitle>
+        <form onSubmit={(event) => { event.preventDefault(); submit(); }} className="space-y-3">
+          <input
+            autoFocus
+            aria-label="工作区相对路径"
+            placeholder="例如 reports/result.json"
+            value={path}
+            disabled={downloading}
+            onChange={(event) => setPath(event.target.value)}
+            className="h-9 w-full rounded-md border border-line bg-bg-2 px-3 font-mono text-sm text-ink outline-none focus:border-accent"
+          />
+          <div className="text-xs text-faint">仅支持工作区内不超过 10 MiB 的普通文件。</div>
+          <Button type="submit" disabled={!canDownloadArtifact(path, downloading)}>
+            <Download size={13} /> {downloading ? '下载中…' : '下载'}
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function isSessionResumable(session: SessionRow, state: string, runnerOnline: boolean): boolean {
   return (
     state === 'dead' &&
@@ -319,6 +378,7 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
   const [editingTitle, setEditingTitle] = useState(false);
   const [savingTitle, setSavingTitle] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
+  const [showArtifactDownload, setShowArtifactDownload] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [forking, setForking] = useState(false);
   const [updatingArchive, setUpdatingArchive] = useState(false);
@@ -567,6 +627,9 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
           <Button variant="ghost" size="sm" onClick={() => setShowDiff(true)}>
             <GitCompare size={13} /> 变更
           </Button>
+          <Button variant="ghost" size="sm" onClick={() => setShowArtifactDownload(true)}>
+            <Download size={13} /> 文件
+          </Button>
           <TranscriptExportAction exporting={exportingTranscript} onExport={doExportTranscript} />
           <Badge tone={meta.tone}>{meta.label}</Badge>
           <SessionArchiveAction mode={archiveMode} updating={updatingArchive} onChange={doChangeArchive} />
@@ -588,6 +651,7 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
           )}
         </div>
       </header>
+      <ArtifactDownloadDialog sessionId={session.id} open={showArtifactDownload} onOpenChange={setShowArtifactDownload} />
 
       <div className="relative flex-1 min-h-0 overflow-hidden">
         <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">

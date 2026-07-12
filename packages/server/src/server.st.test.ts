@@ -2599,6 +2599,50 @@ describeSt('server ST: API + runner websocket', () => {
     expect(finalRows).toEqual([{ status: 'running' }]);
   });
 
+  it('authorizes workspace artifact downloads and preserves binary bytes across runner RPC', async () => {
+    await app!.close();
+    app = null;
+    await closeDb();
+    await startApp(true);
+
+    const signUp = await app!.inject({
+      method: 'POST',
+      url: '/api/auth/sign-up/email',
+      headers: { host: 'localhost:7620', origin: 'http://localhost:7620' },
+      payload: { name: 'Artifact Operator', email: 'artifact@example.com', password: 'system-test-password' },
+    });
+    expect(signUp.statusCode).toBe(200);
+    const cookie = signUp.cookies.map(({ name, value }) => `${name}=${value}`).join('; ');
+    const bytes = Buffer.from([0, 17, 128, 255, 10]);
+    const runner = await FakeRunner.connect(baseUrl, {
+      'workspace.read': (params) => {
+        expect(params).toEqual({ root: '/tmp/artifact-work', path: 'out/result.bin' });
+        return { ok: true, basename: 'result.bin', size: bytes.length, data: bytes.toString('base64') };
+      },
+    });
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: { id: 'm-artifact', name: 'Artifact Runner', labels: ['dev'], resources: [], runnerVersion: 'st', startedAt: Date.now() },
+    });
+    await getDb().insert(schema.sessions).values({
+      id: 'session-artifact-st', machineId: 'm-artifact', agent: 'claude', cwd: '/tmp/artifact-work', state: 'idle',
+    });
+
+    const unauthorized = await app!.inject({
+      method: 'GET', url: '/api/sessions/session-artifact-st/files?path=out%2Fresult.bin', headers: { host: 'localhost:7620' },
+    });
+    expect(unauthorized.statusCode).toBe(401);
+    const downloaded = await app!.inject({
+      method: 'GET',
+      url: '/api/sessions/session-artifact-st/files?path=out%2Fresult.bin',
+      headers: { host: 'localhost:7620', cookie },
+    });
+    expect(downloaded.statusCode).toBe(200);
+    expect(downloaded.headers['content-disposition']).toContain('result.bin');
+    expect(downloaded.rawPayload).toEqual(bytes);
+    expect(runner.calls.some((call) => call.method === 'workspace.read')).toBe(true);
+  });
+
   it('posts forge comments through authenticated refs with the requester token', async () => {
     await app!.close();
     app = null;
