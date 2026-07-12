@@ -38,6 +38,15 @@ describe('runnerMethods contracts', () => {
     expect(() => runnerMethods['machine.exec'].params.parse({ cmd: 'pwd', timeoutMs: 0 })).toThrow();
   });
 
+  it('validates bounded workspace file reads for host and container sessions', () => {
+    expect(runnerMethods['workspace.read'].params.parse({ root: '/work', path: 'out/result.bin' })).toEqual({
+      root: '/work', path: 'out/result.bin',
+    });
+    expect(runnerMethods['workspace.read'].params.parse({ root: '/workspace', path: 'x', containerId: 'c1' }))
+      .toMatchObject({ containerId: 'c1' });
+    expect(() => runnerMethods['workspace.read'].params.parse({ root: '/work', path: '' })).toThrow();
+  });
+
   it('accepts containerized session.spawn parameters', () => {
     const parsed = runnerMethods['session.spawn'].params.parse({
       sessionId: 's1',
