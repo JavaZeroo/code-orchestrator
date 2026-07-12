@@ -18,6 +18,10 @@ export const runNoteRevisionPayloadSchema = z.object({
   markdown: runNoteMarkdownSchema,
 }).strict();
 export type RunNoteRevisionPayload = z.infer<typeof runNoteRevisionPayloadSchema>;
+export const runNoteDeletionPayloadSchema = z.object({
+  noteId: z.number().int().positive(),
+}).strict();
+export type RunNoteDeletionPayload = z.infer<typeof runNoteDeletionPayloadSchema>;
 
 const nodeBase = z.object({
   id: z.string().min(1),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sessionNoteMarkdownSchema, sessionNotePayloadSchema, sessionNoteRevisionPayloadSchema } from './session';
+import { sessionNoteDeletionPayloadSchema, sessionNoteMarkdownSchema, sessionNotePayloadSchema, sessionNoteRevisionPayloadSchema } from './session';
 
 describe('session note schema', () => {
   it('normalizes Markdown notes and rejects blank content', () => {
@@ -17,5 +17,10 @@ describe('session note schema', () => {
     expect(sessionNoteRevisionPayloadSchema.parse({ noteId: 12, markdown: '  Corrected.  ' }))
       .toEqual({ noteId: 12, markdown: 'Corrected.' });
     expect(sessionNoteRevisionPayloadSchema.safeParse({ noteId: 0, markdown: 'Corrected.' }).success).toBe(false);
+  });
+
+  it('validates a note deletion tombstone target', () => {
+    expect(sessionNoteDeletionPayloadSchema.parse({ noteId: 12 })).toEqual({ noteId: 12 });
+    expect(sessionNoteDeletionPayloadSchema.safeParse({ noteId: 0 }).success).toBe(false);
   });
 });

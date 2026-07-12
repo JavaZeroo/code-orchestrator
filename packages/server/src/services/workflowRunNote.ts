@@ -1,4 +1,4 @@
-import type { RunNotePayload, RunNoteRevisionPayload } from '@co/protocol';
+import type { RunNoteDeletionPayload, RunNotePayload, RunNoteRevisionPayload } from '@co/protocol';
 import { and, eq } from 'drizzle-orm';
 import { getDb, schema } from '../db/index';
 import { publish, type OrchEvent } from '../events';
@@ -15,6 +15,13 @@ export interface WorkflowRunNoteRevisionEvent {
   type: 'run.note.updated';
   runId: string;
   payload: RunNoteRevisionPayload;
+}
+
+export interface WorkflowRunNoteDeletionEvent {
+  seq: number;
+  type: 'run.note.deleted';
+  runId: string;
+  payload: RunNoteDeletionPayload;
 }
 
 export interface WorkflowRunNoteDependencies {
@@ -42,7 +49,8 @@ const defaultDependencies: WorkflowRunNoteDependencies = {
     return rows.length === 1;
   },
   async noteExists(runId, noteId) {
-    const rows = await getDb()
+    const db = getDb();
+    const rows = await db
       .select({ seq: schema.events.seq })
       .from(schema.events)
       .where(and(
@@ -51,7 +59,15 @@ const defaultDependencies: WorkflowRunNoteDependencies = {
         eq(schema.events.type, 'run.note'),
       ))
       .limit(1);
-    return rows.length === 1;
+    if (rows.length !== 1) return false;
+    const deletions = await db
+      .select({ payload: schema.events.payload })
+      .from(schema.events)
+      .where(and(
+        eq(schema.events.runId, runId),
+        eq(schema.events.type, 'run.note.deleted'),
+      ));
+    return !deletions.some(({ payload }) => (payload as { noteId?: unknown }).noteId === noteId);
   },
   publishEvent: publish,
 };
@@ -92,4 +108,24 @@ export function reviseWorkflowRunNote(
   payload: RunNoteRevisionPayload,
 ): Promise<WorkflowRunNoteRevisionEvent> {
   return reviseWorkflowRunNoteWithDependencies(runId, payload, defaultDependencies);
+}
+
+export async function deleteWorkflowRunNoteWithDependencies(
+  runId: string,
+  payload: RunNoteDeletionPayload,
+  dependencies: WorkflowRunNoteDependencies,
+): Promise<WorkflowRunNoteDeletionEvent> {
+  if (!(await dependencies.noteExists(runId, payload.noteId))) {
+    throw new WorkflowRunNoteError(404, 'run note not found');
+  }
+  const event = { type: 'run.note.deleted' as const, runId, payload };
+  const seq = await dependencies.publishEvent(event);
+  return { ...event, seq };
+}
+
+export function deleteWorkflowRunNote(
+  runId: string,
+  payload: RunNoteDeletionPayload,
+): Promise<WorkflowRunNoteDeletionEvent> {
+  return deleteWorkflowRunNoteWithDependencies(runId, payload, defaultDependencies);
 }

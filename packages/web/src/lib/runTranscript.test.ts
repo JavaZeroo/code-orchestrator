@@ -178,6 +178,21 @@ describe('workflow run transcript collection', () => {
 });
 
 describe('workflow run transcript Markdown', () => {
+  it('omits deleted note content but retains its audit tombstone', () => {
+    const markdown = formatRunTranscript({
+      run, def, nodes, forgeRefs: [],
+      events: [
+        { seq: 20, type: 'run.note', runId: run.id, payload: { markdown: 'Obsolete decision.', author: 'operator@example.com' } },
+        { seq: 21, type: 'run.note.updated', runId: run.id, payload: { noteId: 20, markdown: 'Still obsolete.' } },
+        { seq: 22, type: 'run.note.deleted', runId: run.id, payload: { noteId: 20 } },
+      ],
+    });
+    expect(markdown).not.toContain('Obsolete decision.');
+    expect(markdown).not.toContain('Still obsolete.');
+    expect(markdown).toContain('Operator note deleted');
+    expect(markdown).toContain('**Note sequence:** ` 20 `');
+  });
+
   it('formats run metadata, node outcomes, messages, tool activity, approvals, and forge references', () => {
     const events: EventRow[] = [
       {

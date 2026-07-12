@@ -1062,6 +1062,32 @@ describeSt('server ST: API + runner websocket', () => {
         payload: { markdown: 'Must not be persisted.' },
       });
       expect(mismatched.statusCode).toBe(404);
+      const mismatchedDelete = await app!.inject({
+        method: 'DELETE',
+        url: `/api/runs/missing-run/notes/${noteId}`,
+        headers: { host: 'localhost:7620', cookie },
+      });
+      expect(mismatchedDelete.statusCode).toBe(404);
+      const liveDeletion = waitForClientEvent(client, (event) => event.type === 'run.note.deleted');
+      const deleted = await app!.inject({
+        method: 'DELETE',
+        url: `/api/runs/${runId}/notes/${noteId}`,
+        headers: { host: 'localhost:7620', cookie },
+      });
+      expect(deleted.statusCode).toBe(200);
+      expect(deleted.json()).toMatchObject({
+        note: { type: 'run.note.deleted', runId, payload: { noteId } },
+      });
+      await expect(liveDeletion).resolves.toMatchObject({
+        type: 'run.note.deleted', runId, payload: { noteId },
+      });
+      const editDeleted = await app!.inject({
+        method: 'PATCH',
+        url: `/api/runs/${runId}/notes/${noteId}`,
+        headers: { host: 'localhost:7620', cookie },
+        payload: { markdown: 'Must remain deleted.' },
+      });
+      expect(editDeleted.statusCode).toBe(404);
       expect(runner.calls).toHaveLength(runnerCallsBeforeNote);
 
       const blank = await app!.inject({
@@ -1096,6 +1122,12 @@ describeSt('server ST: API + runner websocket', () => {
         .where(and(eq(schema.events.runId, runId), eq(schema.events.type, 'run.note.updated')));
       expect(persistedRevisions).toHaveLength(1);
       expect(persistedRevisions[0]).toMatchObject({ payload: { noteId, markdown: revisedMarkdown } });
+      const persistedDeletions = await db
+        .select()
+        .from(schema.events)
+        .where(and(eq(schema.events.runId, runId), eq(schema.events.type, 'run.note.deleted')));
+      expect(persistedDeletions).toHaveLength(1);
+      expect(persistedDeletions[0]).toMatchObject({ payload: { noteId } });
 
       const thread = await app!.inject({
         method: 'GET',
@@ -1107,6 +1139,7 @@ describeSt('server ST: API + runner websocket', () => {
         events: [
           expect.objectContaining({ type: 'run.note', runId, payload: { markdown, author: email } }),
           expect.objectContaining({ type: 'run.note.updated', runId, payload: { noteId, markdown: revisedMarkdown } }),
+          expect.objectContaining({ type: 'run.note.deleted', runId, payload: { noteId } }),
         ],
       });
     } finally {
@@ -1129,6 +1162,7 @@ describeSt('server ST: API + runner websocket', () => {
       events: [
         expect.objectContaining({ type: 'run.note', runId, payload: { markdown, author: email } }),
         expect.objectContaining({ type: 'run.note.updated', runId, payload: { noteId: expect.any(Number), markdown: '**Proceed** during the approved change window.' } }),
+        expect.objectContaining({ type: 'run.note.deleted', runId, payload: { noteId: expect.any(Number) } }),
       ],
     });
   });
@@ -1221,6 +1255,32 @@ describeSt('server ST: API + runner websocket', () => {
         payload: { markdown: 'Must not be persisted.' },
       });
       expect(mismatched.statusCode).toBe(404);
+      const mismatchedDelete = await app!.inject({
+        method: 'DELETE',
+        url: `/api/sessions/missing-session/notes/${noteId}`,
+        headers: { host: 'localhost:7620', cookie },
+      });
+      expect(mismatchedDelete.statusCode).toBe(404);
+      const liveDeletion = waitForClientEvent(client, (event) => event.type === 'session.note.deleted');
+      const deleted = await app!.inject({
+        method: 'DELETE',
+        url: `/api/sessions/${sessionId}/notes/${noteId}`,
+        headers: { host: 'localhost:7620', cookie },
+      });
+      expect(deleted.statusCode).toBe(200);
+      expect(deleted.json()).toMatchObject({
+        note: { type: 'session.note.deleted', sessionId, payload: { noteId } },
+      });
+      await expect(liveDeletion).resolves.toMatchObject({
+        type: 'session.note.deleted', sessionId, payload: { noteId },
+      });
+      const editDeleted = await app!.inject({
+        method: 'PATCH',
+        url: `/api/sessions/${sessionId}/notes/${noteId}`,
+        headers: { host: 'localhost:7620', cookie },
+        payload: { markdown: 'Must remain deleted.' },
+      });
+      expect(editDeleted.statusCode).toBe(404);
       expect(runner.calls).toHaveLength(runnerCallsBeforeNote);
 
       const blank = await app!.inject({
@@ -1255,6 +1315,12 @@ describeSt('server ST: API + runner websocket', () => {
         .where(and(eq(schema.events.sessionId, sessionId), eq(schema.events.type, 'session.note.updated')));
       expect(persistedRevisions).toHaveLength(1);
       expect(persistedRevisions[0]).toMatchObject({ payload: { noteId, markdown: revisedMarkdown } });
+      const persistedDeletions = await db
+        .select()
+        .from(schema.events)
+        .where(and(eq(schema.events.sessionId, sessionId), eq(schema.events.type, 'session.note.deleted')));
+      expect(persistedDeletions).toHaveLength(1);
+      expect(persistedDeletions[0]).toMatchObject({ payload: { noteId } });
     } finally {
       await closeWebSocket(client);
       await runner.close();
@@ -1275,6 +1341,7 @@ describeSt('server ST: API + runner websocket', () => {
       events: [
         expect.objectContaining({ type: 'session.note', sessionId, payload: { markdown, author: email } }),
         expect.objectContaining({ type: 'session.note.updated', sessionId, payload: { noteId: expect.any(Number), markdown: '**Handoff corrected**: inspect the database migration first.' } }),
+        expect.objectContaining({ type: 'session.note.deleted', sessionId, payload: { noteId: expect.any(Number) } }),
       ],
     });
   });

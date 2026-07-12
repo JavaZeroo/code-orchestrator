@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   appendSessionNoteWithDependencies,
+  deleteSessionNoteWithDependencies,
   reviseSessionNoteWithDependencies,
   SessionNoteError,
   type SessionNoteDependencies,
@@ -57,6 +58,24 @@ describe('standalone session notes', () => {
     await expect(reviseSessionNoteWithDependencies('session-1', {
       noteId: 99, markdown: 'Do not save.',
     }, deps)).rejects.toEqual(new SessionNoteError(404, 'session note not found'));
+    expect(deps.publishEvent).not.toHaveBeenCalled();
+  });
+
+  it('appends a scoped deletion tombstone for an existing note', async () => {
+    const deps = dependencies();
+    await expect(deleteSessionNoteWithDependencies('session-1', { noteId: 12 }, deps)).resolves.toEqual({
+      seq: 42, type: 'session.note.deleted', sessionId: 'session-1', payload: { noteId: 12 },
+    });
+    expect(deps.noteExists).toHaveBeenCalledWith('session-1', 12);
+    expect(deps.publishEvent).toHaveBeenCalledWith({
+      type: 'session.note.deleted', sessionId: 'session-1', payload: { noteId: 12 },
+    });
+  });
+
+  it('rejects deletion of an unknown or cross-session note', async () => {
+    const deps = dependencies(false);
+    await expect(deleteSessionNoteWithDependencies('session-1', { noteId: 99 }, deps))
+      .rejects.toEqual(new SessionNoteError(404, 'session note not found'));
     expect(deps.publishEvent).not.toHaveBeenCalled();
   });
 });

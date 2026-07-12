@@ -1,4 +1,4 @@
-import type { SessionNotePayload, SessionNoteRevisionPayload } from '@co/protocol';
+import type { SessionNoteDeletionPayload, SessionNotePayload, SessionNoteRevisionPayload } from '@co/protocol';
 import { and, eq } from 'drizzle-orm';
 import { getDb, schema } from '../db/index';
 import { publish, type OrchEvent } from '../events';
@@ -15,6 +15,13 @@ export interface SessionNoteRevisionEvent {
   type: 'session.note.updated';
   sessionId: string;
   payload: SessionNoteRevisionPayload;
+}
+
+export interface SessionNoteDeletionEvent {
+  seq: number;
+  type: 'session.note.deleted';
+  sessionId: string;
+  payload: SessionNoteDeletionPayload;
 }
 
 export interface SessionNoteDependencies {
@@ -39,7 +46,8 @@ const defaultDependencies: SessionNoteDependencies = {
     return rows.length === 1;
   },
   async noteExists(sessionId, noteId) {
-    const rows = await getDb()
+    const db = getDb();
+    const rows = await db
       .select({ seq: schema.events.seq })
       .from(schema.events)
       .where(and(
@@ -48,7 +56,15 @@ const defaultDependencies: SessionNoteDependencies = {
         eq(schema.events.type, 'session.note'),
       ))
       .limit(1);
-    return rows.length === 1;
+    if (rows.length !== 1) return false;
+    const deletions = await db
+      .select({ payload: schema.events.payload })
+      .from(schema.events)
+      .where(and(
+        eq(schema.events.sessionId, sessionId),
+        eq(schema.events.type, 'session.note.deleted'),
+      ));
+    return !deletions.some(({ payload }) => (payload as { noteId?: unknown }).noteId === noteId);
   },
   publishEvent: publish,
 };
@@ -88,4 +104,24 @@ export function reviseSessionNote(
   payload: SessionNoteRevisionPayload,
 ): Promise<SessionNoteRevisionEvent> {
   return reviseSessionNoteWithDependencies(sessionId, payload, defaultDependencies);
+}
+
+export async function deleteSessionNoteWithDependencies(
+  sessionId: string,
+  payload: SessionNoteDeletionPayload,
+  dependencies: SessionNoteDependencies,
+): Promise<SessionNoteDeletionEvent> {
+  if (!(await dependencies.noteExists(sessionId, payload.noteId))) {
+    throw new SessionNoteError(404, 'session note not found');
+  }
+  const event = { type: 'session.note.deleted' as const, sessionId, payload };
+  const seq = await dependencies.publishEvent(event);
+  return { ...event, seq };
+}
+
+export function deleteSessionNote(
+  sessionId: string,
+  payload: SessionNoteDeletionPayload,
+): Promise<SessionNoteDeletionEvent> {
+  return deleteSessionNoteWithDependencies(sessionId, payload, defaultDependencies);
 }

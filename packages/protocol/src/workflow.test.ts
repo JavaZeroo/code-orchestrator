@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runNoteMarkdownSchema, runNotePayloadSchema, runNoteRevisionPayloadSchema, workflowDefSchema } from './workflow';
+import { runNoteDeletionPayloadSchema, runNoteMarkdownSchema, runNotePayloadSchema, runNoteRevisionPayloadSchema, workflowDefSchema } from './workflow';
 
 const base = {
   name: 't',
@@ -53,5 +53,10 @@ describe('run note schema', () => {
     expect(runNoteRevisionPayloadSchema.parse({ noteId: 9, markdown: '  Proceed.  ' }))
       .toEqual({ noteId: 9, markdown: 'Proceed.' });
     expect(runNoteRevisionPayloadSchema.safeParse({ noteId: -1, markdown: 'Proceed.' }).success).toBe(false);
+  });
+
+  it('validates a run note deletion tombstone target', () => {
+    expect(runNoteDeletionPayloadSchema.parse({ noteId: 9 })).toEqual({ noteId: 9 });
+    expect(runNoteDeletionPayloadSchema.safeParse({ noteId: -1 }).success).toBe(false);
   });
 });

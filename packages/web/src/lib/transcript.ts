@@ -55,6 +55,28 @@ function sessionEnvelope(value: unknown): Partial<SessionEnvelope> | null {
     : null;
 }
 
+function projectOperatorNotes(events: EventRow[], scope: 'session' | 'run'): EventRow[] {
+  const noteType = `${scope}.note`;
+  const updateType = `${scope}.note.updated`;
+  const deletionType = `${scope}.note.deleted`;
+  const deleted = new Set<number>();
+  const revisions = new Map<number, string>();
+  for (const event of events) {
+    const payload = record(event.payload);
+    if (event.type === deletionType && typeof payload.noteId === 'number') deleted.add(payload.noteId);
+    if (event.type === updateType && typeof payload.noteId === 'number' && typeof payload.markdown === 'string') {
+      revisions.set(payload.noteId, payload.markdown);
+    }
+  }
+  return events.flatMap((event) => {
+    if (event.type === updateType) return [];
+    if (event.type !== noteType) return [event];
+    if (deleted.has(event.seq)) return [];
+    const markdown = revisions.get(event.seq);
+    return markdown === undefined ? [event] : [{ ...event, payload: { ...record(event.payload), markdown } }];
+  });
+}
+
 export function orderTranscriptEvents(events: EventRow[]): EventRow[] {
   const bySequence = new Map<number, EventRow>();
   for (const event of events) {
@@ -366,7 +388,7 @@ function appendApproval(
 }
 
 export function formatSessionTranscript(session: SessionRow, rawEvents: EventRow[]): string {
-  const events = orderTranscriptEvents(rawEvents);
+  const events = projectOperatorNotes(orderTranscriptEvents(rawEvents), 'session');
   const decisions = approvalDecisions(events);
   const names = new Map<string, string>();
   const lines = [
@@ -391,6 +413,17 @@ export function formatSessionTranscript(session: SessionRow, rawEvents: EventRow
     if (event.type === 'session.message') appendSessionMessage(lines, event, names);
     else if (event.type === 'approval.requested' || event.type === 'approval.decided') {
       appendApproval(lines, event, decisions);
+    } else if (event.type === 'session.note') {
+      const payload = record(event.payload);
+      const details = [
+        ...(typeof payload.author === 'string' ? [`- **Author:** ${inlineCode(payload.author)}`] : []),
+        ...(typeof payload.markdown === 'string' ? ['', '**Note**', '', payload.markdown] : []),
+      ];
+      pushEventSection(lines, event, 'Operator note', undefined, details);
+    } else if (event.type === 'session.note.deleted') {
+      const noteId = record(event.payload).noteId;
+      pushEventSection(lines, event, 'Operator note deleted', undefined,
+        typeof noteId === 'number' ? [`- **Note sequence:** ${inlineCode(noteId)}`] : []);
     }
   }
 
@@ -549,6 +582,10 @@ function appendRunTimelineEvent(
       pushEventSection(lines, event, 'Operator note', undefined, details, scope);
       return;
     }
+    case 'run.note.deleted':
+      label = 'Operator note deleted';
+      if (typeof payload.noteId === 'number') details.push(`- **Note sequence:** ${inlineCode(payload.noteId)}`);
+      break;
     case 'run.started':
       label = 'Run started';
       break;
@@ -602,7 +639,7 @@ function appendRunTimelineEvent(
 }
 
 export function formatRunTranscript(snapshot: RunTranscriptSnapshot): string {
-  const events = orderTranscriptEvents(snapshot.events);
+  const events = projectOperatorNotes(orderTranscriptEvents(snapshot.events), 'run');
   const normalized = { ...snapshot, events };
   const displays = runNodeDisplays(normalized);
   const nodeBySession = new Map<string, string>();

@@ -100,6 +100,18 @@ describe('session transcript event collection', () => {
 });
 
 describe('session transcript Markdown', () => {
+  it('omits deleted note content but retains its audit tombstone', () => {
+    const markdown = formatSessionTranscript(session, [
+      { seq: 9, type: 'session.note', payload: { markdown: 'Obsolete handoff.', author: 'operator@example.com' } },
+      { seq: 10, type: 'session.note.updated', payload: { noteId: 9, markdown: 'Still obsolete.' } },
+      { seq: 11, type: 'session.note.deleted', payload: { noteId: 9 } },
+    ]);
+    expect(markdown).not.toContain('Obsolete handoff.');
+    expect(markdown).not.toContain('Still obsolete.');
+    expect(markdown).toContain('Operator note deleted');
+    expect(markdown).toContain('**Note sequence:** ` 9 `');
+  });
+
   it('formats metadata, messages, tool activity, service messages, and approval outcomes', () => {
     const events: EventRow[] = [
       { seq: 8, type: 'session.state', payload: { state: 'dead' } },

@@ -1,4 +1,4 @@
-import type { ApprovalRequest, RunNotePayload, RunNoteRevisionPayload, SessionAgent, SessionEnvelope, SessionNotePayload, SessionNoteRevisionPayload, SessionState, WorkflowDef } from '@co/protocol';
+import type { ApprovalRequest, RunNoteDeletionPayload, RunNotePayload, RunNoteRevisionPayload, SessionAgent, SessionEnvelope, SessionNoteDeletionPayload, SessionNotePayload, SessionNoteRevisionPayload, SessionState, WorkflowDef } from '@co/protocol';
 
 export interface EventRow {
   seq: number;
@@ -30,6 +30,18 @@ export interface SessionNoteRevisionEventRow extends EventRow {
   type: 'session.note.updated';
   sessionId: string;
   payload: SessionNoteRevisionPayload;
+}
+
+export interface RunNoteDeletionEventRow extends EventRow {
+  type: 'run.note.deleted';
+  runId: string;
+  payload: RunNoteDeletionPayload;
+}
+
+export interface SessionNoteDeletionEventRow extends EventRow {
+  type: 'session.note.deleted';
+  sessionId: string;
+  payload: SessionNoteDeletionPayload;
 }
 
 export interface SessionEventPage {
@@ -354,6 +366,9 @@ export const api = {
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/notes/${noteId}`, {
       method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ markdown }),
     }).then((r) => j<{ note: SessionNoteRevisionEventRow }>(r)),
+  deleteSessionNote: (sessionId: string, noteId: number) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/notes/${noteId}`, { method: 'DELETE' })
+      .then((r) => j<{ note: SessionNoteDeletionEventRow }>(r)),
   spawn: (body: { projectId?: string | null; prompt?: string; agent?: SessionAgent; model?: string; effort?: Effort;
                   machineId?: string; cwd?: string; container?: boolean;
                   designer?: boolean; taskIntake?: boolean }) =>
@@ -386,6 +401,9 @@ export const api = {
     fetch(`/api/runs/${encodeURIComponent(runId)}/notes/${noteId}`, {
       method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ markdown }),
     }).then((r) => j<{ note: RunNoteRevisionEventRow }>(r)),
+  deleteRunNote: (runId: string, noteId: number) =>
+    fetch(`/api/runs/${encodeURIComponent(runId)}/notes/${noteId}`, { method: 'DELETE' })
+      .then((r) => j<{ note: RunNoteDeletionEventRow }>(r)),
   cancelRun: (runId: string) => post(`/api/runs/${runId}/cancel`, {}).then((r) => j<{ ok: boolean }>(r)),
   pauseRun: (runId: string) => post(`/api/runs/${runId}/pause`, {}).then((r) => j<RunProgressionResult>(r)),
   resumeRun: (runId: string) => post(`/api/runs/${runId}/resume`, {}).then((r) => j<RunProgressionResult>(r)),

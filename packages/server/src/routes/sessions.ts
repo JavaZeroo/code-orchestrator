@@ -13,7 +13,7 @@ import { publish } from '../events';
 import { forkSession, ForkError } from '../services/fork';
 import { resumeSession, ResumeError } from '../services/resume';
 import { archiveSession, restoreSession, SessionArchiveError } from '../services/sessionArchive';
-import { appendSessionNote, reviseSessionNote, SessionNoteError } from '../services/sessionNote';
+import { appendSessionNote, deleteSessionNote, reviseSessionNote, SessionNoteError } from '../services/sessionNote';
 import { spawnSession, SpawnError } from '../services/spawn';
 import { ContainerSpawnQueued, spawnContainerSession } from '../services/spawnContainer';
 import { resolveAndSpawn } from '../services/spawnAuto';
@@ -242,6 +242,14 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     const note = await reviseSessionNote(req.params.id, {
       noteId: noteIdSchema.parse(req.params.noteId),
       markdown: body.markdown,
+    });
+    return { note };
+  });
+
+  app.delete<{ Params: { id: string; noteId: string } }>('/api/sessions/:id/notes/:noteId', async (req) => {
+    requireDb();
+    const note = await deleteSessionNote(req.params.id, {
+      noteId: noteIdSchema.parse(req.params.noteId),
     });
     return { note };
   });

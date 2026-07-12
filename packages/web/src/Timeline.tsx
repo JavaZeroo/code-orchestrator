@@ -1,4 +1,4 @@
-import { Check, ChevronRight, NotebookPen, Paperclip, Pencil, X } from 'lucide-react';
+import { Check, ChevronRight, NotebookPen, Paperclip, Pencil, Trash2, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { ApprovalRequest, EventRow, SessionEnvelope, SessionNotePayload, UserInputAnswers } from './api';
 import { Markdown } from './components/Markdown';
@@ -8,7 +8,7 @@ import { Button } from './components/ui/button';
 import { Badge, Input, Textarea } from './components/ui/primitives';
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { cn } from './lib/utils';
-import { latestNoteRevisions } from './lib/noteRevisions';
+import { deletedNoteIds, latestNoteRevisions } from './lib/noteRevisions';
 
 const fmtHm = (ms: number) => {
   const d = new Date(ms);
@@ -338,10 +338,11 @@ export interface RenderItem {
   seq: number;
 }
 
-export function SessionNoteCard({ note, noteId, onEdit }: {
+export function SessionNoteCard({ note, noteId, onEdit, onDelete }: {
   note: SessionNotePayload;
   noteId?: number;
   onEdit?: (noteId: number, markdown: string) => Promise<void>;
+  onDelete?: (noteId: number) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note.markdown);
@@ -363,6 +364,13 @@ export function SessionNoteCard({ note, noteId, onEdit }: {
         {onEdit && noteId !== undefined && !editing && (
           <Button variant="ghost" size="sm" className="ml-auto" onClick={() => { setDraft(note.markdown); setEditing(true); }}>
             <Pencil size={12} /> 编辑
+          </Button>
+        )}
+        {onDelete && noteId !== undefined && !editing && (
+          <Button variant="ghost" size="sm" className={onEdit ? undefined : 'ml-auto'} onClick={() => {
+            if (confirm('删除这条会话备注？')) void onDelete(noteId).catch(() => {});
+          }}>
+            <Trash2 size={12} /> 删除
           </Button>
         )}
       </div>
@@ -471,6 +479,7 @@ export function Timeline({
   onDecide,
   onAnswer,
   onEditNote,
+  onDeleteNote,
   cwd,
 }: {
   events: EventRow[];
@@ -478,6 +487,7 @@ export function Timeline({
   onDecide: ApprovalDecisionHandler;
   onAnswer: (id: string, answers: UserInputAnswers) => void;
   onEditNote?: (noteId: number, markdown: string) => Promise<void>;
+  onDeleteNote?: (noteId: number) => Promise<void>;
   cwd?: string;
 }) {
   const items = useMemo(() => {
@@ -486,12 +496,14 @@ export function Timeline({
     // ② 审批卡
     const approvalsItems: RenderItem[] = [];
     const revisions = latestNoteRevisions(events, 'session.note.updated');
+    const deleted = deletedNoteIds(events, 'session.note.deleted');
     for (const row of events) {
       if (row.type === 'approval.requested') {
         const req = row.payload as ApprovalRequest;
         const item = approvals.get(req.id) ?? { request: req, status: 'pending' as const };
         approvalsItems.push({ key: `ap-${req.id}`, seq: row.seq, el: <ApprovalCard item={item} onDecide={onDecide} onAnswer={onAnswer} /> });
       } else if (row.type === 'session.note') {
+        if (deleted.has(row.seq)) continue;
         approvalsItems.push({
           key: `note-${row.seq}`,
           seq: row.seq,
@@ -499,13 +511,14 @@ export function Timeline({
             note={{ ...(row.payload as SessionNotePayload), markdown: revisions.get(row.seq) ?? (row.payload as SessionNotePayload).markdown }}
             noteId={row.seq}
             onEdit={onEditNote}
+            onDelete={onDeleteNote}
           />,
         });
       }
     }
     // ③ 合并后按 seq 排序
     return [...rendered, ...approvalsItems].sort((a, b) => a.seq - b.seq);
-  }, [events, approvals, onDecide, onAnswer, onEditNote, cwd]);
+  }, [events, approvals, onDecide, onAnswer, onEditNote, onDeleteNote, cwd]);
 
   return <div className="flex flex-col gap-1 px-4 py-4">{items.map((it) => it.el && <div key={it.key} className="flex flex-col">{it.el}</div>)}</div>;
 }

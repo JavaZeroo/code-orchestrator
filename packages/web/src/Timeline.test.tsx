@@ -92,4 +92,29 @@ describe('standalone session notes', () => {
     expect(html).toContain('编辑');
     expect(html.indexOf('Corrected.')).toBeLessThan(html.indexOf('After note'));
   });
+
+  it('hides a deleted session note while retaining surrounding history', () => {
+    const html = renderToStaticMarkup(
+      <Timeline
+        events={[
+          { seq: 1, type: 'session.note', payload: { markdown: 'Remove me.', author: 'operator@example.com' } },
+          { seq: 2, type: 'session.message', payload: { role: 'assistant', ev: { t: 'text', text: 'Keep me.' } } },
+          { seq: 3, type: 'session.note.deleted', payload: { noteId: 1 } },
+        ]}
+        approvals={new Map()}
+        onDecide={vi.fn()}
+        onAnswer={vi.fn()}
+        onDeleteNote={vi.fn()}
+      />,
+    );
+    expect(html).not.toContain('Remove me.');
+    expect(html).toContain('Keep me.');
+  });
+
+  it('offers deletion for a persisted session note identifier', () => {
+    const html = renderToStaticMarkup(
+      <SessionNoteCard noteId={12} note={{ markdown: 'Obsolete.', author: 'operator@example.com' }} onDelete={vi.fn()} />,
+    );
+    expect(html).toContain('删除');
+  });
 });
