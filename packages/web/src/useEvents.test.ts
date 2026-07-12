@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { EventRow, SessionEventPage } from './api';
-import { reduceSessionEventHistory, type SessionEventHistoryState } from './useEvents';
+import type { EventRow, RunThreadPage, SessionEventPage } from './api';
+import {
+  reduceRunEventHistory,
+  reduceSessionEventHistory,
+  type RunEventHistoryState,
+  type SessionEventHistoryState,
+} from './useEvents';
 
 function event(seq: number): EventRow {
   return { seq, type: 'session.message', payload: { seq } };
@@ -62,5 +67,38 @@ describe('session event history', () => {
     });
     expect(history.events.map((row) => row.seq)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(history.hasEarlier).toBe(false);
+  });
+});
+
+describe('run event history', () => {
+  it('prepends earlier pages without disrupting live events or duplicating overlaps', () => {
+    const runPage = (
+      events: number[],
+      hasEarlier: boolean,
+      before: number | null,
+    ): Pick<RunThreadPage, 'events' | 'page'> => ({
+      events: events.map(event),
+      page: { hasEarlier, before },
+    });
+    let history: RunEventHistoryState = { events: [], hasEarlier: false, before: null };
+
+    history = reduceRunEventHistory(history, {
+      kind: 'page',
+      page: runPage([4, 5], true, 4),
+    });
+    history = reduceRunEventHistory(history, {
+      kind: 'live',
+      events: [event(6), event(5)],
+    });
+    expect(history.events.map((row) => row.seq)).toEqual([4, 5, 6]);
+    expect(history).toMatchObject({ hasEarlier: true, before: 4 });
+
+    history = reduceRunEventHistory(history, {
+      kind: 'page',
+      page: runPage([1, 2, 3, 4], false, null),
+    });
+    expect(history.events.map((row) => row.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(new Set(history.events.map((row) => row.seq)).size).toBe(history.events.length);
+    expect(history).toMatchObject({ hasEarlier: false, before: null });
   });
 });

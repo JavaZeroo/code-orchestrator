@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, type EventRow, type SessionEventPage } from './api';
+import { api, type EventRow, type RunThreadPage, type SessionEventPage } from './api';
 
 export interface SessionEventHistoryState {
   events: EventRow[];
@@ -139,35 +139,107 @@ export function useSessionEvents(sessionId: string): SessionEventHistory {
   return { ...history, loadingEarlier, loadEarlier };
 }
 
-/** run 时间线：先开 WS（?runId=）再拉历史 thread，按 seq 去重合并 */
-export function useRunEvents(runId: string): EventRow[] {
-  const [events, setEvents] = useState<EventRow[]>([]);
+export interface RunEventHistoryState {
+  events: EventRow[];
+  hasEarlier: boolean;
+  before: number | null;
+}
+
+export type RunEventHistoryUpdate =
+  | { kind: 'page'; page: Pick<RunThreadPage, 'events' | 'page'> }
+  | { kind: 'live'; events: EventRow[] };
+
+export function reduceRunEventHistory(
+  state: RunEventHistoryState,
+  update: RunEventHistoryUpdate,
+): RunEventHistoryState {
+  if (update.kind === 'live') {
+    const events = mergeSessionEventRows(state.events, update.events);
+    return events === state.events ? state : { ...state, events };
+  }
+  return {
+    events: mergeSessionEventRows(state.events, update.page.events),
+    hasEarlier: update.page.page.hasEarlier,
+    before: update.page.page.before,
+  };
+}
+
+export interface RunEventHistory extends RunEventHistoryState {
+  loadingEarlier: boolean;
+  loadEarlier: () => Promise<RunThreadPage | undefined>;
+}
+
+const EMPTY_RUN_HISTORY: RunEventHistoryState = {
+  events: [],
+  hasEarlier: false,
+  before: null,
+};
+
+/** run 时间线：先开 WS（?runId=）再拉最新 thread，按 seq 去重合并，并可向前翻页。 */
+export function useRunEvents(runId: string): RunEventHistory {
+  const [history, setHistory] = useState<RunEventHistoryState>(EMPTY_RUN_HISTORY);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const beforeRef = useRef<number | null>(null);
+  const loadingEarlierRef = useRef(false);
+  const activeRunRef = useRef(runId);
+  activeRunRef.current = runId;
+
+  const applyUpdate = useCallback((update: RunEventHistoryUpdate) => {
+    setHistory((previous) => {
+      const next = reduceRunEventHistory(previous, update);
+      beforeRef.current = next.before;
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
+    setHistory(EMPTY_RUN_HISTORY);
+    beforeRef.current = null;
+    loadingEarlierRef.current = false;
+    setLoadingEarlier(false);
     if (!runId) return;
-    setEvents([]);
-    const add = (rows: EventRow[]) => {
-      setEvents((prev) => {
-        const seen = new Set(prev.map((e) => e.seq));
-        const fresh = rows.filter((r) => !seen.has(r.seq));
-        if (fresh.length === 0) return prev;
-        return [...prev, ...fresh].sort((a, b) => a.seq - b.seq);
-      });
-    };
+    let disposed = false;
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws/client?runId=${runId}`);
     ws.onmessage = (e) => {
+      if (disposed) return;
       try {
-        add([JSON.parse(e.data as string) as EventRow]);
+        applyUpdate({ kind: 'live', events: [JSON.parse(e.data as string) as EventRow] });
       } catch {
         // ignore malformed frames
       }
     };
-    api.runThread(runId).then((d) => add(d.events)).catch(console.error);
+    api.runThread(runId)
+      .then((page) => {
+        if (!disposed) applyUpdate({ kind: 'page', page });
+      })
+      .catch(console.error);
 
-    return () => ws.close();
-  }, [runId]);
+    return () => {
+      disposed = true;
+      ws.close();
+    };
+  }, [applyUpdate, runId]);
 
-  return events;
+  const loadEarlier = useCallback(async () => {
+    const before = beforeRef.current;
+    if (!runId || before == null || loadingEarlierRef.current) return undefined;
+    const requestedRun = runId;
+    loadingEarlierRef.current = true;
+    setLoadingEarlier(true);
+    try {
+      const page = await api.runThread(requestedRun, { before });
+      if (activeRunRef.current !== requestedRun) return undefined;
+      applyUpdate({ kind: 'page', page });
+      return page;
+    } finally {
+      if (activeRunRef.current === requestedRun) {
+        loadingEarlierRef.current = false;
+        setLoadingEarlier(false);
+      }
+    }
+  }, [applyUpdate, runId]);
+
+  return { ...history, loadingEarlier, loadEarlier };
 }

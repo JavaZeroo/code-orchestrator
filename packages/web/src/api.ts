@@ -19,6 +19,8 @@ export type SessionEventCursor =
   | { before: number; since?: never }
   | { before?: never; since: number };
 
+export type RunThreadCursor = SessionEventCursor;
+
 export interface SessionUsage {
   inputTokens: number;
   outputTokens: number;
@@ -169,6 +171,18 @@ export interface ForgeRefRow {
   ciStatus: string | null;
   snapshot: Record<string, unknown> | null;
   active: 'yes' | 'no';
+}
+
+export interface RunThreadPage {
+  run: RunRow;
+  def: WorkflowDefRow;
+  nodes: NodeStateRow[];
+  events: EventRow[];
+  forgeRefs: ForgeRefRow[];
+  page: {
+    hasEarlier: boolean;
+    before: number | null;
+  };
 }
 
 export interface TriggerRow {
@@ -343,9 +357,13 @@ export const api = {
   restoreRun: (runId: string) =>
     post(`/api/runs/${runId}/restore`, {}).then((r) =>
       j<{ ok: true; run: Pick<RunRow, 'id' | 'archivedAt'> }>(r)),
-  runThread: (runId: string, since?: number) =>
-    fetch(`/api/runs/${runId}/thread${since ? `?since=${since}` : ''}`)
-      .then((r) => j<{ run: RunRow; def: WorkflowDefRow; nodes: NodeStateRow[]; events: EventRow[]; forgeRefs: ForgeRefRow[] }>(r)),
+  runThread: (runId: string, cursor?: RunThreadCursor) => {
+    const query = new URLSearchParams();
+    if (cursor?.before) query.set('before', String(cursor.before));
+    if (cursor?.since) query.set('since', String(cursor.since));
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return fetch(`/api/runs/${runId}/thread${suffix}`).then((r) => j<RunThreadPage>(r));
+  },
   retestForgeRef: (refId: string) =>
     fetch(`/api/forge/refs/${encodeURIComponent(refId)}/retest`, { method: 'POST' })
       .then((r) => j<{ ok: true; confirmation: 'pending' }>(r)),

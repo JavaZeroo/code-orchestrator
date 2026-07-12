@@ -1,5 +1,5 @@
-import { ArrowDown, ChevronRight, ExternalLink, GitBranch, RefreshCw, Send, Wrench } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowDown, ArrowUp, ChevronRight, ExternalLink, GitBranch, RefreshCw, Send, Wrench } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { ApprovalRequest, EventRow, ForgeRefRow, NodeStateRow, RunRow, SessionEnvelope, WorkflowDefRow, WorkflowDef } from './api';
 import { api } from './api';
@@ -243,6 +243,25 @@ function GateCard({ item, onDecide }: { item: ApprovalItem; onDecide: (id: strin
   );
 }
 
+export function RunHistoryAction({
+  visible,
+  loading,
+  onLoad,
+}: {
+  visible: boolean;
+  loading: boolean;
+  onLoad: () => void;
+}) {
+  if (!visible) return null;
+  return (
+    <div className="flex justify-center px-4 py-3">
+      <Button variant="ghost" size="sm" disabled={loading} onClick={onLoad}>
+        <ArrowUp size={12} /> {loading ? '加载中…' : '加载更早记录'}
+      </Button>
+    </div>
+  );
+}
+
 // ---- 主组件 ----
 
 interface RunTimelineProps {
@@ -256,6 +275,9 @@ interface RunTimelineProps {
   onSend: (text: string) => void;
   onDecide: (id: string, b: 'allow' | 'deny') => void;
   onRetest: (refId: string) => Promise<void>;
+  hasEarlier: boolean;
+  loadingEarlier: boolean;
+  onLoadEarlier: () => Promise<{ events: EventRow[] } | undefined>;
   onOpenSession?: (sessionId: string) => void;
 }
 
@@ -264,13 +286,29 @@ interface RetestProgress {
   baselineCiStatus: string | null;
 }
 
-export function RunTimeline({ events, nodes, def, run, forgeRefs, activeSessionId, onSend, onDecide, onRetest, onOpenSession }: RunTimelineProps) {
+export function RunTimeline({
+  events,
+  nodes,
+  def,
+  run,
+  forgeRefs,
+  activeSessionId,
+  onSend,
+  onDecide,
+  onRetest,
+  hasEarlier,
+  loadingEarlier,
+  onLoadEarlier,
+  onOpenSession,
+}: RunTimelineProps) {
   const [text, setText] = useState('');
   const [expandedSegments, setExpandedSegments] = useState<Set<string>>(new Set());
   const [retestProgress, setRetestProgress] = useState<Record<string, RetestProgress>>({});
   const retestLocks = useRef(new Set<string>());
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const prependScrollRef = useRef<{ height: number; top: number; earliestSeq: number } | null>(null);
+  const loadEarlierLockRef = useRef(false);
   const atBottomRef = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const NEAR_BOTTOM = 80;
@@ -544,15 +582,52 @@ export function RunTimeline({ events, nodes, def, run, forgeRefs, activeSessionI
     if (near) setShowJump(false);
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
+    const prependScroll = prependScrollRef.current;
+    if (prependScroll) {
+      const earliestSeq = events[0]?.seq;
+      if (earliestSeq != null && earliestSeq < prependScroll.earliestSeq) {
+        el.scrollTop = prependScroll.top + el.scrollHeight - prependScroll.height;
+        prependScrollRef.current = null;
+      } else {
+        // Live rows append below the reading position while the history request is pending.
+        // Include their height in the baseline so only prepended history shifts scrollTop.
+        prependScroll.height = el.scrollHeight;
+      }
+      return;
+    }
     if (atBottomRef.current) {
       el.scrollTop = el.scrollHeight;
     } else {
       setShowJump(true);
     }
   }, [events.length]);
+
+  const doLoadEarlier = () => {
+    if (loadingEarlier || loadEarlierLockRef.current) return;
+    loadEarlierLockRef.current = true;
+    const el = scrollRef.current;
+    const earliestSeq = events[0]?.seq;
+    if (el && earliestSeq != null) {
+      prependScrollRef.current = { height: el.scrollHeight, top: el.scrollTop, earliestSeq };
+    }
+    void onLoadEarlier()
+      .then((page) => {
+        const firstLoadedSeq = page?.events[0]?.seq;
+        if (firstLoadedSeq == null || (earliestSeq != null && firstLoadedSeq >= earliestSeq)) {
+          prependScrollRef.current = null;
+        }
+      })
+      .catch((error) => {
+        prependScrollRef.current = null;
+        toast.error(`加载更早记录失败：${error}`);
+      })
+      .finally(() => {
+        loadEarlierLockRef.current = false;
+      });
+  };
 
   // ---- 发送 ----
 
@@ -577,6 +652,7 @@ export function RunTimeline({ events, nodes, def, run, forgeRefs, activeSessionI
       {/* 时间线区域 */}
       <div className="relative flex-1 min-h-0 overflow-hidden">
         <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">
+          <RunHistoryAction visible={hasEarlier} loading={loadingEarlier} onLoad={doLoadEarlier} />
           <div className="flex flex-col gap-3 px-4 py-4">
             {items.map((it) => (
               it.el && <div key={it.key} className="flex flex-col">{it.el}</div>
