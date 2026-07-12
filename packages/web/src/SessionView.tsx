@@ -2,7 +2,7 @@ import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2,
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers, type WorkspaceEntry } from './api';
+import { api, isWorkspaceTextPreviewCandidate, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers, type WorkspaceEntry } from './api';
 import { UnifiedDiff } from './components/DiffView';
 import { RejectionFeedback, type ApprovalDecisionHandler } from './components/RejectionFeedback';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
@@ -167,7 +167,7 @@ export function WorkspaceBrowserEntries({
   entries: WorkspaceEntry[];
   disabled: boolean;
   onDirectory: (name: string) => void;
-  onFile: (name: string) => void;
+  onFile: (entry: WorkspaceEntry) => void;
 }) {
   if (entries.length === 0) return <div className="py-8 text-center text-sm text-faint">此目录为空</div>;
   return (
@@ -178,13 +178,46 @@ export function WorkspaceBrowserEntries({
           type="button"
           disabled={disabled}
           className="flex w-full items-center gap-2 border-b border-line px-3 py-2 text-left text-sm text-ink last:border-b-0 hover:bg-panel-2 disabled:opacity-50"
-          onClick={() => entry.type === 'directory' ? onDirectory(entry.name) : onFile(entry.name)}
+          onClick={() => entry.type === 'directory' ? onDirectory(entry.name) : onFile(entry)}
         >
           {entry.type === 'directory' ? <Folder size={15} className="text-accent" /> : <File size={15} className="text-dim" />}
           <span className="min-w-0 flex-1 truncate font-mono">{entry.name}</span>
           {entry.type === 'file' && entry.size !== undefined && <span className="text-xs text-faint">{entry.size.toLocaleString()} B</span>}
         </button>
       ))}
+    </div>
+  );
+}
+
+export function WorkspaceFilePreview({
+  path,
+  text,
+  error,
+  downloading,
+  onBack,
+  onDownload,
+}: {
+  path: string;
+  text?: string;
+  error?: string;
+  downloading: boolean;
+  onBack: () => void;
+  onDownload: () => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="返回目录列表" disabled={downloading} onClick={onBack}>
+          <ChevronLeft size={14} />
+        </Button>
+        <div className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={path}>/{path}</div>
+        <Button type="button" variant="outline" size="sm" disabled={downloading} onClick={onDownload}>
+          <Download size={13} /> {downloading ? '下载中…' : '下载'}
+        </Button>
+      </div>
+      {error
+        ? <div className="rounded-md border border-line bg-panel-2 px-3 py-8 text-center text-sm text-dim">{error}</div>
+        : <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-bg-2 p-3 font-mono text-xs leading-5 text-ink">{text}</pre>}
     </div>
   );
 }
@@ -196,6 +229,9 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [preview, setPreview] = useState<{ path: string; text?: string; error?: string } | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const previewRequestRef = useRef(0);
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -216,23 +252,53 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       setPath('');
       setEntries([]);
       setError(null);
+      setPreview(null);
+      previewRequestRef.current += 1;
     }
     onOpenChange(nextOpen);
   };
-  const downloadFile = (name: string) => {
+  const downloadFile = (relativePath: string, closeAfter = true) => {
     if (downloading) return;
-    const relativePath = workspaceChildPath(path, name);
     setDownloading(true);
     void downloadSessionArtifact(sessionId, relativePath)
-      .then(() => { toast.success('文件已下载'); close(false); })
+      .then(() => { toast.success('文件已下载'); if (closeAfter) close(false); })
       .catch((error) => toast.error(`下载失败：${error}`))
       .finally(() => setDownloading(false));
+  };
+  const selectFile = (entry: WorkspaceEntry) => {
+    const relativePath = workspaceChildPath(path, entry.name);
+    if (!isWorkspaceTextPreviewCandidate(entry)) {
+      downloadFile(relativePath);
+      return;
+    }
+    const requestId = ++previewRequestRef.current;
+    setPreview({ path: relativePath });
+    setPreviewing(true);
+    void api.workspaceTextPreview(sessionId, relativePath)
+      .then((result) => {
+        if (previewRequestRef.current !== requestId) return;
+        if (result.kind === 'text') setPreview({ path: relativePath, text: result.text });
+        else setPreview({ path: relativePath, error: result.kind === 'oversized' ? '文件过大，无法预览，请下载后查看。' : '文件不是可预览的 UTF-8 文本，请下载后查看。' });
+      })
+      .catch((error) => {
+        if (previewRequestRef.current === requestId) setPreview({ path: relativePath, error: `预览加载失败：${error}` });
+      })
+      .finally(() => {
+        if (previewRequestRef.current === requestId) setPreviewing(false);
+      });
   };
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent>
         <DialogTitle>浏览工作区文件</DialogTitle>
-        <div className="space-y-3">
+        {preview ? <WorkspaceFilePreview
+          path={preview.path}
+          text={previewing ? '加载中…' : preview.text}
+          error={previewing ? undefined : preview.error}
+          downloading={downloading}
+          onBack={() => { previewRequestRef.current += 1; setPreviewing(false); setPreview(null); }}
+          onDownload={() => downloadFile(preview.path, false)}
+        /> : <div className="space-y-3">
           <div className="flex items-center gap-2">
             <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading} onClick={() => setPath(workspaceParentPath(path))}>
               <ChevronLeft size={14} />
@@ -245,11 +311,11 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
                 entries={entries}
                 disabled={downloading}
                 onDirectory={(name) => setPath(workspaceChildPath(path, name))}
-                onFile={downloadFile}
+                onFile={selectFile}
               />}
           {truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
-          <div className="text-xs text-faint">选择普通文件即可下载；单个文件上限 10 MiB。</div>
-        </div>
+          <div className="text-xs text-faint">支持的 UTF-8 文本文件可在线预览；其他文件将直接下载。单个文件上限 10 MiB。</div>
+        </div>}
       </DialogContent>
     </Dialog>
   );

@@ -96,6 +96,41 @@ export interface WorkspaceListing {
   truncated: boolean;
 }
 
+export const WORKSPACE_TEXT_PREVIEW_MAX_BYTES = 512 * 1024;
+
+export type WorkspaceTextPreview =
+  | { kind: 'text'; text: string }
+  | { kind: 'binary' }
+  | { kind: 'oversized' };
+
+export function isWorkspaceTextPreviewCandidate(entry: WorkspaceEntry): boolean {
+  if (entry.type !== 'file' || entry.size === undefined || entry.size > WORKSPACE_TEXT_PREVIEW_MAX_BYTES) return false;
+  const name = entry.name.toLowerCase();
+  if (['dockerfile', 'makefile', 'license', 'readme'].includes(name)) return true;
+  return /\.(?:txt|md|markdown|json|jsonl|ya?ml|toml|xml|csv|tsv|log|diff|patch|tsx?|jsx?|mjs|cjs|css|scss|html?|sh|bash|zsh|py|rb|go|rs|java|c|h|cpp|hpp|cs|sql|env|ini|cfg|conf)$/.test(name);
+}
+
+export async function decodeWorkspaceTextPreview(response: Response): Promise<WorkspaceTextPreview> {
+  const declaredSize = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredSize) && declaredSize > WORKSPACE_TEXT_PREVIEW_MAX_BYTES) return { kind: 'oversized' };
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > WORKSPACE_TEXT_PREVIEW_MAX_BYTES) return { kind: 'oversized' };
+  let text: string;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return { kind: 'binary' };
+  }
+  let controls = 0;
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    if (code === 0) return { kind: 'binary' };
+    if (code < 32 && char !== '\n' && char !== '\r' && char !== '\t') controls += 1;
+  }
+  if (text.length > 0 && controls / text.length > 0.01) return { kind: 'binary' };
+  return { kind: 'text', text };
+}
+
 export interface MachineRow {
   id: string;
   name: string;
@@ -470,6 +505,10 @@ export const api = {
     fetch(`/api/sessions/${sessionId}/diff`).then((r) => j<{ ok: boolean; stat?: string; diff?: string; error?: string }>(r)),
   workspaceFile: (sessionId: string, path: string) =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`).then(ok),
+  workspaceTextPreview: (sessionId: string, path: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`)
+      .then(ok)
+      .then(decodeWorkspaceTextPreview),
   workspaceFiles: (sessionId: string, path = '') =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/list?path=${encodeURIComponent(path)}`)
       .then((r) => j<WorkspaceListing>(r)),
