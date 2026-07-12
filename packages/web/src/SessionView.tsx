@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, Code2, GitCompare, GitFork, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, Code2, Download, GitCompare, GitFork, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type ApprovalRequest, type SessionRow, type SessionUsage, type UserInputAnswers } from './api';
@@ -9,6 +9,7 @@ import { Badge, StatusDot, Textarea, type BadgeTone } from './components/ui/prim
 import { useSessionEvents } from './useEvents';
 import { isCodexUserInputRequest, Timeline, type ApprovalItem } from './Timeline';
 import { invalidate, useMachines } from './lib/queries';
+import { exportSessionTranscript } from './lib/transcript';
 import { fmtCost, fmtTokens, shortModel } from './lib/utils';
 
 const STATE_META: Record<string, { label: string; tone: BadgeTone; live?: boolean }> = {
@@ -231,6 +232,20 @@ export function LoadEarlierAction({
   );
 }
 
+export function TranscriptExportAction({
+  exporting,
+  onExport,
+}: {
+  exporting: boolean;
+  onExport: () => void;
+}) {
+  return (
+    <Button variant="ghost" size="sm" disabled={exporting} onClick={onExport}>
+      <Download size={13} /> {exporting ? '导出中…' : '导出记录'}
+    </Button>
+  );
+}
+
 export function SessionView({ session, onForked }: { session: SessionRow; onForked?: (sessionId: string) => void }) {
   const { events, hasEarlier, loadingEarlier, loadEarlier } = useSessionEvents(session.id);
   const { data: machines = [] } = useMachines();
@@ -244,6 +259,7 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
   const [resuming, setResuming] = useState(false);
   const [forking, setForking] = useState(false);
   const [updatingArchive, setUpdatingArchive] = useState(false);
+  const [exportingTranscript, setExportingTranscript] = useState(false);
   const resumeAfterSeqRef = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -405,6 +421,15 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
   };
 
   const archiveMode = sessionArchiveMode(session, state);
+  const doExportTranscript = () => {
+    if (exportingTranscript) return;
+    setExportingTranscript(true);
+    void exportSessionTranscript(session, api.events)
+      .then(() => toast('会话记录已导出'))
+      .catch((error) => toast.error(`导出会话记录失败：${error}`))
+      .finally(() => setExportingTranscript(false));
+  };
+
   const doChangeArchive = () => {
     if (!archiveMode) return;
     setUpdatingArchive(true);
@@ -464,6 +489,7 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
           <Button variant="ghost" size="sm" onClick={() => setShowDiff(true)}>
             <GitCompare size={13} /> 变更
           </Button>
+          <TranscriptExportAction exporting={exportingTranscript} onExport={doExportTranscript} />
           <Badge tone={meta.tone}>{meta.label}</Badge>
           <SessionArchiveAction mode={archiveMode} updating={updatingArchive} onChange={doChangeArchive} />
           <ForkAction visible={forkable} forking={forking} onFork={doFork} />
