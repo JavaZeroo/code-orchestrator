@@ -37,6 +37,15 @@ describe('createRunnerMethodHandler', () => {
     });
   });
 
+  it('dispatches workspace.list through the confined directory reader', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-list-'));
+    await writeFile(join(root, 'answer.txt'), 'runner bytes');
+    const result = await handler()('workspace.list', { root });
+    expect(result).toEqual({
+      ok: true, path: '', entries: [{ name: 'answer.txt', type: 'file', size: 12 }], truncated: false,
+    });
+  });
+
   it('rejects unsupported opencode session spawn without creating a session', async () => {
     const result = await handler()('session.spawn', {
       sessionId: 's-opencode',

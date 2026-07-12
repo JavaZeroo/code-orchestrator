@@ -1,8 +1,8 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, Code2, Download, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Download, File, Folder, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers } from './api';
+import { api, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers, type WorkspaceEntry } from './api';
 import { UnifiedDiff } from './components/DiffView';
 import { RejectionFeedback, type ApprovalDecisionHandler } from './components/RejectionFeedback';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
@@ -150,41 +150,106 @@ export async function downloadSessionArtifact(
   download(await response.blob(), filename);
 }
 
-export function canDownloadArtifact(path: string, downloading: boolean): boolean {
-  return path.trim().length > 0 && !downloading;
+export function workspaceChildPath(path: string, name: string): string {
+  return path ? `${path}/${name}` : name;
+}
+
+export function workspaceParentPath(path: string): string {
+  return path.split('/').slice(0, -1).join('/');
+}
+
+export function WorkspaceBrowserEntries({
+  entries,
+  disabled,
+  onDirectory,
+  onFile,
+}: {
+  entries: WorkspaceEntry[];
+  disabled: boolean;
+  onDirectory: (name: string) => void;
+  onFile: (name: string) => void;
+}) {
+  if (entries.length === 0) return <div className="py-8 text-center text-sm text-faint">此目录为空</div>;
+  return (
+    <div className="max-h-80 overflow-y-auto rounded-md border border-line">
+      {entries.map((entry) => (
+        <button
+          key={`${entry.type}:${entry.name}`}
+          type="button"
+          disabled={disabled}
+          className="flex w-full items-center gap-2 border-b border-line px-3 py-2 text-left text-sm text-ink last:border-b-0 hover:bg-panel-2 disabled:opacity-50"
+          onClick={() => entry.type === 'directory' ? onDirectory(entry.name) : onFile(entry.name)}
+        >
+          {entry.type === 'directory' ? <Folder size={15} className="text-accent" /> : <File size={15} className="text-dim" />}
+          <span className="min-w-0 flex-1 truncate font-mono">{entry.name}</span>
+          {entry.type === 'file' && entry.size !== undefined && <span className="text-xs text-faint">{entry.size.toLocaleString()} B</span>}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sessionId: string; open: boolean; onOpenChange: (v: boolean) => void }) {
   const [path, setPath] = useState('');
+  const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
+  const [truncated, setTruncated] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
-  const submit = () => {
-    const relativePath = path.trim();
-    if (!canDownloadArtifact(relativePath, downloading)) return;
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api.workspaceFiles(sessionId, path)
+      .then((listing) => {
+        if (cancelled) return;
+        setEntries(listing.entries);
+        setTruncated(listing.truncated);
+      })
+      .catch((err) => { if (!cancelled) setError(String(err)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [open, path, sessionId]);
+  const close = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      setPath('');
+      setEntries([]);
+      setError(null);
+    }
+    onOpenChange(nextOpen);
+  };
+  const downloadFile = (name: string) => {
+    if (downloading) return;
+    const relativePath = workspaceChildPath(path, name);
     setDownloading(true);
     void downloadSessionArtifact(sessionId, relativePath)
-      .then(() => { toast.success('文件已下载'); onOpenChange(false); setPath(''); })
+      .then(() => { toast.success('文件已下载'); close(false); })
       .catch((error) => toast.error(`下载失败：${error}`))
       .finally(() => setDownloading(false));
   };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={close}>
       <DialogContent>
-        <DialogTitle>下载工作区文件</DialogTitle>
-        <form onSubmit={(event) => { event.preventDefault(); submit(); }} className="space-y-3">
-          <input
-            autoFocus
-            aria-label="工作区相对路径"
-            placeholder="例如 reports/result.json"
-            value={path}
-            disabled={downloading}
-            onChange={(event) => setPath(event.target.value)}
-            className="h-9 w-full rounded-md border border-line bg-bg-2 px-3 font-mono text-sm text-ink outline-none focus:border-accent"
-          />
-          <div className="text-xs text-faint">仅支持工作区内不超过 10 MiB 的普通文件。</div>
-          <Button type="submit" disabled={!canDownloadArtifact(path, downloading)}>
-            <Download size={13} /> {downloading ? '下载中…' : '下载'}
-          </Button>
-        </form>
+        <DialogTitle>浏览工作区文件</DialogTitle>
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading} onClick={() => setPath(workspaceParentPath(path))}>
+              <ChevronLeft size={14} />
+            </Button>
+            <div className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={path || '/'}>/{path}</div>
+          </div>
+          {loading ? <div className="py-8 text-center text-sm text-dim">加载中…</div>
+            : error ? <div className="py-8 text-center text-sm text-danger">目录加载失败：{error}</div>
+            : <WorkspaceBrowserEntries
+                entries={entries}
+                disabled={downloading}
+                onDirectory={(name) => setPath(workspaceChildPath(path, name))}
+                onFile={downloadFile}
+              />}
+          {truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
+          <div className="text-xs text-faint">选择普通文件即可下载；单个文件上限 10 MiB。</div>
+        </div>
       </DialogContent>
     </Dialog>
   );

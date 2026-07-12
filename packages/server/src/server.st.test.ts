@@ -2615,8 +2615,17 @@ describeSt('server ST: API + runner websocket', () => {
     const cookie = signUp.cookies.map(({ name, value }) => `${name}=${value}`).join('; ');
     const bytes = Buffer.from([0, 17, 128, 255, 10]);
     const runner = await FakeRunner.connect(baseUrl, {
+      'workspace.list': (params) => {
+        expect(params).toEqual({ root: '/tmp/artifact-work', path: '', containerId: 'artifact-container' });
+        return {
+          ok: true,
+          path: '',
+          entries: [{ name: 'out', type: 'directory' }, { name: 'summary.txt', type: 'file', size: 12 }],
+          truncated: false,
+        };
+      },
       'workspace.read': (params) => {
-        expect(params).toEqual({ root: '/tmp/artifact-work', path: 'out/result.bin' });
+        expect(params).toEqual({ root: '/tmp/artifact-work', path: 'out/result.bin', containerId: 'artifact-container' });
         return { ok: true, basename: 'result.bin', size: bytes.length, data: bytes.toString('base64') };
       },
     });
@@ -2625,13 +2634,29 @@ describeSt('server ST: API + runner websocket', () => {
       info: { id: 'm-artifact', name: 'Artifact Runner', labels: ['dev'], resources: [], runnerVersion: 'st', startedAt: Date.now() },
     });
     await getDb().insert(schema.sessions).values({
-      id: 'session-artifact-st', machineId: 'm-artifact', agent: 'claude', cwd: '/tmp/artifact-work', state: 'idle',
+      id: 'session-artifact-st', machineId: 'm-artifact', agent: 'claude', cwd: '/tmp/artifact-work',
+      containerId: 'artifact-container', state: 'idle',
     });
 
+    const unauthorizedListing = await app!.inject({
+      method: 'GET', url: '/api/sessions/session-artifact-st/files/list?path=', headers: { host: 'localhost:7620' },
+    });
+    expect(unauthorizedListing.statusCode).toBe(401);
     const unauthorized = await app!.inject({
       method: 'GET', url: '/api/sessions/session-artifact-st/files?path=out%2Fresult.bin', headers: { host: 'localhost:7620' },
     });
     expect(unauthorized.statusCode).toBe(401);
+    const listing = await app!.inject({
+      method: 'GET',
+      url: '/api/sessions/session-artifact-st/files/list?path=',
+      headers: { host: 'localhost:7620', cookie },
+    });
+    expect(listing.statusCode).toBe(200);
+    expect(listing.json()).toEqual({
+      path: '',
+      entries: [{ name: 'out', type: 'directory' }, { name: 'summary.txt', type: 'file', size: 12 }],
+      truncated: false,
+    });
     const downloaded = await app!.inject({
       method: 'GET',
       url: '/api/sessions/session-artifact-st/files?path=out%2Fresult.bin',
@@ -2640,6 +2665,7 @@ describeSt('server ST: API + runner websocket', () => {
     expect(downloaded.statusCode).toBe(200);
     expect(downloaded.headers['content-disposition']).toContain('result.bin');
     expect(downloaded.rawPayload).toEqual(bytes);
+    expect(runner.calls.some((call) => call.method === 'workspace.list')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.read')).toBe(true);
   });
 

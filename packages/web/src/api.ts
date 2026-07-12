@@ -84,6 +84,18 @@ export interface SessionRow {
   createdAt: string;
 }
 
+export interface WorkspaceEntry {
+  name: string;
+  type: 'file' | 'directory';
+  size?: number;
+}
+
+export interface WorkspaceListing {
+  path: string;
+  entries: WorkspaceEntry[];
+  truncated: boolean;
+}
+
 export interface MachineRow {
   id: string;
   name: string;
@@ -458,6 +470,9 @@ export const api = {
     fetch(`/api/sessions/${sessionId}/diff`).then((r) => j<{ ok: boolean; stat?: string; diff?: string; error?: string }>(r)),
   workspaceFile: (sessionId: string, path: string) =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`).then(ok),
+  workspaceFiles: (sessionId: string, path = '') =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/list?path=${encodeURIComponent(path)}`)
+      .then((r) => j<WorkspaceListing>(r)),
   decide: (approvalId: string, behavior: 'allow' | 'deny', message?: string) =>
     post(`/api/approvals/${approvalId}/decide`, {
       decision: behavior === 'allow' ? { behavior } : { behavior, message },

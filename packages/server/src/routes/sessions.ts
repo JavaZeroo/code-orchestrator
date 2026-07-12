@@ -52,6 +52,7 @@ const renameBodySchema = z.object({ title: z.string().trim().min(1).max(120) }).
 const listSessionsQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
 const decideBodySchema = z.object({ decision: approvalDecisionSchema, decidedBy: z.string().optional() });
 const workspaceFileQuerySchema = z.object({ path: z.string().min(1) });
+const workspaceListQuerySchema = z.object({ path: z.string().default('') });
 const EVENT_PAGE_SIZE = 2000;
 
 function requireDb() {
@@ -304,6 +305,21 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       .header('content-length', String(data.length))
       .header('content-disposition', `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(result.basename)}`)
       .send(data);
+  });
+
+  /** List one bounded workspace directory so operators can discover downloadable files. */
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/sessions/:id/files/list', async (req) => {
+    const session = await findSession(req.params.id);
+    const { path } = workspaceListQuerySchema.parse(req.query);
+    const result = await callRunner(session.machineId, 'workspace.list', {
+      root: session.cwd,
+      path,
+      containerId: session.containerId ?? undefined,
+    });
+    if (!result.ok || result.entries === undefined || result.path === undefined || result.truncated === undefined) {
+      throw new HttpError(400, result.error ?? 'workspace directory unavailable');
+    }
+    return { path: result.path, entries: result.entries, truncated: result.truncated };
   });
 
   app.get<{ Params: { id: string }; Querystring: { before?: string; since?: string } }>(
