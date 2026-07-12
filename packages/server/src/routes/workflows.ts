@@ -10,7 +10,7 @@ import { EngineError, startRun } from '../engine/engine';
 import { archiveWorkflowRun, restoreWorkflowRun, WorkflowRunArchiveError } from '../services/workflowRunArchive';
 import { pauseWorkflowRun, resumeWorkflowRun, WorkflowRunProgressionError } from '../services/workflowRunProgression';
 import { retryWorkflowRun, WorkflowRunRetryError } from '../services/workflowRunRetry';
-import { appendWorkflowRunNote, WorkflowRunNoteError } from '../services/workflowRunNote';
+import { appendWorkflowRunNote, reviseWorkflowRunNote, WorkflowRunNoteError } from '../services/workflowRunNote';
 import { reviseWorkflowDefinition, WorkflowRevisionError } from '../services/workflowRevision';
 
 const createBodySchema = z.object({
@@ -36,6 +36,7 @@ const patchRunSchema = z.object({
 const createRunNoteSchema = z.object({
   markdown: runNoteMarkdownSchema,
 }).strict();
+const noteIdSchema = z.coerce.number().int().positive();
 
 const reviseBodySchema = z.object({
   graph: z.unknown(),
@@ -160,6 +161,23 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
         author: req.user?.email ?? 'ui',
       });
       void reply.code(201);
+      return { note };
+    } catch (err) {
+      if (err instanceof WorkflowRunNoteError) {
+        void reply.code(err.statusCode);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  app.patch<{ Params: { id: string; noteId: string } }>('/api/runs/:id/notes/:noteId', async (req, reply) => {
+    const body = createRunNoteSchema.parse(req.body);
+    try {
+      const note = await reviseWorkflowRunNote(req.params.id, {
+        noteId: noteIdSchema.parse(req.params.noteId),
+        markdown: body.markdown,
+      });
       return { note };
     } catch (err) {
       if (err instanceof WorkflowRunNoteError) {

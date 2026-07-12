@@ -67,6 +67,14 @@ describe('workflow run notes', () => {
     expect(markup).toContain('<strong>Hold</strong> deployment until approval.');
   });
 
+  it('offers editing for a persisted run note identifier', () => {
+    const markup = renderToStaticMarkup(
+      <RunNoteCard noteId={42} note={{ markdown: 'Correct me.', author: 'operator@example.com' }} onEdit={vi.fn()} />,
+    );
+    expect(markup).toContain('编辑');
+    expect(markup).toContain('operator@example.com');
+  });
+
   it('offers an independent note composer and disables it only while saving', () => {
     const ready = renderToStaticMarkup(
       <RunNoteComposer

@@ -1,5 +1,5 @@
-import type { RunNotePayload } from '@co/protocol';
-import { eq } from 'drizzle-orm';
+import type { RunNotePayload, RunNoteRevisionPayload } from '@co/protocol';
+import { and, eq } from 'drizzle-orm';
 import { getDb, schema } from '../db/index';
 import { publish, type OrchEvent } from '../events';
 
@@ -10,8 +10,16 @@ export interface WorkflowRunNoteEvent {
   payload: RunNotePayload;
 }
 
+export interface WorkflowRunNoteRevisionEvent {
+  seq: number;
+  type: 'run.note.updated';
+  runId: string;
+  payload: RunNoteRevisionPayload;
+}
+
 export interface WorkflowRunNoteDependencies {
   runExists: (runId: string) => Promise<boolean>;
+  noteExists: (runId: string, noteId: number) => Promise<boolean>;
   publishEvent: (event: OrchEvent) => Promise<number>;
 }
 
@@ -30,6 +38,18 @@ const defaultDependencies: WorkflowRunNoteDependencies = {
       .select({ id: schema.workflowRuns.id })
       .from(schema.workflowRuns)
       .where(eq(schema.workflowRuns.id, runId))
+      .limit(1);
+    return rows.length === 1;
+  },
+  async noteExists(runId, noteId) {
+    const rows = await getDb()
+      .select({ seq: schema.events.seq })
+      .from(schema.events)
+      .where(and(
+        eq(schema.events.seq, noteId),
+        eq(schema.events.runId, runId),
+        eq(schema.events.type, 'run.note'),
+      ))
       .limit(1);
     return rows.length === 1;
   },
@@ -52,4 +72,24 @@ export async function appendWorkflowRunNoteWithDependencies(
 
 export function appendWorkflowRunNote(runId: string, payload: RunNotePayload): Promise<WorkflowRunNoteEvent> {
   return appendWorkflowRunNoteWithDependencies(runId, payload, defaultDependencies);
+}
+
+export async function reviseWorkflowRunNoteWithDependencies(
+  runId: string,
+  payload: RunNoteRevisionPayload,
+  dependencies: WorkflowRunNoteDependencies,
+): Promise<WorkflowRunNoteRevisionEvent> {
+  if (!(await dependencies.noteExists(runId, payload.noteId))) {
+    throw new WorkflowRunNoteError(404, 'run note not found');
+  }
+  const event = { type: 'run.note.updated' as const, runId, payload };
+  const seq = await dependencies.publishEvent(event);
+  return { ...event, seq };
+}
+
+export function reviseWorkflowRunNote(
+  runId: string,
+  payload: RunNoteRevisionPayload,
+): Promise<WorkflowRunNoteRevisionEvent> {
+  return reviseWorkflowRunNoteWithDependencies(runId, payload, defaultDependencies);
 }

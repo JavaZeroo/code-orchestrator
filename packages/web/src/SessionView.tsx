@@ -590,7 +590,16 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
       <div className="relative flex-1 min-h-0 overflow-hidden">
         <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto">
           <LoadEarlierAction visible={hasEarlier} loading={loadingEarlier} onLoad={doLoadEarlier} />
-          <Timeline events={events} approvals={approvals} cwd={session.cwd} onDecide={decide} onAnswer={answer} />
+          <Timeline
+            events={events}
+            approvals={approvals}
+            cwd={session.cwd}
+            onDecide={decide}
+            onAnswer={answer}
+            onEditNote={(noteId, markdown) => api.editSessionNote(session.id, noteId, markdown)
+              .then(() => { toast.success('会话备注已更新'); })
+              .catch((e) => { toast.error(`更新会话备注失败：${e}`); throw e; })}
+          />
           <div ref={bottomRef} />
         </div>
         {showJump && (

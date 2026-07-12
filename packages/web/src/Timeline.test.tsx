@@ -71,4 +71,25 @@ describe('standalone session notes', () => {
     );
     expect(html).toContain('Durable context.');
   });
+
+  it('folds revisions into the original card while preserving author and position', () => {
+    const html = renderToStaticMarkup(
+      <Timeline
+        events={[
+          { seq: 1, type: 'session.note', payload: { markdown: 'Outdated.', author: 'original@example.com' } },
+          { seq: 2, type: 'session.message', payload: { role: 'assistant', ev: { t: 'text', text: 'After note' } } },
+          { seq: 3, type: 'session.note.updated', payload: { noteId: 1, markdown: '**Corrected.**' } },
+        ]}
+        approvals={new Map()}
+        onDecide={vi.fn()}
+        onAnswer={vi.fn()}
+        onEditNote={vi.fn()}
+      />,
+    );
+    expect(html).toContain('<strong>Corrected.</strong>');
+    expect(html).not.toContain('Outdated.');
+    expect(html).toContain('original@example.com');
+    expect(html).toContain('编辑');
+    expect(html.indexOf('Corrected.')).toBeLessThan(html.indexOf('After note'));
+  });
 });

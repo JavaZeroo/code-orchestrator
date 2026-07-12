@@ -21,3 +21,8 @@ export const sessionNotePayloadSchema = z.object({
   author: z.string().trim().min(1),
 }).strict();
 export type SessionNotePayload = z.infer<typeof sessionNotePayloadSchema>;
+export const sessionNoteRevisionPayloadSchema = z.object({
+  noteId: z.number().int().positive(),
+  markdown: sessionNoteMarkdownSchema,
+}).strict();
+export type SessionNoteRevisionPayload = z.infer<typeof sessionNoteRevisionPayloadSchema>;

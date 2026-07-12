@@ -13,6 +13,11 @@ export const runNotePayloadSchema = z.object({
   author: z.string().trim().min(1),
 }).strict();
 export type RunNotePayload = z.infer<typeof runNotePayloadSchema>;
+export const runNoteRevisionPayloadSchema = z.object({
+  noteId: z.number().int().positive(),
+  markdown: runNoteMarkdownSchema,
+}).strict();
+export type RunNoteRevisionPayload = z.infer<typeof runNoteRevisionPayloadSchema>;
 
 const nodeBase = z.object({
   id: z.string().min(1),

@@ -13,7 +13,7 @@ import { publish } from '../events';
 import { forkSession, ForkError } from '../services/fork';
 import { resumeSession, ResumeError } from '../services/resume';
 import { archiveSession, restoreSession, SessionArchiveError } from '../services/sessionArchive';
-import { appendSessionNote, SessionNoteError } from '../services/sessionNote';
+import { appendSessionNote, reviseSessionNote, SessionNoteError } from '../services/sessionNote';
 import { spawnSession, SpawnError } from '../services/spawn';
 import { ContainerSpawnQueued, spawnContainerSession } from '../services/spawnContainer';
 import { resolveAndSpawn } from '../services/spawnAuto';
@@ -47,6 +47,7 @@ const spawnBodySchema = z.object({
 
 const sendBodySchema = z.object({ text: z.string().min(1), meta: MessageMetaSchema.optional() });
 const createSessionNoteSchema = z.object({ markdown: sessionNoteMarkdownSchema }).strict();
+const noteIdSchema = z.coerce.number().int().positive();
 const renameBodySchema = z.object({ title: z.string().trim().min(1).max(120) }).strict();
 const listSessionsQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
 const decideBodySchema = z.object({ decision: approvalDecisionSchema, decidedBy: z.string().optional() });
@@ -232,6 +233,16 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       author: req.user?.email ?? 'ui',
     });
     void reply.code(201);
+    return { note };
+  });
+
+  app.patch<{ Params: { id: string; noteId: string } }>('/api/sessions/:id/notes/:noteId', async (req) => {
+    requireDb();
+    const body = createSessionNoteSchema.parse(req.body);
+    const note = await reviseSessionNote(req.params.id, {
+      noteId: noteIdSchema.parse(req.params.noteId),
+      markdown: body.markdown,
+    });
     return { note };
   });
 
