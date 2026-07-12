@@ -1,7 +1,8 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, Code2, Download, GitCompare, GitFork, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, Code2, Download, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Send, Square, X } from 'lucide-react';
+import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, type ApprovalRequest, type SessionRow, type SessionUsage, type UserInputAnswers } from './api';
+import { api, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers } from './api';
 import { UnifiedDiff } from './components/DiffView';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
 import { Button } from './components/ui/button';
@@ -246,10 +247,71 @@ export function TranscriptExportAction({
   );
 }
 
+export interface SessionNoteActionDependencies {
+  request(sessionId: string, markdown: string): Promise<{ note: SessionNoteEventRow }>;
+  success(message: string): void;
+  error(message: string): void;
+}
+
+export async function sessionNoteAction(
+  sessionId: string,
+  markdown: string,
+  deps: SessionNoteActionDependencies,
+): Promise<SessionNoteEventRow> {
+  try {
+    const { note } = await deps.request(sessionId, markdown);
+    deps.success('会话备注已添加');
+    return note;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    deps.error(`添加会话备注失败：${detail}`);
+    throw err;
+  }
+}
+
+export function SessionNoteComposer({
+  value,
+  saving,
+  onChange,
+  onSubmit,
+}: {
+  value: string;
+  saving: boolean;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  const empty = value.trim().length === 0;
+  return (
+    <div className="flex gap-2">
+      <Textarea
+        aria-label="会话备注"
+        value={value}
+        rows={2}
+        maxLength={SESSION_NOTE_MAX_LENGTH}
+        placeholder="添加 Markdown 会话备注（不会发送给 Agent）"
+        disabled={saving}
+        className="resize-none"
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !empty && !saving) {
+            event.preventDefault();
+            onSubmit();
+          }
+        }}
+      />
+      <Button variant="outline" size="sm" className="h-auto shrink-0" disabled={saving || empty} onClick={onSubmit}>
+        <NotebookPen size={13} /> {saving ? '保存中…' : '添加备注'}
+      </Button>
+    </div>
+  );
+}
+
 export function SessionView({ session, onForked }: { session: SessionRow; onForked?: (sessionId: string) => void }) {
   const { events, hasEarlier, loadingEarlier, loadEarlier } = useSessionEvents(session.id);
   const { data: machines = [] } = useMachines();
   const [text, setText] = useState('');
+  const [noteText, setNoteText] = useState('');
+  const [addingNote, setAddingNote] = useState(false);
   const fallbackTitle = session.cwd.split('/').pop() || session.cwd;
   const [displayTitle, setDisplayTitle] = useState(session.title ?? fallbackTitle);
   const [titleDraft, setTitleDraft] = useState(displayTitle);
@@ -378,6 +440,20 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
     }
     setText('');
     api.send(session.id, t).catch((e) => toast.error(`发送失败：${e}`));
+  };
+
+  const doAddNote = () => {
+    const markdown = noteText.trim();
+    if (!markdown || addingNote) return;
+    setAddingNote(true);
+    void sessionNoteAction(session.id, markdown, {
+      request: api.addSessionNote,
+      success: toast.success,
+      error: toast.error,
+    })
+      .then(() => setNoteText(''))
+      .catch(() => {})
+      .finally(() => setAddingNote(false));
   };
 
   const doResume = () => {
@@ -549,24 +625,27 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
         </div>
       )}
 
-      <footer className="flex gap-2 border-t border-line bg-bg-2/40 px-4 py-3 backdrop-blur-sm">
-        <Textarea
-          value={text}
-          rows={2}
-          placeholder={forking ? '正在创建分叉会话…' : resuming ? '正在恢复原会话…' : dead ? '会话已结束' : '输入消息，Enter 发送，Shift+Enter 换行'}
-          disabled={dead || resuming || forking}
-          className="resize-none"
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              doSend();
-            }
-          }}
-        />
-        <Button variant="default" size="icon" className="h-auto w-11 shrink-0" disabled={dead || resuming || forking || !text.trim()} onClick={doSend}>
-          <Send size={15} />
-        </Button>
+      <footer className="flex flex-col gap-2 border-t border-line bg-bg-2/40 px-4 py-3 backdrop-blur-sm">
+        <SessionNoteComposer value={noteText} saving={addingNote} onChange={setNoteText} onSubmit={doAddNote} />
+        <div className="flex gap-2">
+          <Textarea
+            value={text}
+            rows={2}
+            placeholder={forking ? '正在创建分叉会话…' : resuming ? '正在恢复原会话…' : dead ? '会话已结束' : '输入消息，Enter 发送，Shift+Enter 换行'}
+            disabled={dead || resuming || forking}
+            className="resize-none"
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                doSend();
+              }
+            }}
+          />
+          <Button variant="default" size="icon" className="h-auto w-11 shrink-0" disabled={dead || resuming || forking || !text.trim()} onClick={doSend}>
+            <Send size={15} />
+          </Button>
+        </div>
       </footer>
 
       <DiffDialog sessionId={session.id} open={showDiff} onOpenChange={setShowDiff} />

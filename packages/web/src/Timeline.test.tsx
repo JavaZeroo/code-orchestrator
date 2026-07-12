@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { ApprovalCard } from './Timeline';
+import { ApprovalCard, SessionNoteCard, Timeline } from './Timeline';
 
 describe('ApprovalCard', () => {
   it('renders Codex questions as answer controls instead of a generic approval', () => {
@@ -43,5 +43,32 @@ describe('ApprovalCard', () => {
     expect(html).toContain('type="text"');
     expect(html).toContain('提交回答');
     expect(html).toContain('忽略');
+  });
+});
+
+describe('standalone session notes', () => {
+  it('renders authored Markdown notes in chronological timeline order', () => {
+    const html = renderToStaticMarkup(
+      <Timeline
+        events={[
+          { seq: 2, type: 'session.note', payload: { markdown: '**Handoff** details.', author: 'operator@example.com' } },
+          { seq: 1, type: 'session.message', payload: { role: 'assistant', ev: { t: 'text', text: 'Before note' } } },
+        ]}
+        approvals={new Map()}
+        onDecide={vi.fn()}
+        onAnswer={vi.fn()}
+      />,
+    );
+    expect(html).toContain('会话备注');
+    expect(html).toContain('operator@example.com');
+    expect(html).toContain('<strong>Handoff</strong> details.');
+    expect(html.indexOf('Before note')).toBeLessThan(html.indexOf('会话备注'));
+  });
+
+  it('renders a standalone note card', () => {
+    const html = renderToStaticMarkup(
+      <SessionNoteCard note={{ markdown: 'Durable context.', author: 'operator@example.com' }} />,
+    );
+    expect(html).toContain('Durable context.');
   });
 });

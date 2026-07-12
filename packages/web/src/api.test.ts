@@ -161,6 +161,23 @@ describe('api client', () => {
     });
   });
 
+  it('appends Markdown notes to an encoded standalone session resource', async () => {
+    const note = {
+      seq: 18,
+      type: 'session.note',
+      sessionId: 'session/1',
+      payload: { markdown: '**Handoff** context.', author: 'operator@example.com' },
+    };
+    const fetch = mockFetch(Response.json({ note }, { status: 201 }));
+
+    await expect(api.addSessionNote('session/1', '**Handoff** context.')).resolves.toEqual({ note });
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2F1/notes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ markdown: '**Handoff** context.' }),
+    });
+  });
+
   it('lists archived sessions separately and posts archive state changes', async () => {
     const archivedAt = '2026-07-11T04:00:00.000Z';
     const fetch = vi

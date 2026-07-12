@@ -6,13 +6,14 @@
 import type { FastifyInstance } from 'fastify';
 import { and, asc, desc, eq, gt, isNotNull, isNull, lt } from 'drizzle-orm';
 import * as z from 'zod';
-import { approvalDecisionSchema, MessageMetaSchema, sessionAgentSchema } from '@co/protocol';
+import { approvalDecisionSchema, MessageMetaSchema, sessionAgentSchema, sessionNoteMarkdownSchema } from '@co/protocol';
 import { getDb, hasDb, schema } from '../db/index';
 import { decideGate } from '../engine/engine';
 import { publish } from '../events';
 import { forkSession, ForkError } from '../services/fork';
 import { resumeSession, ResumeError } from '../services/resume';
 import { archiveSession, restoreSession, SessionArchiveError } from '../services/sessionArchive';
+import { appendSessionNote, SessionNoteError } from '../services/sessionNote';
 import { spawnSession, SpawnError } from '../services/spawn';
 import { ContainerSpawnQueued, spawnContainerSession } from '../services/spawnContainer';
 import { resolveAndSpawn } from '../services/spawnAuto';
@@ -45,6 +46,7 @@ const spawnBodySchema = z.object({
 });
 
 const sendBodySchema = z.object({ text: z.string().min(1), meta: MessageMetaSchema.optional() });
+const createSessionNoteSchema = z.object({ markdown: sessionNoteMarkdownSchema }).strict();
 const renameBodySchema = z.object({ title: z.string().trim().min(1).max(120) }).strict();
 const listSessionsQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
 const decideBodySchema = z.object({ decision: approvalDecisionSchema, decidedBy: z.string().optional() });
@@ -74,7 +76,8 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       err instanceof SpawnError ||
       err instanceof ResumeError ||
       err instanceof ForkError ||
-      err instanceof SessionArchiveError
+      err instanceof SessionArchiveError ||
+      err instanceof SessionNoteError
     ) {
       void reply.code(err.statusCode).send({ error: err.message });
       return;
@@ -219,6 +222,17 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       throw new HttpError(502, result.error ?? 'send failed');
     }
     return { ok: true };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/sessions/:id/notes', async (req, reply) => {
+    requireDb();
+    const body = createSessionNoteSchema.parse(req.body);
+    const note = await appendSessionNote(req.params.id, {
+      markdown: body.markdown,
+      author: req.user?.email ?? 'ui',
+    });
+    void reply.code(201);
+    return { note };
   });
 
   app.post<{ Params: { id: string } }>('/api/sessions/:id/kill', async (req) => {
