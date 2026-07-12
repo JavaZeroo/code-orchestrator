@@ -306,6 +306,18 @@ describe('api client', () => {
     });
   });
 
+  it('submits approval rejection feedback through the approval endpoint', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, status: 'denied' }));
+
+    await api.decide('approval-1', 'deny', 'Change the deployment target.');
+
+    expect(fetch).toHaveBeenCalledWith('/api/approvals/approval-1/decide', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: { behavior: 'deny', message: 'Change the deployment target.' } }),
+    });
+  });
+
   it('requests a GitCode CI retest for the encoded tracked ref', async () => {
     const fetch = mockFetch(Response.json({ ok: true, confirmation: 'pending' }));
 

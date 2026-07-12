@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import type { ApprovalRequest, EventRow, SessionEnvelope, SessionNotePayload, UserInputAnswers } from './api';
 import { Markdown } from './components/Markdown';
 import { TextDiff } from './components/DiffView';
+import { RejectionFeedback, type ApprovalDecisionHandler } from './components/RejectionFeedback';
 import { Button } from './components/ui/button';
 import { Badge, Input, Textarea } from './components/ui/primitives';
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
@@ -271,7 +272,7 @@ export function ApprovalCard({
   onAnswer,
 }: {
   item: ApprovalItem;
-  onDecide: (id: string, b: 'allow' | 'deny') => void;
+  onDecide: ApprovalDecisionHandler;
   onAnswer: (id: string, answers: UserInputAnswers) => void;
 }) {
   if (isCodexUserInputRequest(item.request)) {
@@ -319,13 +320,11 @@ export function ApprovalCard({
         </pre>
       )}
       {status === 'pending' && (
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="success" size="sm" onClick={() => onDecide(request.id, 'allow')}>
             批准
           </Button>
-          <Button variant="danger" size="sm" onClick={() => onDecide(request.id, 'deny')}>
-            拒绝
-          </Button>
+          <RejectionFeedback approvalId={request.id} onDecide={onDecide} />
         </div>
       )}
     </div>
@@ -476,7 +475,7 @@ export function Timeline({
 }: {
   events: EventRow[];
   approvals: Map<string, ApprovalItem>;
-  onDecide: (id: string, b: 'allow' | 'deny') => void;
+  onDecide: ApprovalDecisionHandler;
   onAnswer: (id: string, answers: UserInputAnswers) => void;
   onEditNote?: (noteId: number, markdown: string) => Promise<void>;
   cwd?: string;

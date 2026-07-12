@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers } from './api';
 import { UnifiedDiff } from './components/DiffView';
+import { RejectionFeedback, type ApprovalDecisionHandler } from './components/RejectionFeedback';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
 import { Button } from './components/ui/button';
 import { Badge, StatusDot, Textarea, type BadgeTone } from './components/ui/primitives';
@@ -415,8 +416,9 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
     else toast.error(String(error));
   };
 
-  const decide = (id: string, behavior: 'allow' | 'deny') =>
-    api.decide(id, behavior).catch(handleApprovalError);
+  const decide: ApprovalDecisionHandler = (id, behavior, message) => {
+    void api.decide(id, behavior, message).catch(handleApprovalError);
+  };
 
   const answer = (id: string, answers: UserInputAnswers) => api.answer(id, answers).catch(handleApprovalError);
 
@@ -622,12 +624,12 @@ export function SessionView({ session, onForked }: { session: SessionRow; onFork
               : typeof input.file_path === 'string' ? input.file_path
               : '';
             return (
-              <div key={request.id} className="flex items-center gap-2">
+              <div key={request.id} className="flex flex-wrap items-center gap-2">
                 <Badge tone="warn">待审批</Badge>
                 <span className="shrink-0 text-xs font-medium text-ink">{request.title}</span>
                 <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-dim" title={preview}>{preview}</span>
                 <Button variant="success" size="sm" onClick={() => void decide(request.id, 'allow')}>批准</Button>
-                <Button variant="danger" size="sm" onClick={() => void decide(request.id, 'deny')}>拒绝</Button>
+                <RejectionFeedback approvalId={request.id} onDecide={decide} />
               </div>
             );
           })}

@@ -5,6 +5,7 @@ import { api, type ApprovalRow, type ForgeRefRow, type NodeStateRow, type RunNot
 import { FlowGraph } from './FlowGraph';
 import { RunTimeline } from './RunTimeline';
 import { Markdown } from './components/Markdown';
+import { RejectionFeedback, type ApprovalDecisionHandler } from './components/RejectionFeedback';
 import { Button } from './components/ui/button';
 import { Badge, StatusDot, type BadgeTone } from './components/ui/primitives';
 import { invalidate } from './lib/queries';
@@ -390,8 +391,8 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
     : effectiveDef?.name ?? runId;
 
   // 共享的 decide 处理
-  const handleDecide = useCallback((id: string, b: 'allow' | 'deny') => {
-    api.decide(id, b)
+  const handleDecide: ApprovalDecisionHandler = useCallback((id, behavior, message) => {
+    api.decide(id, behavior, message)
       .then(() => {
         if (mode === 'graph') refreshGraph();
         else refreshThread();
@@ -661,13 +662,11 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
                 </Button>
               )}
               {gate && selState?.status === 'waiting_human' && (
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button variant="success" size="sm" onClick={() => handleDecide(gate.id, 'allow')}>
                     批准通过
                   </Button>
-                  <Button variant="danger" size="sm" onClick={() => handleDecide(gate.id, 'deny')}>
-                    拒绝
-                  </Button>
+                  <RejectionFeedback approvalId={gate.id} onDecide={handleDecide} />
                 </div>
               )}
             </div>
