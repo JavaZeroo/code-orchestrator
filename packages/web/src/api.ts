@@ -96,6 +96,17 @@ export interface WorkspaceListing {
   truncated: boolean;
 }
 
+export interface WorkspaceSearchMatch {
+  path: string;
+  type: 'file' | 'directory';
+  size?: number;
+}
+
+export interface WorkspaceSearchResult {
+  matches: WorkspaceSearchMatch[];
+  truncated: boolean;
+}
+
 export const WORKSPACE_TEXT_PREVIEW_MAX_BYTES = 512 * 1024;
 
 export type WorkspaceTextPreview =
@@ -512,6 +523,9 @@ export const api = {
   workspaceFiles: (sessionId: string, path = '') =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/list?path=${encodeURIComponent(path)}`)
       .then((r) => j<WorkspaceListing>(r)),
+  searchWorkspaceFiles: (sessionId: string, query: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/search?q=${encodeURIComponent(query)}`)
+      .then((r) => j<WorkspaceSearchResult>(r)),
   uploadWorkspaceFile: (sessionId: string, path: string, file: Blob) =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`, {
       method: 'POST',

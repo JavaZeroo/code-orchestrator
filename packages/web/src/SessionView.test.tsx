@@ -18,6 +18,7 @@ import {
   WorkspaceBrowserEntries,
   WorkspaceCreateFolderAction,
   WorkspaceFilePreview,
+  WorkspaceSearchResults,
   WorkspaceUploadAction,
   uploadSelectedWorkspaceFile,
   createNamedWorkspaceFolder,
@@ -27,6 +28,7 @@ import {
   WORKSPACE_UPLOAD_MAX_BYTES,
   workspaceChildPath,
   workspaceParentPath,
+  workspaceSearchTarget,
   downloadSessionArtifact,
   deleteConfirmedWorkspaceEntry,
 } from './SessionView';
@@ -190,6 +192,24 @@ describe('SessionView artifact download action', () => {
     expect(markup).toContain('删除 reports');
     expect(markup).toContain('重命名 reports');
     expect(markup).toContain('重命名 result.bin');
+  });
+
+  it('renders recursive search paths that can be opened directly', () => {
+    const onSelect = vi.fn();
+    const matches = [
+      { path: 'reports/archive', type: 'directory' as const },
+      { path: 'reports/final.md', type: 'file' as const, size: 42 },
+    ];
+    const markup = renderToStaticMarkup(
+      <WorkspaceSearchResults matches={matches} disabled={false} onSelect={onSelect} />,
+    );
+    expect(markup).toContain('reports/archive');
+    expect(markup).toContain('reports/final.md');
+    expect(markup).toContain('42 B');
+    expect(workspaceSearchTarget(matches[0]!)).toEqual({ kind: 'directory', path: 'reports/archive' });
+    expect(workspaceSearchTarget(matches[1]!)).toEqual({
+      kind: 'file', path: 'reports/final.md', entry: { name: 'final.md', type: 'file', size: 42 },
+    });
   });
 
   it('renames a file or folder with a single-entry name', async () => {

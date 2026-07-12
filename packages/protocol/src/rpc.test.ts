@@ -93,6 +93,24 @@ describe('runnerMethods contracts', () => {
     })).toMatchObject({ entries: [{ type: 'directory' }, { type: 'file', size: 42 }] });
   });
 
+  it('validates bounded workspace filename searches for host and container sessions', () => {
+    expect(runnerMethods['workspace.search'].params.parse({ root: '/work', query: ' report ' }))
+      .toEqual({ root: '/work', query: 'report' });
+    expect(runnerMethods['workspace.search'].params.parse({ root: '/workspace', query: 'model', containerId: 'c1' }))
+      .toEqual({ root: '/workspace', query: 'model', containerId: 'c1' });
+    expect(() => runnerMethods['workspace.search'].params.parse({ root: '/work', query: ' ' })).toThrow();
+    expect(runnerMethods['workspace.search'].result.parse({
+      ok: true,
+      matches: [{ path: 'reports/final.md', type: 'file', size: 42 }, { path: 'reports/archive', type: 'directory' }],
+      truncated: false,
+    })).toMatchObject({ matches: [{ type: 'file', size: 42 }, { type: 'directory' }] });
+    expect(() => runnerMethods['workspace.search'].result.parse({
+      ok: true,
+      matches: Array.from({ length: 101 }, (_, index) => ({ path: `match-${index}`, type: 'file' })),
+      truncated: true,
+    })).toThrow();
+  });
+
   it('accepts containerized session.spawn parameters', () => {
     const parsed = runnerMethods['session.spawn'].params.parse({
       sessionId: 's1',

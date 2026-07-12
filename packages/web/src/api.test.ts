@@ -97,6 +97,13 @@ describe('api client', () => {
     expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files/list?path=reports%2Ffinal');
   });
 
+  it('requests an encoded recursive workspace filename search', async () => {
+    const result = { matches: [{ path: 'reports/final report.md', type: 'file', size: 42 }], truncated: false };
+    const fetch = mockFetch(Response.json(result));
+    await expect(api.searchWorkspaceFiles('session/one', 'final report')).resolves.toEqual(result);
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files/search?q=final%20report');
+  });
+
   it('uploads exact file bytes to an encoded workspace destination', async () => {
     const fetch = mockFetch(Response.json({ ok: true, path: 'reports/raw.bin', size: 4 }));
     const file = new Blob([new Uint8Array([0, 1, 128, 255])]);

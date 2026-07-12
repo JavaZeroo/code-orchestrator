@@ -2629,6 +2629,14 @@ describeSt('server ST: API + runner websocket', () => {
           truncated: false,
         };
       },
+      'workspace.search': (params) => {
+        expect(params).toEqual({ root: '/tmp/artifact-work', query: 'result', containerId: 'artifact-container' });
+        return {
+          ok: true,
+          matches: [{ path: 'out/result.bin', type: 'file', size: bytes.length }],
+          truncated: false,
+        };
+      },
       'workspace.read': (params) => {
         expect(params).toEqual({ root: '/tmp/artifact-work', path: 'out/result.bin', containerId: 'artifact-container' });
         return { ok: true, basename: 'result.bin', size: bytes.length, data: bytes.toString('base64') };
@@ -2675,6 +2683,10 @@ describeSt('server ST: API + runner websocket', () => {
       method: 'GET', url: '/api/sessions/session-artifact-st/files/list?path=', headers: { host: 'localhost:7620' },
     });
     expect(unauthorizedListing.statusCode).toBe(401);
+    const unauthorizedSearch = await app!.inject({
+      method: 'GET', url: '/api/sessions/session-artifact-st/files/search?q=result', headers: { host: 'localhost:7620' },
+    });
+    expect(unauthorizedSearch.statusCode).toBe(401);
     const unauthorized = await app!.inject({
       method: 'GET', url: '/api/sessions/session-artifact-st/files?path=out%2Fresult.bin', headers: { host: 'localhost:7620' },
     });
@@ -2714,6 +2726,16 @@ describeSt('server ST: API + runner websocket', () => {
     expect(listing.json()).toEqual({
       path: '',
       entries: [{ name: 'out', type: 'directory' }, { name: 'summary.txt', type: 'file', size: 12 }],
+      truncated: false,
+    });
+    const search = await app!.inject({
+      method: 'GET',
+      url: '/api/sessions/session-artifact-st/files/search?q=result',
+      headers: { host: 'localhost:7620', cookie },
+    });
+    expect(search.statusCode).toBe(200);
+    expect(search.json()).toEqual({
+      matches: [{ path: 'out/result.bin', type: 'file', size: bytes.length }],
       truncated: false,
     });
     const downloaded = await app!.inject({
@@ -2761,6 +2783,7 @@ describeSt('server ST: API + runner websocket', () => {
       root: '/tmp/artifact-work', path: 'out/draft', newName: 'final', containerId: 'artifact-container',
     });
     expect(runner.calls.some((call) => call.method === 'workspace.list')).toBe(true);
+    expect(runner.calls.some((call) => call.method === 'workspace.search')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.read')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.write')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.delete')).toBe(true);

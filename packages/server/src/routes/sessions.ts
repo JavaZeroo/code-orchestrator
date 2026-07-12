@@ -53,6 +53,7 @@ const listSessionsQuerySchema = z.object({ archived: z.enum(['true', 'false']).d
 const decideBodySchema = z.object({ decision: approvalDecisionSchema, decidedBy: z.string().optional() });
 const workspaceFileQuerySchema = z.object({ path: z.string().min(1) });
 const workspaceListQuerySchema = z.object({ path: z.string().default('') });
+const workspaceSearchQuerySchema = z.object({ q: z.string().trim().min(1).max(100) });
 const workspaceRenameBodySchema = z.object({ name: z.string().min(1) }).strict();
 const WORKSPACE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const EVENT_PAGE_SIZE = 2000;
@@ -392,6 +393,21 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       throw new HttpError(400, result.error ?? 'workspace directory unavailable');
     }
     return { path: result.path, entries: result.entries, truncated: result.truncated };
+  });
+
+  /** Recursively search bounded workspace filenames so operators can jump directly to nested entries. */
+  app.get<{ Params: { id: string }; Querystring: { q?: string } }>('/api/sessions/:id/files/search', async (req) => {
+    const session = await findSession(req.params.id);
+    const { q } = workspaceSearchQuerySchema.parse(req.query);
+    const result = await callRunner(session.machineId, 'workspace.search', {
+      root: session.cwd,
+      query: q,
+      containerId: session.containerId ?? undefined,
+    });
+    if (!result.ok || result.matches === undefined || result.truncated === undefined) {
+      throw new HttpError(400, result.error ?? 'workspace search unavailable');
+    }
+    return { matches: result.matches, truncated: result.truncated };
   });
 
   app.get<{ Params: { id: string }; Querystring: { before?: string; since?: string } }>(
