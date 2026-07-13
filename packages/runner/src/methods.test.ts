@@ -25,6 +25,13 @@ describe('createRunnerMethodHandler', () => {
     expect(result).toEqual({ exitCode: 7, stdout: '', stderr: 'bad' });
   });
 
+  it('dispatches workspace.patch through the Git patch generator', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-patch-'));
+    const result = await handler()('workspace.patch', { root }) as { ok: boolean; error?: string };
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('not a git repository');
+  });
+
   it('dispatches workspace.read through the bounded file reader', async () => {
     const root = await mkdtemp(join(tmpdir(), 'co-method-file-'));
     await writeFile(join(root, 'answer.txt'), 'runner bytes');

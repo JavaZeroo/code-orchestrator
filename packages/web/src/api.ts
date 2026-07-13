@@ -446,6 +446,24 @@ async function ok(r: Response): Promise<Response> {
 const post = (url: string, body: unknown) =>
   fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
+export async function downloadSessionPatch(
+  sessionId: string,
+  request: (id: string) => Promise<Response> = (id) => api.sessionPatch(id),
+  download: (blob: Blob, filename: string) => void = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  },
+): Promise<void> {
+  const response = await request(sessionId);
+  const encoded = response.headers.get('content-disposition')?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const filename = encoded ? decodeURIComponent(encoded) : `${sessionId}.patch`;
+  download(await response.blob(), filename);
+}
+
 export interface LlmProviderRow {
   id: string;
   name: string;
@@ -564,6 +582,8 @@ export const api = {
   interrupt: (sessionId: string) => post(`/api/sessions/${sessionId}/interrupt`, {}).then((r) => j(r)),
   sessionDiff: (sessionId: string) =>
     fetch(`/api/sessions/${sessionId}/diff`).then((r) => j<{ ok: boolean; stat?: string; diff?: string; error?: string }>(r)),
+  sessionPatch: (sessionId: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/patch`).then(ok),
   workspaceFile: (sessionId: string, path: string) =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`).then(ok),
   workspaceArchive: (sessionId: string, path: string) =>

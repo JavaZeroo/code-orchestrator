@@ -7,6 +7,7 @@ import {
   isSessionResumable,
   LoadEarlierAction,
   normalizeSessionTitle,
+  PatchDownloadAction,
   ResumeAction,
   SESSION_TITLE_MAX_LENGTH,
   sessionArchiveMode,
@@ -170,6 +171,17 @@ describe('SessionView transcript export action', () => {
     expect(ready).not.toContain('disabled=""');
     expect(exporting).toContain('disabled=""');
     expect(exporting).toContain('导出中…');
+  });
+});
+
+describe('SessionView patch download action', () => {
+  it('labels the new action and prevents duplicate downloads', () => {
+    const ready = renderToStaticMarkup(<PatchDownloadAction downloading={false} onDownload={vi.fn()} />);
+    const downloading = renderToStaticMarkup(<PatchDownloadAction downloading onDownload={vi.fn()} />);
+    expect(ready).toContain('下载补丁');
+    expect(ready).not.toContain('disabled=""');
+    expect(downloading).toContain('下载中…');
+    expect(downloading).toContain('disabled=""');
   });
 });
 

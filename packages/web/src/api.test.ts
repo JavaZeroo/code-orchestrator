@@ -3,6 +3,7 @@ import {
   api,
   decodeWorkspaceImagePreview,
   decodeWorkspaceTextPreview,
+  downloadSessionPatch,
   isWorkspaceImagePreviewCandidate,
   workspaceImageMimeType,
   WORKSPACE_IMAGE_PREVIEW_MAX_BYTES,
@@ -76,6 +77,32 @@ describe('api client', () => {
     const fetch = mockFetch(response);
     await expect(api.workspaceFile('session/one', 'reports/final result.bin')).resolves.toBe(response);
     expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files?path=reports%2Ffinal%20result.bin');
+  });
+
+  it('constructs an encoded session patch request', async () => {
+    const response = new Response('patch bytes');
+    const fetch = mockFetch(response);
+    await expect(api.sessionPatch('session/one')).resolves.toBe(response);
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/patch');
+  });
+
+  it('downloads patch bytes using the attachment filename', async () => {
+    const anchor = { href: '', download: '', click: vi.fn() };
+    const createObjectURL = vi.fn().mockReturnValue('blob:session-patch');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });
+    vi.stubGlobal('document', { createElement: vi.fn().mockReturnValue(anchor) });
+    const request = vi.fn().mockResolvedValue(new Response('patch bytes', {
+      headers: { 'content-disposition': "attachment; filename*=UTF-8''Fix%20login.patch" },
+    }));
+
+    await downloadSessionPatch('session-1', request);
+
+    expect(request).toHaveBeenCalledWith('session-1');
+    expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    expect(anchor).toMatchObject({ href: 'blob:session-patch', download: 'Fix login.patch' });
+    expect(anchor.click).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:session-patch');
   });
 
   it('constructs an encoded workspace directory archive request', async () => {
