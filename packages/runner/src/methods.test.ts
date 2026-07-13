@@ -48,6 +48,19 @@ describe('createRunnerMethodHandler', () => {
     expect(Buffer.from(result.data, 'base64')).toHaveLength(result.size);
   });
 
+  it('dispatches workspace.extract through the bounded archive extractor', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-extract-'));
+    await import('node:fs/promises').then(({ mkdir }) => mkdir(join(root, 'source')));
+    await writeFile(join(root, 'source', 'answer.txt'), 'runner bytes');
+    const archive = await handler()('workspace.archive', { root, path: 'source' }) as { data: string };
+    await writeFile(join(root, 'source.tar.gz'), Buffer.from(archive.data, 'base64'));
+    await import('node:fs/promises').then(({ rm }) => rm(join(root, 'source'), { recursive: true }));
+
+    await expect(handler()('workspace.extract', { root, path: 'source.tar.gz' }))
+      .resolves.toEqual({ ok: true, entries: 2 });
+    await expect(readFile(join(root, 'source', 'answer.txt'), 'utf8')).resolves.toBe('runner bytes');
+  });
+
   it('dispatches workspace.write through the confined binary writer', async () => {
     const root = await mkdtemp(join(tmpdir(), 'co-method-write-'));
     const bytes = Buffer.from([0, 128, 255]);

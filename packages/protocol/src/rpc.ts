@@ -176,6 +176,19 @@ export const runnerMethods = {
       error: z.string().optional(),
     }),
   },
+  /** Extract one bounded gzip-compressed tar archive beside the selected workspace file. */
+  'workspace.extract': {
+    params: z.object({
+      root: z.string().min(1),
+      path: z.string().min(1),
+      containerId: z.string().min(1).optional(),
+    }),
+    result: z.object({
+      ok: z.boolean(),
+      entries: z.number().int().nonnegative().max(1_000).optional(),
+      error: z.string().optional(),
+    }),
+  },
   /** Write one bounded regular file beneath a session workspace. Payloads are capped at 10 MiB. */
   'workspace.write': {
     params: z.object({

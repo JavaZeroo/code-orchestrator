@@ -568,6 +568,10 @@ export const api = {
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`).then(ok),
   workspaceArchive: (sessionId: string, path: string) =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/archive?path=${encodeURIComponent(path)}`).then(ok),
+  extractWorkspaceArchive: (sessionId: string, path: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/extract?path=${encodeURIComponent(path)}`, {
+      method: 'POST',
+    }).then((r) => j<{ ok: true; path: string; entries: number }>(r)),
   workspaceTextPreview: (sessionId: string, path: string) =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`)
       .then(ok)

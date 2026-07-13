@@ -343,6 +343,21 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       .send(data);
   });
 
+  /** Extract one bounded .tar.gz archive into its current host or container workspace directory. */
+  app.post<{ Params: { id: string }; Querystring: { path?: string } }>('/api/sessions/:id/files/extract', async (req) => {
+    const session = await findSession(req.params.id);
+    const { path } = workspaceFileQuerySchema.parse(req.query);
+    const result = await callRunner(session.machineId, 'workspace.extract', {
+      root: session.cwd,
+      path,
+      containerId: session.containerId ?? undefined,
+    });
+    if (!result.ok || result.entries === undefined) {
+      throw new HttpError(400, result.error ?? 'workspace archive extraction failed');
+    }
+    return { ok: true, path, entries: result.entries };
+  });
+
   /** Upload one bounded file into the host or container session workspace. */
   app.post<{ Params: { id: string }; Querystring: { path?: string }; Body: Buffer }>('/api/sessions/:id/files', {
     bodyLimit: WORKSPACE_UPLOAD_MAX_BYTES,

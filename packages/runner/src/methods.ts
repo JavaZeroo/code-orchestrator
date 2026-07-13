@@ -9,6 +9,7 @@ import { containerExec, containerRm, containerRun } from './container';
 import { ContainerSession } from './container-agent/container-session';
 import { readWorkspaceFile } from './workspaceFile';
 import { archiveWorkspaceDirectory } from './workspaceArchive';
+import { extractWorkspaceArchive } from './workspaceExtract';
 import { listWorkspaceDirectory } from './workspaceList';
 import { writeWorkspaceFile } from './workspaceWrite';
 import { chmodWorkspaceFile } from './workspaceChmod';
@@ -123,6 +124,9 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
       }
       case 'workspace.archive': {
         return archiveWorkspaceDirectory(runnerMethods['workspace.archive'].params.parse(params));
+      }
+      case 'workspace.extract': {
+        return extractWorkspaceArchive(runnerMethods['workspace.extract'].params.parse(params));
       }
       case 'workspace.write': {
         return writeWorkspaceFile(runnerMethods['workspace.write'].params.parse(params));

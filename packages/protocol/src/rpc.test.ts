@@ -60,6 +60,17 @@ describe('runnerMethods contracts', () => {
     })).toThrow();
   });
 
+  it('validates bounded workspace archive extraction for host and container sessions', () => {
+    expect(runnerMethods['workspace.extract'].params.parse({ root: '/work', path: 'out/reports.tar.gz' })).toEqual({
+      root: '/work', path: 'out/reports.tar.gz',
+    });
+    expect(runnerMethods['workspace.extract'].params.parse({
+      root: '/workspace', path: 'reports.tar.gz', containerId: 'c1',
+    })).toMatchObject({ containerId: 'c1' });
+    expect(() => runnerMethods['workspace.extract'].params.parse({ root: '/work', path: '' })).toThrow();
+    expect(() => runnerMethods['workspace.extract'].result.parse({ ok: true, entries: 1_001 })).toThrow();
+  });
+
   it('validates bounded workspace file writes for host and container sessions', () => {
     const data = Buffer.from([0, 1, 255]).toString('base64');
     expect(runnerMethods['workspace.write'].params.parse({ root: '/work', path: 'out/result.bin', data, size: 3 }))
