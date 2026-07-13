@@ -3,8 +3,9 @@
  * 基本信息（可编辑）/ 自动化栏（触发器+编排）/ 机器物化状态 / 编排编辑器二级入口。
  */
 
-import { Archive, ArchiveRestore, ChevronDown, ExternalLink, MessageCircle, Play, Plus, RefreshCw, Rocket, Star, Trash2, Workflow as WorkflowIcon, Pencil } from 'lucide-react';
-import { useState } from 'react';
+import { workflowDefSchema, type WorkflowDef } from '@co/protocol';
+import { Archive, ArchiveRestore, ChevronDown, ExternalLink, MessageCircle, Play, Plus, RefreshCw, Rocket, Star, Trash2, Upload, Workflow as WorkflowIcon, Pencil } from 'lucide-react';
+import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { CreateTriggerBody, ForgeKind, ProjectRow, RequirementRow, TriggerRow, WorkflowDefRow } from './api';
 import { api, type Autonomy, type MaterializationRow } from './api';
@@ -444,6 +445,63 @@ function ArchivedDefCard({ def }: { def: WorkflowDefRow }) {
   );
 }
 
+export function parseWorkflowTemplateJson(contents: string): WorkflowDef {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(contents);
+  } catch {
+    throw new Error('导入文件不是有效的 JSON');
+  }
+
+  const result = workflowDefSchema.safeParse(parsed);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    const location = issue?.path.length ? `（${issue.path.join('.')}）` : '';
+    throw new Error(`导入文件不符合流水线定义${location}${issue ? `：${issue.message}` : ''}`);
+  }
+  return result.data;
+}
+
+export async function importWorkflowTemplateFile(
+  projectId: string,
+  file: Pick<File, 'text'>,
+  createWorkflow: typeof api.createWorkflow = api.createWorkflow,
+  refreshWorkflows: () => void = () => invalidate('workflows'),
+): Promise<WorkflowDef> {
+  const graph = parseWorkflowTemplateJson(await file.text());
+  await createWorkflow(graph, 'manual', projectId);
+  refreshWorkflows();
+  return graph;
+}
+
+export function WorkflowImportAction({
+  importing,
+  onFile,
+}: {
+  importing: boolean;
+  onFile: (file: File) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return <>
+    <Button type="button" variant="secondary" size="sm" disabled={importing} onClick={() => inputRef.current?.click()}>
+      <Upload size={13} /> {importing ? '导入中…' : '导入 JSON'}
+    </Button>
+    <input
+      ref={inputRef}
+      type="file"
+      accept="application/json,.json"
+      aria-label="选择流水线 JSON 文件"
+      className="hidden"
+      disabled={importing}
+      onChange={(event) => {
+        const file = event.currentTarget.files?.[0];
+        event.currentTarget.value = '';
+        if (file) onFile(file);
+      }}
+    />
+  </>;
+}
+
 /* ──────── 机器物化状态行 ──────── */
 
 const MATERIALIZATION_TONE: Record<MaterializationRow['status'], BadgeTone> = {
@@ -668,14 +726,26 @@ export function ProjectPipelinesSection({
   const defs = allDefs.filter((d) => d.projectId === project.id);
   const activeDefs = defs.filter((d) => d.archived !== 'yes');
   const archivedDefs = defs.filter((d) => d.archived === 'yes');
+  const [importing, setImporting] = useState(false);
+
+  const importFile = (file: File) => {
+    setImporting(true);
+    importWorkflowTemplateFile(project.id, file)
+      .then((graph) => toast.success(`已导入流水线「${graph.name}」`))
+      .catch((e) => toast.error(String(e instanceof Error ? e.message : e)))
+      .finally(() => setImporting(false));
+  };
 
   return (
     <section className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <p className="text-xs text-dim">项目的自动化流程。Composer「走流水线」与 issue/定时触发器都从这里取定义；星标为默认。</p>
-        <Button variant="default" size="sm" className="shrink-0" onClick={() => onOpenDesigner()}>
-          <MessageCircle size={14} /> 对话编排新流水线
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <WorkflowImportAction importing={importing} onFile={importFile} />
+          <Button variant="default" size="sm" onClick={() => onOpenDesigner()}>
+            <MessageCircle size={14} /> 对话编排新流水线
+          </Button>
+        </div>
       </div>
       <div className="flex flex-col gap-2">
         {activeDefs.length === 0 && archivedDefs.length === 0 ? (
