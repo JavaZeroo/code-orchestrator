@@ -14,6 +14,7 @@ import { deleteWorkspaceFile } from './workspaceDelete';
 import { createWorkspaceDirectory } from './workspaceMkdir';
 import { renameWorkspaceEntry } from './workspaceRename';
 import { searchWorkspace } from './workspaceSearch';
+import { searchWorkspaceContent } from './workspaceContentSearch';
 
 const EXEC_DEFAULT_TIMEOUT_MS = 60_000;
 const EXEC_MAX_BUFFER = 10 * 1024 * 1024;
@@ -133,6 +134,9 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
       }
       case 'workspace.search': {
         return searchWorkspace(runnerMethods['workspace.search'].params.parse(params));
+      }
+      case 'workspace.searchContent': {
+        return searchWorkspaceContent(runnerMethods['workspace.searchContent'].params.parse(params));
       }
       case 'container.run': {
         return containerRun(runnerMethods['container.run'].params.parse(params));

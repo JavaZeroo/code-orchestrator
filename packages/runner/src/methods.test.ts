@@ -66,6 +66,14 @@ describe('createRunnerMethodHandler', () => {
     });
   });
 
+  it('dispatches workspace.searchContent through bounded file content search', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-content-search-'));
+    await writeFile(join(root, 'answer.txt'), 'first\nrunner NEEDLE bytes');
+    await expect(handler()('workspace.searchContent', { root, query: 'needle' })).resolves.toEqual({
+      ok: true, matches: [{ path: 'answer.txt', line: 2, preview: 'runner NEEDLE bytes' }], truncated: false,
+    });
+  });
+
   it('dispatches workspace.delete through the confined file deleter', async () => {
     const root = await mkdtemp(join(tmpdir(), 'co-method-delete-'));
     await writeFile(join(root, 'answer.txt'), 'runner bytes');

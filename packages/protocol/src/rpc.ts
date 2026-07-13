@@ -250,6 +250,24 @@ export const runnerMethods = {
       error: z.string().optional(),
     }),
   },
+  /** Search literal text inside workspace files without following symlinks. */
+  'workspace.searchContent': {
+    params: z.object({
+      root: z.string().min(1),
+      query: z.string().trim().min(1).max(100),
+      containerId: z.string().min(1).optional(),
+    }),
+    result: z.object({
+      ok: z.boolean(),
+      matches: z.array(z.object({
+        path: z.string().min(1),
+        line: z.number().int().positive(),
+        preview: z.string().max(300),
+      })).max(100).optional(),
+      truncated: z.boolean().optional(),
+      error: z.string().optional(),
+    }),
+  },
   /** 容器生命周期（design-v2 Q3，M1 substrate）：co 拥有容器——起/执行/销毁。
    *  devices/gpus 由 accelerator 适配器在 M2 填充（Ascend → --device 列表；卡在建容器时绑定）。 */
   'container.run': {

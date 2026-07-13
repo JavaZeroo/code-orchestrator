@@ -19,6 +19,7 @@ import {
   WorkspaceCreateFolderAction,
   WorkspaceFilePreview,
   WorkspaceSearchResults,
+  WorkspaceContentSearchResults,
   WorkspaceUploadAction,
   uploadSelectedWorkspaceFile,
   createNamedWorkspaceFolder,
@@ -210,6 +211,20 @@ describe('SessionView artifact download action', () => {
     expect(workspaceSearchTarget(matches[1]!)).toEqual({
       kind: 'file', path: 'reports/final.md', entry: { name: 'final.md', type: 'file', size: 42 },
     });
+  });
+
+  it('renders content previews with file lines as selectable results', () => {
+    const matches = [{ path: 'src/main.ts', line: 7, preview: 'const releaseReady = true;' }];
+    const markup = renderToStaticMarkup(
+      <WorkspaceContentSearchResults matches={matches} disabled={false} onSelect={vi.fn()} />,
+    );
+    expect(markup).toContain('src/main.ts:7');
+    expect(markup).toContain('const releaseReady = true;');
+    const preview = renderToStaticMarkup(
+      <WorkspaceFilePreview path="src/main.ts" line={2} text={'first\nrelease ready\nlast'} downloading={false} onBack={vi.fn()} onDownload={vi.fn()} />,
+    );
+    expect(preview).toContain('/src/main.ts:2');
+    expect(preview).toContain('bg-accent/15');
   });
 
   it('renames a file or folder with a single-entry name', async () => {

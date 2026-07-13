@@ -111,6 +111,17 @@ describe('runnerMethods contracts', () => {
     })).toThrow();
   });
 
+  it('validates bounded workspace content matches with navigable lines', () => {
+    expect(runnerMethods['workspace.searchContent'].params.parse({ root: '/work', query: ' ready ' }))
+      .toEqual({ root: '/work', query: 'ready' });
+    expect(runnerMethods['workspace.searchContent'].result.parse({
+      ok: true, matches: [{ path: 'src/main.ts', line: 7, preview: 'const ready = true;' }], truncated: false,
+    })).toMatchObject({ matches: [{ path: 'src/main.ts', line: 7 }] });
+    expect(() => runnerMethods['workspace.searchContent'].result.parse({
+      ok: true, matches: [{ path: 'bad', line: 0, preview: '' }], truncated: false,
+    })).toThrow();
+  });
+
   it('accepts containerized session.spawn parameters', () => {
     const parsed = runnerMethods['session.spawn'].params.parse({
       sessionId: 's1',
