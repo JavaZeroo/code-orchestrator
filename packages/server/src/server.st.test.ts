@@ -688,6 +688,110 @@ describeSt('server ST: API + runner websocket', () => {
     expect(forward.page).toEqual({ hasEarlier: false, before: null });
   });
 
+  it('searches persisted message content across archived sessions and workflow runs within one project', async () => {
+    const db = getDb();
+    const archivedAt = new Date('2026-07-13T08:00:00Z');
+    await db.insert(schema.projects).values([
+      { id: 'search-project-1', name: 'Search project', forge: 'github', repo: 'example/search' },
+      { id: 'search-project-2', name: 'Other project', forge: 'github', repo: 'example/other' },
+    ]);
+    await db.insert(schema.machines).values({ id: 'm-conversation-search', name: 'Search Runner' });
+    await db.insert(schema.workflowDefs).values({
+      id: 'search-workflow-def',
+      name: 'Release verification',
+      projectId: 'search-project-1',
+      graph: { name: 'Release verification', nodes: [{ id: 'verify', type: 'agent', prompt: 'Verify' }], edges: [] },
+    });
+    await db.insert(schema.workflowRuns).values({
+      id: 'search-workflow-run',
+      defId: 'search-workflow-def',
+      projectId: 'search-project-1',
+      status: 'done',
+      archivedAt,
+    });
+    await db.insert(schema.sessions).values([
+      {
+        id: 'search-standalone-session',
+        machineId: 'm-conversation-search',
+        agent: 'claude',
+        cwd: '/tmp/search-standalone',
+        title: 'Archived investigation',
+        state: 'dead',
+        projectId: 'search-project-1',
+        archivedAt,
+      },
+      {
+        id: 'search-workflow-session',
+        machineId: 'm-conversation-search',
+        agent: 'claude',
+        cwd: '/tmp/search-workflow',
+        state: 'dead',
+        projectId: 'search-project-1',
+        runId: 'search-workflow-run',
+        nodeId: 'verify',
+      },
+      {
+        id: 'search-other-project-session',
+        machineId: 'm-conversation-search',
+        agent: 'claude',
+        cwd: '/tmp/search-other',
+        state: 'dead',
+        projectId: 'search-project-2',
+      },
+    ]);
+    await db.insert(schema.events).values([
+      {
+        sessionId: 'search-standalone-session',
+        type: 'session.message',
+        payload: { id: 'm1', time: 1, role: 'user', ev: { t: 'text', text: 'Please investigate the lunar handshake failure.' } },
+      },
+      {
+        // Historical child-session messages may not carry run_id; association must come from sessions.run_id.
+        sessionId: 'search-workflow-session',
+        type: 'session.message',
+        payload: { id: 'm2', time: 2, role: 'agent', ev: { t: 'text', text: 'The LUNAR handshake is fixed in the workflow.' } },
+      },
+      {
+        sessionId: 'search-other-project-session',
+        type: 'session.message',
+        payload: { id: 'm3', time: 3, role: 'agent', ev: { t: 'text', text: 'A lunar handshake exists in another project.' } },
+      },
+      {
+        sessionId: 'search-standalone-session',
+        type: 'session.message',
+        payload: { id: 'm4', time: 4, role: 'agent', ev: { t: 'text', text: 'Thinking about the lunar handshake internals.', thinking: true } },
+      },
+    ]);
+
+    const response = await app!.inject({
+      method: 'GET',
+      url: '/api/conversations/search?q=lunar%20handshake&projectId=search-project-1',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ results: Array<Record<string, unknown>> }>().results).toEqual([
+      expect.objectContaining({
+        kind: 'run',
+        id: 'search-workflow-run',
+        sessionId: 'search-workflow-session',
+        title: 'Release verification',
+        role: 'agent',
+        archived: true,
+        projectId: 'search-project-1',
+        snippet: expect.stringContaining('LUNAR handshake'),
+      }),
+      expect.objectContaining({
+        kind: 'session',
+        id: 'search-standalone-session',
+        title: 'Archived investigation',
+        role: 'user',
+        archived: true,
+        projectId: 'search-project-1',
+        snippet: expect.stringContaining('lunar handshake'),
+      }),
+    ]);
+  });
+
   it('persists trimmed session titles and rejects invalid or unknown renames', async () => {
     const db = getDb();
     await db.insert(schema.machines).values({ id: 'm-rename', name: 'Rename Runner' });

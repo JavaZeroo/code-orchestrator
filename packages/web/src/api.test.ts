@@ -347,6 +347,26 @@ describe('api client', () => {
     });
   });
 
+  it('searches persisted conversation content within the current project', async () => {
+    const result = {
+      kind: 'run' as const,
+      id: 'run-1',
+      sessionId: 'session-1',
+      title: 'Release workflow',
+      snippet: 'The deployment handshake contains the regression.',
+      role: 'agent' as const,
+      archived: true,
+      projectId: 'project/1',
+      eventSeq: 42,
+    };
+    const fetch = mockFetch(Response.json({ results: [result] }));
+
+    await expect(api.searchConversations('deployment handshake', 'project/1')).resolves.toEqual([result]);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/conversations/search?q=deployment+handshake&projectId=project%2F1',
+    );
+  });
+
   it('renames a workflow run through its existing resource', async () => {
     const fetch = mockFetch(Response.json({ ok: true, run: { id: 'run-1', title: 'Production rollout' } }));
 

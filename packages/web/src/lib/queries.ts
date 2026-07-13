@@ -20,6 +20,13 @@ export const useSession = (sessionId: string | null, enabled = true) =>
 export const useArchivedSessions = () =>
   useQuery({ queryKey: ['archived-sessions'], queryFn: api.archivedSessions, refetchInterval: 15_000 });
 
+export const useConversationSearch = (query: string, projectId?: string | null) =>
+  useQuery({
+    queryKey: ['conversation-search', projectId ?? null, query],
+    queryFn: () => api.searchConversations(query, projectId),
+    enabled: query.trim().length >= 1,
+  });
+
 export const useMachines = () =>
   useQuery({ queryKey: ['machines'], queryFn: api.machines, refetchInterval: 15_000 });
 
