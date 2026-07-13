@@ -191,6 +191,20 @@ export const runnerMethods = {
       error: z.string().optional(),
     }),
   },
+  /** Add or remove all executable bits on one regular workspace file. */
+  'workspace.chmod': {
+    params: z.object({
+      root: z.string().min(1),
+      path: z.string().min(1),
+      executable: z.boolean(),
+      containerId: z.string().min(1).optional(),
+    }),
+    result: z.object({
+      ok: z.boolean(),
+      executable: z.boolean().optional(),
+      error: z.string().optional(),
+    }),
+  },
   /** Delete one regular file or directory tree beneath a session workspace without following escaped symlinks. */
   'workspace.delete': {
     params: z.object({
@@ -271,6 +285,7 @@ export const runnerMethods = {
         name: z.string().min(1),
         type: z.enum(['file', 'directory']),
         size: z.number().int().nonnegative().optional(),
+        executable: z.boolean().optional(),
       })).optional(),
       truncated: z.boolean().optional(),
       error: z.string().optional(),

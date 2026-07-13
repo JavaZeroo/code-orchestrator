@@ -57,6 +57,7 @@ const workspaceSearchQuerySchema = z.object({ q: z.string().trim().min(1).max(10
 const workspaceRenameBodySchema = z.object({ name: z.string().min(1) }).strict();
 const workspaceMoveBodySchema = z.object({ destinationPath: z.string().min(1) }).strict();
 const workspaceCopyBodySchema = z.object({ destinationPath: z.string().min(1) }).strict();
+const workspaceChmodBodySchema = z.object({ executable: z.boolean() }).strict();
 const WORKSPACE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const EVENT_PAGE_SIZE = 2000;
 
@@ -361,6 +362,26 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     void reply.code(201);
     return { ok: true, path, size: result.size };
   });
+
+  /** Add or remove executable bits on one regular host or container workspace file. */
+  app.patch<{ Params: { id: string }; Querystring: { path?: string }; Body: unknown }>(
+    '/api/sessions/:id/files/executable',
+    async (req) => {
+      const session = await findSession(req.params.id);
+      const { path } = workspaceFileQuerySchema.parse(req.query);
+      const { executable } = workspaceChmodBodySchema.parse(req.body);
+      const result = await callRunner(session.machineId, 'workspace.chmod', {
+        root: session.cwd,
+        path,
+        executable,
+        containerId: session.containerId ?? undefined,
+      });
+      if (!result.ok || result.executable === undefined) {
+        throw new HttpError(400, result.error ?? 'workspace file mode change failed');
+      }
+      return { ok: true, path, executable: result.executable };
+    },
+  );
 
   /** Delete one regular file or directory tree from the host or container session workspace. */
   app.delete<{ Params: { id: string }; Querystring: { path?: string } }>('/api/sessions/:id/files', async (req) => {

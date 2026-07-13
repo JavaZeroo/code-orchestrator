@@ -14,6 +14,8 @@ import { encryptSecret } from './services/crypto';
 import { markTaskDone, reconcileQueueOnce, type QueuedTask } from './services/taskQueue';
 import { getForge } from './forge/registry';
 import { deleteHostWorkspaceFile } from '../../runner/src/workspaceDelete';
+import { chmodHostWorkspaceFile } from '../../runner/src/workspaceChmod';
+import { listHostWorkspaceDirectory } from '../../runner/src/workspaceList';
 
 const runSt = Boolean(process.env.DATABASE_URL);
 const describeSt = runSt ? describe : describe.skip;
@@ -2646,6 +2648,79 @@ describeSt('server ST: API + runner websocket', () => {
     await expect(access(join(root, 'reports', 'archive'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('persists workspace executable state through authenticated REST and runner RPC', async () => {
+    await app!.close();
+    app = null;
+    await closeDb();
+    await startApp(true);
+
+    const signUp = await app!.inject({
+      method: 'POST',
+      url: '/api/auth/sign-up/email',
+      headers: { host: 'localhost:7620', origin: 'http://localhost:7620' },
+      payload: { name: 'Script Operator', email: 'script-mode@example.com', password: 'system-test-password' },
+    });
+    expect(signUp.statusCode).toBe(200);
+    const cookie = signUp.cookies.map(({ name, value }) => `${name}=${value}`).join('; ');
+    const root = await mkdtemp(join(tmpdir(), 'co-workspace-chmod-st-'));
+    await writeFile(join(root, 'run.sh'), '#!/bin/sh\necho ready\n', { mode: 0o600 });
+
+    const runner = await FakeRunner.connect(baseUrl, {
+      'workspace.list': (params) => {
+        expect(params).toEqual({ root, path: '' });
+        return listHostWorkspaceDirectory(root, '');
+      },
+      'workspace.chmod': (params) => {
+        expect(params).toEqual({ root, path: 'run.sh', executable: true });
+        return chmodHostWorkspaceFile(root, 'run.sh', true);
+      },
+    });
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: { id: 'm-script-mode', name: 'Script Mode Runner', labels: ['dev'], resources: [], runnerVersion: 'st', startedAt: Date.now() },
+    });
+    await getDb().insert(schema.sessions).values({
+      id: 'session-script-mode-st', machineId: 'm-script-mode', agent: 'claude', cwd: root, state: 'idle',
+    });
+
+    const unauthorized = await app!.inject({
+      method: 'PATCH',
+      url: '/api/sessions/session-script-mode-st/files/executable?path=run.sh',
+      headers: { host: 'localhost:7620', 'content-type': 'application/json' },
+      payload: { executable: true },
+    });
+    expect(unauthorized.statusCode).toBe(401);
+
+    const before = await app!.inject({
+      method: 'GET',
+      url: '/api/sessions/session-script-mode-st/files/list?path=',
+      headers: { host: 'localhost:7620', cookie },
+    });
+    expect(before.statusCode).toBe(200);
+    expect(before.json()).toMatchObject({
+      entries: [{ name: 'run.sh', type: 'file', executable: false }],
+    });
+
+    const changed = await app!.inject({
+      method: 'PATCH',
+      url: '/api/sessions/session-script-mode-st/files/executable?path=run.sh',
+      headers: { host: 'localhost:7620', cookie, 'content-type': 'application/json' },
+      payload: { executable: true },
+    });
+    expect(changed.statusCode).toBe(200);
+    expect(changed.json()).toEqual({ ok: true, path: 'run.sh', executable: true });
+
+    const refreshed = await app!.inject({
+      method: 'GET',
+      url: '/api/sessions/session-script-mode-st/files/list?path=',
+      headers: { host: 'localhost:7620', cookie },
+    });
+    expect(refreshed.statusCode).toBe(200);
+    expect(refreshed.json()).toMatchObject({
+      entries: [{ name: 'run.sh', type: 'file', executable: true }],
+    });
+  });
+
   it('authorizes workspace file operations and forwards container-aware runner RPC', async () => {
     await app!.close();
     app = null;
@@ -2669,13 +2744,17 @@ describeSt('server ST: API + runner websocket', () => {
     let renamedEntry: { path: string; newName: string } | undefined;
     let movedEntry: { path: string; destinationPath: string } | undefined;
     let copiedEntry: { path: string; destinationPath: string } | undefined;
+    let changedMode: { path: string; executable: boolean } | undefined;
     const runner = await FakeRunner.connect(baseUrl, {
       'workspace.list': (params) => {
         expect(params).toEqual({ root: '/tmp/artifact-work', path: '', containerId: 'artifact-container' });
         return {
           ok: true,
           path: '',
-          entries: [{ name: 'out', type: 'directory' }, { name: 'summary.txt', type: 'file', size: 12 }],
+          entries: [
+            { name: 'out', type: 'directory' },
+            { name: 'summary.txt', type: 'file', size: 12, executable: true },
+          ],
           truncated: false,
         };
       },
@@ -2714,6 +2793,13 @@ describeSt('server ST: API + runner websocket', () => {
         });
         uploaded = Buffer.from((params as { data: string }).data, 'base64');
         return { ok: true, size: uploaded?.length };
+      },
+      'workspace.chmod': (params) => {
+        expect(params).toEqual({
+          root: '/tmp/artifact-work', path: 'out/run.sh', executable: false, containerId: 'artifact-container',
+        });
+        changedMode = params as { path: string; executable: boolean };
+        return { ok: true, executable: false };
       },
       'workspace.delete': (params) => {
         expect(params).toEqual({
@@ -2795,6 +2881,13 @@ describeSt('server ST: API + runner websocket', () => {
       headers: { host: 'localhost:7620' },
     });
     expect(unauthorizedDelete.statusCode).toBe(401);
+    const unauthorizedChmod = await app!.inject({
+      method: 'PATCH',
+      url: '/api/sessions/session-artifact-st/files/executable?path=out%2Frun.sh',
+      headers: { host: 'localhost:7620', 'content-type': 'application/json' },
+      payload: { executable: false },
+    });
+    expect(unauthorizedChmod.statusCode).toBe(401);
     const unauthorizedMkdir = await app!.inject({
       method: 'POST',
       url: '/api/sessions/session-artifact-st/files/directories?path=out%2Fnew-folder',
@@ -2830,7 +2923,10 @@ describeSt('server ST: API + runner websocket', () => {
     expect(listing.statusCode).toBe(200);
     expect(listing.json()).toEqual({
       path: '',
-      entries: [{ name: 'out', type: 'directory' }, { name: 'summary.txt', type: 'file', size: 12 }],
+      entries: [
+        { name: 'out', type: 'directory' },
+        { name: 'summary.txt', type: 'file', size: 12, executable: true },
+      ],
       truncated: false,
     });
     const search = await app!.inject({
@@ -2880,6 +2976,17 @@ describeSt('server ST: API + runner websocket', () => {
     expect(upload.statusCode).toBe(201);
     expect(upload.json()).toEqual({ ok: true, path: 'out/upload.bin', size: uploadedBytes.length });
     expect(uploaded).toEqual(uploadedBytes);
+    const chmod = await app!.inject({
+      method: 'PATCH',
+      url: '/api/sessions/session-artifact-st/files/executable?path=out%2Frun.sh',
+      headers: { host: 'localhost:7620', cookie, 'content-type': 'application/json' },
+      payload: { executable: false },
+    });
+    expect(chmod.statusCode).toBe(200);
+    expect(chmod.json()).toEqual({ ok: true, path: 'out/run.sh', executable: false });
+    expect(changedMode).toEqual({
+      root: '/tmp/artifact-work', path: 'out/run.sh', executable: false, containerId: 'artifact-container',
+    });
     const deletion = await app!.inject({
       method: 'DELETE',
       url: '/api/sessions/session-artifact-st/files?path=out%2Fold.bin',
@@ -2935,6 +3042,7 @@ describeSt('server ST: API + runner websocket', () => {
     expect(runner.calls.some((call) => call.method === 'workspace.read')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.archive')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.write')).toBe(true);
+    expect(runner.calls.some((call) => call.method === 'workspace.chmod')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.delete')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.mkdir')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.rename')).toBe(true);

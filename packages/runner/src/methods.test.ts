@@ -58,12 +58,24 @@ describe('createRunnerMethodHandler', () => {
     await expect(import('node:fs/promises').then(({ readFile }) => readFile(join(root, 'answer.bin')))).resolves.toEqual(bytes);
   });
 
+  it('dispatches workspace.chmod through the confined executable-bit changer', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-chmod-'));
+    const target = join(root, 'run.sh');
+    await writeFile(target, '#!/bin/sh\n');
+    await expect(handler()('workspace.chmod', { root, path: 'run.sh', executable: true }))
+      .resolves.toEqual({ ok: true, executable: true });
+    expect((await stat(target)).mode & 0o111).not.toBe(0);
+  });
+
   it('dispatches workspace.list through the confined directory reader', async () => {
     const root = await mkdtemp(join(tmpdir(), 'co-method-list-'));
     await writeFile(join(root, 'answer.txt'), 'runner bytes');
     const result = await handler()('workspace.list', { root });
     expect(result).toEqual({
-      ok: true, path: '', entries: [{ name: 'answer.txt', type: 'file', size: 12 }], truncated: false,
+      ok: true,
+      path: '',
+      entries: [{ name: 'answer.txt', type: 'file', size: 12, executable: false }],
+      truncated: false,
     });
   });
 
