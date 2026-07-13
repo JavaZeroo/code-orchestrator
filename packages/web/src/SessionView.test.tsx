@@ -323,7 +323,7 @@ describe('SessionView artifact download action', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it('deletes files and empty folders only after type-aware confirmation', async () => {
+  it('deletes files and folder trees only after type-aware confirmation', async () => {
     const request = vi.fn().mockResolvedValue({ ok: true, path: 'reports/old.bin' });
     const confirmDelete = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
     await expect(deleteConfirmedWorkspaceEntry('session-1', 'reports/old.bin', 'file', request, confirmDelete)).resolves.toBe(false);
@@ -333,6 +333,21 @@ describe('SessionView artifact download action', () => {
     await expect(deleteConfirmedWorkspaceEntry('session-1', 'reports/archive', 'directory', request, confirmDelete)).resolves.toBe(true);
     expect(confirmDelete).toHaveBeenCalledWith('reports/archive', 'directory');
     expect(request).toHaveBeenCalledWith('session-1', 'reports/archive');
+  });
+
+  it('warns that confirmed folder deletion removes all contained files', async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true, path: 'reports/archive' });
+    const confirmDelete = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('confirm', confirmDelete);
+    try {
+      await expect(deleteConfirmedWorkspaceEntry('session-1', 'reports/archive', 'directory', request)).resolves.toBe(true);
+      expect(confirmDelete).toHaveBeenCalledWith(
+        '确定删除工作区文件夹 /reports/archive 及其中的所有内容？此操作无法撤销。',
+      );
+      expect(request).toHaveBeenCalledWith('session-1', 'reports/archive');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('offers one-file upload and targets the currently open directory', async () => {

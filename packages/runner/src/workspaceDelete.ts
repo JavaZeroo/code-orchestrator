@@ -1,4 +1,4 @@
-import { lstat, realpath, rmdir, unlink } from 'node:fs/promises';
+import { lstat, realpath, rm, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -31,7 +31,7 @@ export async function deleteHostWorkspaceFile(root: string, path: string): Promi
     const targetStat = await lstat(target);
     if (targetStat.isSymbolicLink()) throw new Error('workspace symlinks cannot be deleted');
     if (targetStat.isFile()) await unlink(target);
-    else if (targetStat.isDirectory()) await rmdir(target);
+    else if (targetStat.isDirectory()) await rm(target, { recursive: true });
     else throw new Error('path is not a regular file or directory');
     return { ok: true };
   } catch (err) {
@@ -44,12 +44,15 @@ root=$(readlink -f -- "$1")
 target="$root/$2"
 parent=$(readlink -f -- "$(dirname -- "$target")")
 case "$parent/" in "$root/"*) ;; *) echo 'path escapes the workspace' >&2; exit 42;; esac
-[ "$target" != "$root" ] || { echo 'workspace root cannot be deleted' >&2; exit 43; }
+target="$parent/$(basename -- "$target")"
 [ ! -L "$target" ] || { echo 'workspace symlinks cannot be deleted' >&2; exit 44; }
+canonical=$(readlink -f -- "$target") || { echo 'path is not a regular file or directory' >&2; exit 45; }
+[ "$canonical" != "$root" ] || { echo 'workspace root cannot be deleted' >&2; exit 43; }
+case "$canonical/" in "$root/"*) ;; *) echo 'path escapes the workspace' >&2; exit 42;; esac
 if [ -f "$target" ]; then
   rm -f -- "$target"
 elif [ -d "$target" ]; then
-  rmdir -- "$target"
+  rm -rf -- "$target"
 else
   echo 'path is not a regular file or directory' >&2
   exit 45

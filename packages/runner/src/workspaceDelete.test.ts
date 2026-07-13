@@ -26,13 +26,17 @@ describe('deleteHostWorkspaceFile', () => {
     await expect(access(join(root, 'empty'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('rejects non-empty directories without removing their contents', async () => {
+  it('recursively deletes non-empty directories without following contained symlinks', async () => {
     const root = await mkdtemp(join(tmpdir(), 'co-workspace-delete-'));
-    await mkdir(join(root, 'reports'));
-    await writeFile(join(root, 'reports', 'result.txt'), 'unchanged');
+    const outside = await mkdtemp(join(tmpdir(), 'co-workspace-delete-outside-'));
+    await mkdir(join(root, 'reports', 'nested'), { recursive: true });
+    await writeFile(join(root, 'reports', 'nested', 'result.txt'), 'delete me');
+    await writeFile(join(outside, 'secret.txt'), 'unchanged');
+    await symlink(outside, join(root, 'reports', 'outside-link'));
 
-    await expect(deleteHostWorkspaceFile(root, 'reports')).resolves.toMatchObject({ ok: false });
-    await expect(readFile(join(root, 'reports', 'result.txt'), 'utf8')).resolves.toBe('unchanged');
+    await expect(deleteHostWorkspaceFile(root, 'reports')).resolves.toEqual({ ok: true });
+    await expect(access(join(root, 'reports'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(outside, 'secret.txt'), 'utf8')).resolves.toBe('unchanged');
   });
 
   it('rejects symlinks, traversal, escaped parents, and the workspace root', async () => {
@@ -50,16 +54,34 @@ describe('deleteHostWorkspaceFile', () => {
 });
 
 describe('deleteWorkspaceFile', () => {
-  it('deletes only empty directories with the container shell implementation', async () => {
+  it('recursively deletes container directories without following contained symlinks', async () => {
     const root = await mkdtemp(join(tmpdir(), 'co-container-workspace-delete-'));
+    const outside = await mkdtemp(join(tmpdir(), 'co-container-workspace-delete-outside-'));
     await mkdir(join(root, 'empty'));
-    await mkdir(join(root, 'non-empty'));
-    await writeFile(join(root, 'non-empty', 'result.txt'), 'unchanged');
+    await mkdir(join(root, 'non-empty', 'nested'), { recursive: true });
+    await writeFile(join(root, 'non-empty', 'nested', 'result.txt'), 'delete me');
+    await writeFile(join(outside, 'secret.txt'), 'unchanged');
+    await symlink(outside, join(root, 'non-empty', 'outside-link'));
 
     await expect(run('sh', ['-c', containerWorkspaceDeleteScript, 'sh', root, 'empty'])).resolves.toBeDefined();
     await expect(access(join(root, 'empty'))).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(run('sh', ['-c', containerWorkspaceDeleteScript, 'sh', root, 'non-empty'])).rejects.toBeDefined();
-    await expect(readFile(join(root, 'non-empty', 'result.txt'), 'utf8')).resolves.toBe('unchanged');
+    await expect(run('sh', ['-c', containerWorkspaceDeleteScript, 'sh', root, 'non-empty'])).resolves.toBeDefined();
+    await expect(access(join(root, 'non-empty'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(outside, 'secret.txt'), 'utf8')).resolves.toBe('unchanged');
+  });
+
+  it('keeps container workspace roots, traversal targets, and escaped symlinks intact', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-container-workspace-delete-'));
+    const outside = await mkdtemp(join(tmpdir(), 'co-container-workspace-delete-outside-'));
+    await writeFile(join(root, 'keep.txt'), 'unchanged');
+    await writeFile(join(outside, 'secret.txt'), 'unchanged');
+    await symlink(outside, join(root, 'escape'));
+
+    for (const path of ['.', '../outside', 'escape', 'escape/secret.txt']) {
+      await expect(run('sh', ['-c', containerWorkspaceDeleteScript, 'sh', root, path]), path).rejects.toBeDefined();
+    }
+    await expect(readFile(join(root, 'keep.txt'), 'utf8')).resolves.toBe('unchanged');
+    await expect(readFile(join(outside, 'secret.txt'), 'utf8')).resolves.toBe('unchanged');
   });
 
   it('forwards a confined relative path to the container deleter', async () => {
