@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { RequirementRow } from './api';
-import { RequirementRowItem } from './ProjectSettings';
+import {
+  importWorkflowTemplateFile,
+  RequirementRowItem,
+  WorkflowImportAction,
+} from './ProjectSettings';
 
 const requirement: RequirementRow = {
   id: 'intake-1',
@@ -43,5 +47,63 @@ describe('RequirementRowItem', () => {
     expect(started).not.toContain('title="启动需求"');
     expect(started).not.toContain('title="重试需求"');
     expect(started).toContain('title="查看运行"');
+  });
+});
+
+describe('workflow template import', () => {
+  const validDefinition = {
+    name: 'Release pipeline',
+    description: 'Build and review a release',
+    nodes: [{ id: 'build', type: 'agent' as const, prompt: 'Build the release', cli: 'claude' as const }],
+    edges: [],
+  };
+
+  it('imports a valid JSON file as a manual workflow in the selected project and refreshes the list', async () => {
+    const createWorkflow = vi.fn().mockResolvedValue({ id: 'workflow-1' });
+    const refreshWorkflows = vi.fn();
+    const file = { text: vi.fn().mockResolvedValue(JSON.stringify(validDefinition)) };
+
+    await expect(importWorkflowTemplateFile(
+      'project-42',
+      file,
+      createWorkflow,
+      refreshWorkflows,
+    )).resolves.toEqual(validDefinition);
+
+    expect(file.text).toHaveBeenCalledOnce();
+    expect(createWorkflow).toHaveBeenCalledWith(validDefinition, 'manual', 'project-42');
+    expect(refreshWorkflows).toHaveBeenCalledOnce();
+  });
+
+  it('rejects malformed or schema-invalid JSON before creating or refreshing a workflow', async () => {
+    const createWorkflow = vi.fn();
+    const refreshWorkflows = vi.fn();
+
+    await expect(importWorkflowTemplateFile(
+      'project-42',
+      { text: async () => '{not json' },
+      createWorkflow,
+      refreshWorkflows,
+    )).rejects.toThrow('有效的 JSON');
+    await expect(importWorkflowTemplateFile(
+      'project-42',
+      { text: async () => JSON.stringify({ ...validDefinition, nodes: [] }) },
+      createWorkflow,
+      refreshWorkflows,
+    )).rejects.toThrow('不符合流水线定义');
+
+    expect(createWorkflow).not.toHaveBeenCalled();
+    expect(refreshWorkflows).not.toHaveBeenCalled();
+  });
+
+  it('exposes a single JSON-file picker in the pipeline actions', () => {
+    const markup = renderToStaticMarkup(
+      <WorkflowImportAction importing={false} onFile={vi.fn()} />,
+    );
+
+    expect(markup).toContain('导入 JSON');
+    expect(markup).toContain('type="file"');
+    expect(markup).toContain('accept="application/json,.json"');
+    expect(markup).not.toContain('multiple');
   });
 });
