@@ -104,6 +104,13 @@ describe('api client', () => {
     expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files/search?q=final%20report');
   });
 
+  it('requests an encoded workspace content search', async () => {
+    const result = { matches: [{ path: 'src/main.ts', line: 7, preview: 'release ready' }], truncated: false };
+    const fetch = mockFetch(Response.json(result));
+    await expect(api.searchWorkspaceContent('session/one', 'release ready')).resolves.toEqual(result);
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files/search-content?q=release%20ready');
+  });
+
   it('uploads exact file bytes to an encoded workspace destination', async () => {
     const fetch = mockFetch(Response.json({ ok: true, path: 'reports/raw.bin', size: 4 }));
     const file = new Blob([new Uint8Array([0, 1, 128, 255])]);

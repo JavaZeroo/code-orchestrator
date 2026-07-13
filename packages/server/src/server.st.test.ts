@@ -2637,6 +2637,14 @@ describeSt('server ST: API + runner websocket', () => {
           truncated: false,
         };
       },
+      'workspace.searchContent': (params) => {
+        expect(params).toEqual({ root: '/tmp/artifact-work', query: 'release ready', containerId: 'artifact-container' });
+        return {
+          ok: true,
+          matches: [{ path: 'src/main.ts', line: 7, preview: 'const releaseReady = true;' }],
+          truncated: false,
+        };
+      },
       'workspace.read': (params) => {
         expect(params).toEqual({ root: '/tmp/artifact-work', path: 'out/result.bin', containerId: 'artifact-container' });
         return { ok: true, basename: 'result.bin', size: bytes.length, data: bytes.toString('base64') };
@@ -2687,6 +2695,10 @@ describeSt('server ST: API + runner websocket', () => {
       method: 'GET', url: '/api/sessions/session-artifact-st/files/search?q=result', headers: { host: 'localhost:7620' },
     });
     expect(unauthorizedSearch.statusCode).toBe(401);
+    const unauthorizedContentSearch = await app!.inject({
+      method: 'GET', url: '/api/sessions/session-artifact-st/files/search-content?q=release%20ready', headers: { host: 'localhost:7620' },
+    });
+    expect(unauthorizedContentSearch.statusCode).toBe(401);
     const unauthorized = await app!.inject({
       method: 'GET', url: '/api/sessions/session-artifact-st/files?path=out%2Fresult.bin', headers: { host: 'localhost:7620' },
     });
@@ -2738,6 +2750,16 @@ describeSt('server ST: API + runner websocket', () => {
       matches: [{ path: 'out/result.bin', type: 'file', size: bytes.length }],
       truncated: false,
     });
+    const contentSearch = await app!.inject({
+      method: 'GET',
+      url: '/api/sessions/session-artifact-st/files/search-content?q=release%20ready',
+      headers: { host: 'localhost:7620', cookie },
+    });
+    expect(contentSearch.statusCode).toBe(200);
+    expect(contentSearch.json()).toEqual({
+      matches: [{ path: 'src/main.ts', line: 7, preview: 'const releaseReady = true;' }],
+      truncated: false,
+    });
     const downloaded = await app!.inject({
       method: 'GET',
       url: '/api/sessions/session-artifact-st/files?path=out%2Fresult.bin',
@@ -2784,6 +2806,7 @@ describeSt('server ST: API + runner websocket', () => {
     });
     expect(runner.calls.some((call) => call.method === 'workspace.list')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.search')).toBe(true);
+    expect(runner.calls.some((call) => call.method === 'workspace.searchContent')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.read')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.write')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.delete')).toBe(true);

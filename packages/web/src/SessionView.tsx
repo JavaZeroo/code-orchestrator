@@ -2,7 +2,7 @@ import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2,
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, isWorkspaceTextPreviewCandidate, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers, type WorkspaceEntry, type WorkspaceSearchMatch } from './api';
+import { api, isWorkspaceTextPreviewCandidate, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers, type WorkspaceContentMatch, type WorkspaceEntry, type WorkspaceSearchMatch } from './api';
 import { UnifiedDiff } from './components/DiffView';
 import { RejectionFeedback, type ApprovalDecisionHandler } from './components/RejectionFeedback';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
@@ -387,6 +387,34 @@ export function WorkspaceSearchResults({
   );
 }
 
+export function WorkspaceContentSearchResults({
+  matches,
+  disabled,
+  onSelect,
+}: {
+  matches: WorkspaceContentMatch[];
+  disabled: boolean;
+  onSelect: (match: WorkspaceContentMatch) => void;
+}) {
+  if (matches.length === 0) return <div className="py-8 text-center text-sm text-faint">未找到匹配的文件内容</div>;
+  return (
+    <div className="max-h-80 overflow-y-auto rounded-md border border-line">
+      {matches.map((match) => (
+        <button
+          key={`${match.path}:${match.line}`}
+          type="button"
+          disabled={disabled}
+          className="block w-full border-b border-line px-3 py-2 text-left last:border-b-0 hover:bg-panel-2 disabled:opacity-50"
+          onClick={() => onSelect(match)}
+        >
+          <span className="block truncate font-mono text-xs text-accent">{match.path}:{match.line}</span>
+          <span className="block truncate font-mono text-sm text-ink">{match.preview}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function WorkspaceFilePreview({
   path,
   text,
@@ -394,6 +422,7 @@ export function WorkspaceFilePreview({
   downloading,
   onBack,
   onDownload,
+  line,
 }: {
   path: string;
   text?: string;
@@ -401,21 +430,33 @@ export function WorkspaceFilePreview({
   downloading: boolean;
   onBack: () => void;
   onDownload: () => void;
+  line?: number;
 }) {
+  const matchedLineRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (line && text) matchedLineRef.current?.scrollIntoView({ block: 'center' });
+  }, [line, text]);
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
         <Button type="button" variant="ghost" size="icon-sm" aria-label="返回目录列表" disabled={downloading} onClick={onBack}>
           <ChevronLeft size={14} />
         </Button>
-        <div className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={path}>/{path}</div>
+        <div className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={path}>/{path}{line ? `:${line}` : ''}</div>
         <Button type="button" variant="outline" size="sm" disabled={downloading} onClick={onDownload}>
           <Download size={13} /> {downloading ? '下载中…' : '下载'}
         </Button>
       </div>
       {error
         ? <div className="rounded-md border border-line bg-panel-2 px-3 py-8 text-center text-sm text-dim">{error}</div>
-        : <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-bg-2 p-3 font-mono text-xs leading-5 text-ink">{text}</pre>}
+        : line && text
+          ? <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-bg-2 p-3 font-mono text-xs leading-5 text-ink">
+              {text.split(/\r?\n/).map((value, index) => {
+                const number = index + 1;
+                return <span key={number} ref={number === line ? matchedLineRef : undefined} className={number === line ? 'block bg-accent/15' : 'block'}>{value}{'\n'}</span>;
+              })}
+            </pre>
+          : <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-bg-2 p-3 font-mono text-xs leading-5 text-ink">{text}</pre>}
     </div>
   );
 }
@@ -427,7 +468,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
-  const [preview, setPreview] = useState<{ path: string; text?: string; error?: string } | null>(null);
+  const [preview, setPreview] = useState<{ path: string; line?: number; text?: string; error?: string } | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -437,6 +478,10 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [searchMatches, setSearchMatches] = useState<WorkspaceSearchMatch[] | null>(null);
   const [searchTruncated, setSearchTruncated] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [contentQuery, setContentQuery] = useState('');
+  const [contentMatches, setContentMatches] = useState<WorkspaceContentMatch[] | null>(null);
+  const [contentTruncated, setContentTruncated] = useState(false);
+  const [contentSearching, setContentSearching] = useState(false);
   const [listingVersion, setListingVersion] = useState(0);
   const previewRequestRef = useRef(0);
   useEffect(() => {
@@ -463,6 +508,9 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       setSearchQuery('');
       setSearchMatches(null);
       setSearchTruncated(false);
+      setContentQuery('');
+      setContentMatches(null);
+      setContentTruncated(false);
       previewRequestRef.current += 1;
     }
     onOpenChange(nextOpen);
@@ -475,22 +523,22 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .catch((error) => toast.error(`下载失败：${error}`))
       .finally(() => setDownloading(false));
   };
-  const openFile = (relativePath: string, entry: WorkspaceEntry) => {
+  const openFile = (relativePath: string, entry: WorkspaceEntry, line?: number) => {
     if (!isWorkspaceTextPreviewCandidate(entry)) {
       downloadFile(relativePath);
       return;
     }
     const requestId = ++previewRequestRef.current;
-    setPreview({ path: relativePath });
+    setPreview({ path: relativePath, line });
     setPreviewing(true);
     void api.workspaceTextPreview(sessionId, relativePath)
       .then((result) => {
         if (previewRequestRef.current !== requestId) return;
-        if (result.kind === 'text') setPreview({ path: relativePath, text: result.text });
-        else setPreview({ path: relativePath, error: result.kind === 'oversized' ? '文件过大，无法预览，请下载后查看。' : '文件不是可预览的 UTF-8 文本，请下载后查看。' });
+        if (result.kind === 'text') setPreview({ path: relativePath, line, text: result.text });
+        else setPreview({ path: relativePath, line, error: result.kind === 'oversized' ? '文件过大，无法预览，请下载后查看。' : '文件不是可预览的 UTF-8 文本，请下载后查看。' });
       })
       .catch((error) => {
-        if (previewRequestRef.current === requestId) setPreview({ path: relativePath, error: `预览加载失败：${error}` });
+        if (previewRequestRef.current === requestId) setPreview({ path: relativePath, line, error: `预览加载失败：${error}` });
       })
       .finally(() => {
         if (previewRequestRef.current === requestId) setPreviewing(false);
@@ -503,7 +551,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
     setSearching(true);
     setError(null);
     void api.searchWorkspaceFiles(sessionId, query)
-      .then((result) => { setSearchMatches(result.matches); setSearchTruncated(result.truncated); })
+      .then((result) => { setSearchMatches(result.matches); setSearchTruncated(result.truncated); setContentMatches(null); })
       .catch((err) => setError(String(err)))
       .finally(() => setSearching(false));
   };
@@ -517,6 +565,19 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       return;
     }
     openFile(target.path, target.entry);
+  };
+  const searchWorkspaceContent = () => {
+    const query = contentQuery.trim();
+    if (!query || contentSearching) return;
+    setContentSearching(true);
+    setError(null);
+    void api.searchWorkspaceContent(sessionId, query)
+      .then((result) => { setContentMatches(result.matches); setContentTruncated(result.truncated); setSearchMatches(null); })
+      .catch((err) => setError(String(err)))
+      .finally(() => setContentSearching(false));
+  };
+  const selectContentMatch = (match: WorkspaceContentMatch) => {
+    openFile(match.path, { name: match.path.split('/').at(-1) ?? match.path, type: 'file', size: 0 }, match.line);
   };
   const uploadFile = (file: File) => {
     if (uploading) return;
@@ -567,6 +628,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
           downloading={downloading}
           onBack={() => { previewRequestRef.current += 1; setPreviewing(false); setPreview(null); }}
           onDownload={() => downloadFile(preview.path, false)}
+          line={preview.line}
         /> : <div className="space-y-3">
           <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); searchWorkspace(); }}>
             <div className="relative min-w-0 flex-1">
@@ -588,6 +650,26 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
               {searching ? '搜索中…' : '搜索'}
             </Button>
           </form>
+          <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); searchWorkspaceContent(); }}>
+            <div className="relative min-w-0 flex-1">
+              <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-faint" />
+              <input
+                type="search"
+                aria-label="搜索工作区文件内容"
+                maxLength={100}
+                value={contentQuery}
+                className="h-8 w-full rounded-md border border-line bg-bg-2 pl-8 pr-2 text-sm text-ink outline-none focus:border-accent"
+                placeholder="搜索文件内容"
+                onChange={(event) => {
+                  setContentQuery(event.currentTarget.value);
+                  if (!event.currentTarget.value.trim()) { setContentMatches(null); setContentTruncated(false); }
+                }}
+              />
+            </div>
+            <Button type="submit" variant="outline" size="sm" disabled={!contentQuery.trim() || contentSearching || downloading}>
+              {contentSearching ? '搜索中…' : '搜索内容'}
+            </Button>
+          </form>
           <div className="flex items-center gap-2">
             <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || deleting || renaming} onClick={() => setPath(workspaceParentPath(path))}>
               <ChevronLeft size={14} />
@@ -596,7 +678,9 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
             <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || deleting || renaming} creating={creating} onCreate={createFolder} />
             <WorkspaceUploadAction disabled={loading || downloading || creating || deleting || renaming} uploading={uploading} onFile={uploadFile} />
           </div>
-          {searchMatches !== null
+          {contentMatches !== null
+            ? <WorkspaceContentSearchResults matches={contentMatches} disabled={downloading || contentSearching} onSelect={selectContentMatch} />
+            : searchMatches !== null
             ? <WorkspaceSearchResults matches={searchMatches} disabled={downloading || searching} onSelect={selectSearchMatch} />
             : loading ? <div className="py-8 text-center text-sm text-dim">加载中…</div>
             : error ? <div className="py-8 text-center text-sm text-danger">目录加载失败：{error}</div>
@@ -609,8 +693,9 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
                 onRename={renameEntry}
               />}
           {searchMatches !== null && searchTruncated && <div className="text-xs text-faint">仅显示前 100 个匹配结果，请缩小搜索范围。</div>}
+          {contentMatches !== null && contentTruncated && <div className="text-xs text-faint">仅显示前 100 个内容匹配，请缩小搜索范围。</div>}
           {searchMatches === null && truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
-          <div className="text-xs text-faint">可按文件名递归搜索并直接打开结果；也可新建文件夹，重命名或删除当前目录中的文件和空文件夹，或上传文件。支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
+          <div className="text-xs text-faint">可按文件名或文件内容递归搜索并直接打开结果；也可新建文件夹，重命名或删除当前目录中的文件和空文件夹，或上传文件。支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
         </div>}
       </DialogContent>
     </Dialog>

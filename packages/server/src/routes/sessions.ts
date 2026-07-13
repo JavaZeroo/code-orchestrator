@@ -410,6 +410,21 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     return { matches: result.matches, truncated: result.truncated };
   });
 
+  /** Search literal text inside bounded workspace files and return navigable line matches. */
+  app.get<{ Params: { id: string }; Querystring: { q?: string } }>('/api/sessions/:id/files/search-content', async (req) => {
+    const session = await findSession(req.params.id);
+    const { q } = workspaceSearchQuerySchema.parse(req.query);
+    const result = await callRunner(session.machineId, 'workspace.searchContent', {
+      root: session.cwd,
+      query: q,
+      containerId: session.containerId ?? undefined,
+    });
+    if (!result.ok || result.matches === undefined || result.truncated === undefined) {
+      throw new HttpError(400, result.error ?? 'workspace content search unavailable');
+    }
+    return { matches: result.matches, truncated: result.truncated };
+  });
+
   app.get<{ Params: { id: string }; Querystring: { before?: string; since?: string } }>(
     '/api/sessions/:id/events',
     async (req) => {
