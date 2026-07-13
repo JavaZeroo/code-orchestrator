@@ -372,7 +372,9 @@ export async function deleteConfirmedWorkspaceEntry(
   type: WorkspaceEntry['type'],
   request = api.deleteWorkspaceFile,
   confirmDelete: (path: string, type: WorkspaceEntry['type']) => boolean = (target, targetType) => confirm(
-    `确定删除工作区${targetType === 'directory' ? '空文件夹' : '文件'} /${target}？此操作无法撤销。`,
+    targetType === 'directory'
+      ? `确定删除工作区文件夹 /${target} 及其中的所有内容？此操作无法撤销。`
+      : `确定删除工作区文件 /${target}？此操作无法撤销。`,
   ),
 ): Promise<boolean> {
   if (!confirmDelete(path, type)) return false;

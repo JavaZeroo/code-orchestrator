@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { access, mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import postgres from 'postgres';
 import WebSocket from 'ws';
@@ -10,6 +13,7 @@ import { bus } from './events';
 import { encryptSecret } from './services/crypto';
 import { markTaskDone, reconcileQueueOnce, type QueuedTask } from './services/taskQueue';
 import { getForge } from './forge/registry';
+import { deleteHostWorkspaceFile } from '../../runner/src/workspaceDelete';
 
 const runSt = Boolean(process.env.DATABASE_URL);
 const describeSt = runSt ? describe : describe.skip;
@@ -2597,6 +2601,49 @@ describeSt('server ST: API + runner websocket', () => {
       .from(schema.taskQueue)
       .where(eq(schema.taskQueue.id, taskId));
     expect(finalRows).toEqual([{ status: 'running' }]);
+  });
+
+  it('deletes a non-empty workspace folder through the authenticated runner RPC boundary', async () => {
+    await app!.close();
+    app = null;
+    await closeDb();
+    await startApp(true);
+
+    const signUp = await app!.inject({
+      method: 'POST',
+      url: '/api/auth/sign-up/email',
+      headers: { host: 'localhost:7620', origin: 'http://localhost:7620' },
+      payload: { name: 'Folder Operator', email: 'folder-delete@example.com', password: 'system-test-password' },
+    });
+    expect(signUp.statusCode).toBe(200);
+    const cookie = signUp.cookies.map(({ name, value }) => `${name}=${value}`).join('; ');
+    const root = await mkdtemp(join(tmpdir(), 'co-workspace-delete-st-'));
+    await mkdir(join(root, 'reports', 'archive'), { recursive: true });
+    await writeFile(join(root, 'reports', 'archive', 'result.txt'), 'delete through runner RPC');
+
+    const runner = await FakeRunner.connect(baseUrl, {
+      'workspace.delete': (params) => {
+        expect(params).toEqual({ root, path: 'reports/archive' });
+        return deleteHostWorkspaceFile(root, 'reports/archive');
+      },
+    });
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: { id: 'm-folder-delete', name: 'Folder Delete Runner', labels: ['dev'], resources: [], runnerVersion: 'st', startedAt: Date.now() },
+    });
+    await getDb().insert(schema.sessions).values({
+      id: 'session-folder-delete-st', machineId: 'm-folder-delete', agent: 'claude', cwd: root, state: 'idle',
+    });
+
+    const deletion = await app!.inject({
+      method: 'DELETE',
+      url: '/api/sessions/session-folder-delete-st/files?path=reports%2Farchive',
+      headers: { host: 'localhost:7620', cookie },
+    });
+
+    expect(deletion.statusCode).toBe(200);
+    expect(deletion.json()).toEqual({ ok: true, path: 'reports/archive' });
+    await expect(access(join(root, 'reports', 'archive'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('authorizes workspace file operations and forwards container-aware runner RPC', async () => {
