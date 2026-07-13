@@ -47,6 +47,19 @@ describe('runnerMethods contracts', () => {
     expect(() => runnerMethods['workspace.read'].params.parse({ root: '/work', path: '' })).toThrow();
   });
 
+  it('validates bounded workspace directory archives for host and container sessions', () => {
+    expect(runnerMethods['workspace.archive'].params.parse({ root: '/work', path: 'out/reports' })).toEqual({
+      root: '/work', path: 'out/reports',
+    });
+    expect(runnerMethods['workspace.archive'].params.parse({
+      root: '/workspace', path: 'results', containerId: 'c1',
+    })).toMatchObject({ containerId: 'c1' });
+    expect(() => runnerMethods['workspace.archive'].params.parse({ root: '/work', path: '' })).toThrow();
+    expect(() => runnerMethods['workspace.archive'].result.parse({
+      ok: true, basename: 'reports.tar.gz', size: 10 * 1024 * 1024 + 1, data: '',
+    })).toThrow();
+  });
+
   it('validates bounded workspace file writes for host and container sessions', () => {
     const data = Buffer.from([0, 1, 255]).toString('base64');
     expect(runnerMethods['workspace.write'].params.parse({ root: '/work', path: 'out/result.bin', data, size: 3 }))

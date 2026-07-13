@@ -37,6 +37,17 @@ describe('createRunnerMethodHandler', () => {
     });
   });
 
+  it('dispatches workspace.archive through the bounded directory archiver', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-archive-'));
+    await import('node:fs/promises').then(({ mkdir }) => mkdir(join(root, 'reports')));
+    await writeFile(join(root, 'reports', 'answer.txt'), 'runner bytes');
+    const result = await handler()('workspace.archive', { root, path: 'reports' }) as {
+      ok: boolean; basename: string; size: number; data: string;
+    };
+    expect(result).toMatchObject({ ok: true, basename: 'reports.tar.gz' });
+    expect(Buffer.from(result.data, 'base64')).toHaveLength(result.size);
+  });
+
   it('dispatches workspace.write through the confined binary writer', async () => {
     const root = await mkdtemp(join(tmpdir(), 'co-method-write-'));
     const bytes = Buffer.from([0, 128, 255]);

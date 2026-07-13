@@ -8,6 +8,7 @@ import { provisionWorkspace } from './workspace';
 import { containerExec, containerRm, containerRun } from './container';
 import { ContainerSession } from './container-agent/container-session';
 import { readWorkspaceFile } from './workspaceFile';
+import { archiveWorkspaceDirectory } from './workspaceArchive';
 import { listWorkspaceDirectory } from './workspaceList';
 import { writeWorkspaceFile } from './workspaceWrite';
 import { deleteWorkspaceFile } from './workspaceDelete';
@@ -118,6 +119,9 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
       }
       case 'workspace.read': {
         return readWorkspaceFile(runnerMethods['workspace.read'].params.parse(params));
+      }
+      case 'workspace.archive': {
+        return archiveWorkspaceDirectory(runnerMethods['workspace.archive'].params.parse(params));
       }
       case 'workspace.write': {
         return writeWorkspaceFile(runnerMethods['workspace.write'].params.parse(params));

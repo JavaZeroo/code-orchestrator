@@ -150,6 +150,15 @@ export async function downloadSessionArtifact(
   download(await response.blob(), filename);
 }
 
+export async function downloadSessionDirectoryArchive(
+  sessionId: string,
+  path: string,
+  request = api.workspaceArchive,
+  download?: (blob: Blob, filename: string) => void,
+): Promise<void> {
+  await downloadSessionArtifact(sessionId, path, request, download);
+}
+
 export function workspaceChildPath(path: string, name: string): string {
   return path ? `${path}/${name}` : name;
 }
@@ -406,6 +415,7 @@ export function WorkspaceBrowserEntries({
   disabled,
   onDirectory,
   onFile,
+  onDownloadDirectory,
   onDelete,
   onRename,
   onMove,
@@ -416,6 +426,7 @@ export function WorkspaceBrowserEntries({
   disabled: boolean;
   onDirectory: (name: string) => void;
   onFile: (entry: WorkspaceEntry) => void;
+  onDownloadDirectory: (entry: WorkspaceEntry) => void;
   onDelete: (entry: WorkspaceEntry) => void;
   onRename: (entry: WorkspaceEntry, name: string) => void;
   onMove: (entry: WorkspaceEntry, destinationPath: string) => void;
@@ -439,6 +450,18 @@ export function WorkspaceBrowserEntries({
             <span className="min-w-0 flex-1 truncate font-mono">{entry.name}</span>
             {entry.type === 'file' && entry.size !== undefined && <span className="text-xs text-faint">{entry.size.toLocaleString()} B</span>}
           </button>
+          {entry.type === 'directory' && <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 text-dim"
+            aria-label={`下载 ${entry.name}`}
+            title="下载 .tar.gz"
+            disabled={disabled}
+            onClick={() => onDownloadDirectory(entry)}
+          >
+            <Download size={13} />
+          </Button>}
           <Button
             type="button"
             variant="ghost"
@@ -727,6 +750,15 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .catch((error) => toast.error(`下载失败：${error}`))
       .finally(() => setDownloading(false));
   };
+  const downloadDirectory = (entry: WorkspaceEntry) => {
+    if (downloading) return;
+    setDownloading(true);
+    const relativePath = workspaceChildPath(path, entry.name);
+    void downloadSessionDirectoryArchive(sessionId, relativePath)
+      .then(() => toast.success('文件夹归档已下载'))
+      .catch((error) => toast.error(`下载失败：${error}`))
+      .finally(() => setDownloading(false));
+  };
   const openFile = (relativePath: string, entry: WorkspaceEntry, line?: number) => {
     const openMode = workspaceFileOpenMode(entry);
     if (openMode === 'download') {
@@ -984,6 +1016,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
                 disabled={downloading || uploading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying}
                 onDirectory={(name) => setPath(workspaceChildPath(path, name))}
                 onFile={selectFile}
+                onDownloadDirectory={downloadDirectory}
                 onDelete={deleteEntry}
                 onRename={renameEntry}
                 onMove={moveEntry}
@@ -992,7 +1025,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
           {searchMatches !== null && searchTruncated && <div className="text-xs text-faint">仅显示前 100 个匹配结果，请缩小搜索范围。</div>}
           {contentMatches !== null && contentTruncated && <div className="text-xs text-faint">仅显示前 100 个内容匹配，请缩小搜索范围。</div>}
           {searchMatches === null && truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
-          <div className="text-xs text-faint">可按文件名或文件内容递归搜索并直接打开结果；也可新建文本文件或文件夹，重命名、移动、复制或删除当前目录中的文件和文件夹，或上传文件。支持的 UTF-8 文本及 PNG、JPEG、GIF、WebP 图片可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
+          <div className="text-xs text-faint">可按文件名或文件内容递归搜索并直接打开结果；也可新建文本文件或文件夹，重命名、移动、复制或删除当前目录中的文件和文件夹，或上传文件。文件夹可下载为 .tar.gz 归档；支持的 UTF-8 文本及 PNG、JPEG、GIF、WebP 图片可在线预览，其他文件可下载。单个文件或归档上限 10 MiB。</div>
         </div>}
       </DialogContent>
     </Dialog>

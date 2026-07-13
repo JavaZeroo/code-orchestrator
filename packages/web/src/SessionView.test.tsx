@@ -40,6 +40,7 @@ import {
   workspaceParentPath,
   workspaceSearchTarget,
   downloadSessionArtifact,
+  downloadSessionDirectoryArchive,
   deleteConfirmedWorkspaceEntry,
 } from './SessionView';
 
@@ -180,6 +181,16 @@ describe('SessionView artifact download action', () => {
     expect(download).toHaveBeenCalledWith(expect.any(Blob), 'final report.txt');
   });
 
+  it('downloads a directory through the archive API using the archive filename', async () => {
+    const request = vi.fn().mockResolvedValue(new Response('archive bytes', {
+      headers: { 'content-disposition': "attachment; filename*=UTF-8''reports.tar.gz" },
+    }));
+    const download = vi.fn();
+    await downloadSessionDirectoryArchive('session-1', 'out/reports', request, download);
+    expect(request).toHaveBeenCalledWith('session-1', 'out/reports');
+    expect(download).toHaveBeenCalledWith(expect.any(Blob), 'reports.tar.gz');
+  });
+
   it('renders discoverable directories and downloadable files', () => {
     const markup = renderToStaticMarkup(
       <WorkspaceBrowserEntries
@@ -188,6 +199,7 @@ describe('SessionView artifact download action', () => {
         disabled={false}
         onDirectory={vi.fn()}
         onFile={vi.fn()}
+        onDownloadDirectory={vi.fn()}
         onDelete={vi.fn()}
         onRename={vi.fn()}
         onMove={vi.fn()}
@@ -209,6 +221,8 @@ describe('SessionView artifact download action', () => {
     expect(markup).toContain('移动 result.bin');
     expect(markup).toContain('复制 reports');
     expect(markup).toContain('复制 result.bin');
+    expect(markup).toContain('下载 reports');
+    expect(markup).not.toContain('下载 result.bin');
   });
 
   it('renders recursive search paths that can be opened directly', () => {

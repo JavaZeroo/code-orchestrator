@@ -78,6 +78,13 @@ describe('api client', () => {
     expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files?path=reports%2Ffinal%20result.bin');
   });
 
+  it('constructs an encoded workspace directory archive request', async () => {
+    const response = new Response('archive bytes');
+    const fetch = mockFetch(response);
+    await expect(api.workspaceArchive('session/one', 'reports/final results')).resolves.toBe(response);
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files/archive?path=reports%2Ffinal%20results');
+  });
+
   it('loads an encoded workspace file as an inline UTF-8 preview', async () => {
     const fetch = mockFetch(new Response('# Report\nAll checks passed.'));
     await expect(api.workspaceTextPreview('session/one', 'reports/final report.md')).resolves.toEqual({

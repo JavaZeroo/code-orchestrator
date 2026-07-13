@@ -2614,6 +2614,7 @@ describeSt('server ST: API + runner websocket', () => {
     expect(signUp.statusCode).toBe(200);
     const cookie = signUp.cookies.map(({ name, value }) => `${name}=${value}`).join('; ');
     const bytes = Buffer.from([0, 17, 128, 255, 10]);
+    const archiveBytes = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x7f, 0xff]);
     const uploadedBytes = Buffer.from([255, 0, 128, 13, 10]);
     let uploaded: Buffer | undefined;
     let deletedPath: string | undefined;
@@ -2650,6 +2651,15 @@ describeSt('server ST: API + runner websocket', () => {
       'workspace.read': (params) => {
         expect(params).toEqual({ root: '/tmp/artifact-work', path: 'out/result.bin', containerId: 'artifact-container' });
         return { ok: true, basename: 'result.bin', size: bytes.length, data: bytes.toString('base64') };
+      },
+      'workspace.archive': (params) => {
+        expect(params).toEqual({ root: '/tmp/artifact-work', path: 'out/reports', containerId: 'artifact-container' });
+        return {
+          ok: true,
+          basename: 'reports.tar.gz',
+          size: archiveBytes.length,
+          data: archiveBytes.toString('base64'),
+        };
       },
       'workspace.write': (params) => {
         expect(params).toMatchObject({
@@ -2719,6 +2729,12 @@ describeSt('server ST: API + runner websocket', () => {
       method: 'GET', url: '/api/sessions/session-artifact-st/files?path=out%2Fresult.bin', headers: { host: 'localhost:7620' },
     });
     expect(unauthorized.statusCode).toBe(401);
+    const unauthorizedArchive = await app!.inject({
+      method: 'GET',
+      url: '/api/sessions/session-artifact-st/files/archive?path=out%2Freports',
+      headers: { host: 'localhost:7620' },
+    });
+    expect(unauthorizedArchive.statusCode).toBe(401);
     const unauthorizedUpload = await app!.inject({
       method: 'POST',
       url: '/api/sessions/session-artifact-st/files?path=out%2Fupload.bin',
@@ -2798,6 +2814,16 @@ describeSt('server ST: API + runner websocket', () => {
     expect(downloaded.statusCode).toBe(200);
     expect(downloaded.headers['content-disposition']).toContain('result.bin');
     expect(downloaded.rawPayload).toEqual(bytes);
+    const downloadedArchive = await app!.inject({
+      method: 'GET',
+      url: '/api/sessions/session-artifact-st/files/archive?path=out%2Freports',
+      headers: { host: 'localhost:7620', cookie },
+    });
+    expect(downloadedArchive.statusCode).toBe(200);
+    expect(downloadedArchive.headers['content-type']).toBe('application/gzip');
+    expect(downloadedArchive.headers['content-length']).toBe(String(archiveBytes.length));
+    expect(downloadedArchive.headers['content-disposition']).toContain('reports.tar.gz');
+    expect(downloadedArchive.rawPayload).toEqual(archiveBytes);
     const upload = await app!.inject({
       method: 'POST',
       url: '/api/sessions/session-artifact-st/files?path=out%2Fupload.bin',
@@ -2860,6 +2886,7 @@ describeSt('server ST: API + runner websocket', () => {
     expect(runner.calls.some((call) => call.method === 'workspace.search')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.searchContent')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.read')).toBe(true);
+    expect(runner.calls.some((call) => call.method === 'workspace.archive')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.write')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.delete')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.mkdir')).toBe(true);
