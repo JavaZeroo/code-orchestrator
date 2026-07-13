@@ -61,6 +61,16 @@ const workspaceChmodBodySchema = z.object({ executable: z.boolean() }).strict();
 const WORKSPACE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const EVENT_PAGE_SIZE = 2000;
 
+export function sessionPatchFilename(session: { id: string; title: string | null }): string {
+  const source = session.title?.trim() || session.id;
+  const safe = source
+    .replace(/[/\\\u0000-\u001f\u007f]/g, '_')
+    .replace(/\.patch$/i, '')
+    .trim()
+    .slice(0, 100) || 'session-changes';
+  return `${safe}.patch`;
+}
+
 function requireDb() {
   if (!hasDb()) {
     throw new HttpError(503, 'DATABASE_URL 未配置');
@@ -297,6 +307,31 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     }
     const [stat = '', diff = ''] = result.stdout.split("---DIFF---\n");
     return { ok: true, stat: stat.trim(), diff: diff.slice(0, 200_000) };
+  });
+
+  /** Download all tracked changes as a complete, bounded Git binary patch. */
+  app.get<{ Params: { id: string } }>('/api/sessions/:id/patch', async (req, reply) => {
+    const session = await findSession(req.params.id);
+    const result = await callRunner(session.machineId, 'workspace.patch', {
+      root: session.cwd,
+      containerId: session.containerId ?? undefined,
+    });
+    if (!result.ok) {
+      throw new HttpError(result.error?.includes('exceeds the') ? 413 : 400, result.error ?? 'workspace patch unavailable');
+    }
+    if (result.data === undefined || result.size === undefined) {
+      throw new HttpError(502, 'runner returned an invalid workspace patch');
+    }
+    const patch = Buffer.from(result.data, 'base64');
+    if (patch.length !== result.size) throw new HttpError(502, 'runner returned an invalid workspace patch');
+    if (patch.length === 0) throw new HttpError(409, '工作目录没有已跟踪的变更');
+    const filename = sessionPatchFilename(session);
+    const fallback = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+    void reply
+      .header('content-type', 'text/x-diff; charset=utf-8')
+      .header('content-length', String(patch.length))
+      .header('content-disposition', `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`)
+      .send(patch);
   });
 
   /** Download one bounded regular file from the host or container session workspace. */

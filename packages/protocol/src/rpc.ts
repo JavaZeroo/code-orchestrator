@@ -160,6 +160,20 @@ export const runnerMethods = {
       error: z.string().optional(),
     }),
   },
+  /** Generate the tracked workspace changes as a bounded binary Git patch. */
+  'workspace.patch': {
+    params: z.object({
+      root: z.string().min(1),
+      containerId: z.string().min(1).optional(),
+    }),
+    result: z.object({
+      ok: z.boolean(),
+      size: z.number().int().nonnegative().max(10 * 1024 * 1024).optional(),
+      data: z.string().max(14 * 1024 * 1024)
+        .regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/).optional(),
+      error: z.string().optional(),
+    }),
+  },
   /** Archive one directory beneath a session workspace as a bounded gzip-compressed tar payload. */
   'workspace.archive': {
     params: z.object({

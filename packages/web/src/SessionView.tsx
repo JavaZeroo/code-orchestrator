@@ -2,7 +2,7 @@ import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2,
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, isWorkspaceImagePreviewCandidate, isWorkspaceTextPreviewCandidate, WORKSPACE_TEXT_PREVIEW_MAX_BYTES, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers, type WorkspaceContentMatch, type WorkspaceEntry, type WorkspaceSearchMatch } from './api';
+import { api, downloadSessionPatch, isWorkspaceImagePreviewCandidate, isWorkspaceTextPreviewCandidate, WORKSPACE_TEXT_PREVIEW_MAX_BYTES, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers, type WorkspaceContentMatch, type WorkspaceEntry, type WorkspaceSearchMatch } from './api';
 import { UnifiedDiff } from './components/DiffView';
 import { RejectionFeedback, type ApprovalDecisionHandler } from './components/RejectionFeedback';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
@@ -106,16 +106,30 @@ function CostBadge({ usage }: { usage: SessionUsage }) {
 
 function DiffDialog({ sessionId, open, onOpenChange }: { sessionId: string; open: boolean; onOpenChange: (v: boolean) => void }) {
   const [data, setData] = useState<{ stat?: string; diff?: string; error?: string } | null>(null);
+  const [downloading, setDownloading] = useState(false);
   useEffect(() => {
     if (open) {
       setData(null);
       api.sessionDiff(sessionId).then(setData).catch((e) => setData({ error: String(e) }));
     }
   }, [open, sessionId]);
+  const downloadPatch = async () => {
+    setDownloading(true);
+    try {
+      await downloadSessionPatch(sessionId);
+    } catch (err) {
+      toast.error(`补丁下载失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDownloading(false);
+    }
+  };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent wide>
-        <DialogTitle>工作目录变更（git diff）</DialogTitle>
+        <div className="flex items-center justify-between gap-3 pr-6">
+          <DialogTitle>工作目录变更（git diff）</DialogTitle>
+          <PatchDownloadAction downloading={downloading} onDownload={() => void downloadPatch()} />
+        </div>
         {!data ? (
           <div className="text-sm text-dim">加载中…</div>
         ) : data.error || !data.diff ? (
@@ -128,6 +142,20 @@ function DiffDialog({ sessionId, open, onOpenChange }: { sessionId: string; open
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+export function PatchDownloadAction({
+  downloading,
+  onDownload,
+}: {
+  downloading: boolean;
+  onDownload: () => void;
+}) {
+  return (
+    <Button type="button" variant="ghost" size="sm" disabled={downloading} onClick={onDownload}>
+      <Download size={13} /> {downloading ? '下载中…' : '下载补丁'}
+    </Button>
   );
 }
 

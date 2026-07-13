@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execFile } from 'node:child_process';
 import { access, mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import type { FastifyInstance } from 'fastify';
 import postgres from 'postgres';
 import WebSocket from 'ws';
@@ -16,6 +18,9 @@ import { getForge } from './forge/registry';
 import { deleteHostWorkspaceFile } from '../../runner/src/workspaceDelete';
 import { chmodHostWorkspaceFile } from '../../runner/src/workspaceChmod';
 import { listHostWorkspaceDirectory } from '../../runner/src/workspaceList';
+import { createRunnerMethodHandler } from '../../runner/src/methods';
+
+const run = promisify(execFile);
 
 const runSt = Boolean(process.env.DATABASE_URL);
 const describeSt = runSt ? describe : describe.skip;
@@ -2719,6 +2724,67 @@ describeSt('server ST: API + runner websocket', () => {
     expect(refreshed.json()).toMatchObject({
       entries: [{ name: 'run.sh', type: 'file', executable: true }],
     });
+  });
+
+  it('downloads exact binary Git patch bytes through the runner RPC as an attachment', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'co-patch-st-source-'));
+    await run('git', ['init', '-q'], { cwd: source });
+    await writeFile(join(source, 'tracked.txt'), 'before\n');
+    await writeFile(join(source, 'image.bin'), Buffer.alloc(2_048, 0));
+    await run('git', ['add', '.'], { cwd: source });
+    await run('git', [
+      '-c', 'user.name=Patch ST', '-c', 'user.email=patch-st@example.com', 'commit', '-qm', 'base',
+    ], { cwd: source });
+    const clean = await mkdtemp(join(tmpdir(), 'co-patch-st-clean-'));
+    await run('git', ['clone', '-q', source, clean]);
+    await writeFile(join(source, 'tracked.txt'), 'after\n');
+    await writeFile(join(source, 'image.bin'), Buffer.alloc(2_048, 255));
+    const expected = Buffer.from((await run('git', ['diff', '--binary', 'HEAD'], {
+      cwd: source,
+      encoding: 'buffer',
+    })).stdout);
+
+    const runnerMethod = createRunnerMethodHandler({ conn: null });
+    const runner = await FakeRunner.connect(baseUrl, {
+      'workspace.patch': (params) => runnerMethod('workspace.patch', params),
+    });
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: { id: 'm-patch', name: 'Patch Runner', labels: ['dev'], resources: [], runnerVersion: 'st', startedAt: Date.now() },
+    });
+    const nonGit = await mkdtemp(join(tmpdir(), 'co-patch-st-non-git-'));
+    await getDb().insert(schema.sessions).values([
+      {
+        id: 'session-patch-st', machineId: 'm-patch', agent: 'claude', cwd: source,
+        title: 'Fix binary / 修复', state: 'idle',
+      },
+      { id: 'session-patch-empty-st', machineId: 'm-patch', agent: 'claude', cwd: clean, state: 'idle' },
+      { id: 'session-patch-non-git-st', machineId: 'm-patch', agent: 'claude', cwd: nonGit, state: 'idle' },
+    ]);
+
+    const downloaded = await app!.inject({ method: 'GET', url: '/api/sessions/session-patch-st/patch' });
+    expect(downloaded.statusCode).toBe(200);
+    expect(downloaded.headers['content-type']).toBe('text/x-diff; charset=utf-8');
+    expect(downloaded.headers['content-length']).toBe(String(expected.length));
+    expect(downloaded.headers['content-disposition']).toBe(
+      "attachment; filename=\"Fix binary _ __.patch\"; filename*=UTF-8''Fix%20binary%20_%20%E4%BF%AE%E5%A4%8D.patch",
+    );
+    expect(downloaded.rawPayload).toEqual(expected);
+    const downloadedPatch = join(clean, 'downloaded.patch');
+    await writeFile(downloadedPatch, downloaded.rawPayload);
+    await expect(run('git', ['apply', '--check', downloadedPatch], { cwd: clean })).resolves.toBeDefined();
+    expect(runner.calls).toContainEqual({
+      method: 'workspace.patch',
+      params: { root: source },
+    });
+
+    const empty = await app!.inject({ method: 'GET', url: '/api/sessions/session-patch-empty-st/patch' });
+    expect(empty.statusCode).toBe(409);
+    expect(empty.json()).toEqual({ error: '工作目录没有已跟踪的变更' });
+
+    const invalid = await app!.inject({ method: 'GET', url: '/api/sessions/session-patch-non-git-st/patch' });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().error).toContain('not a git repository');
   });
 
   it('authorizes workspace file operations and forwards container-aware runner RPC', async () => {
