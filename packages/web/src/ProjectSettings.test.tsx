@@ -2,8 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { RequirementRow } from './api';
 import {
+  downloadWorkflowTemplate,
   importWorkflowTemplateFile,
+  parseWorkflowTemplateJson,
   RequirementRowItem,
+  WorkflowExportAction,
   WorkflowImportAction,
 } from './ProjectSettings';
 
@@ -105,5 +108,39 @@ describe('workflow template import', () => {
     expect(markup).toContain('type="file"');
     expect(markup).toContain('accept="application/json,.json"');
     expect(markup).not.toContain('multiple');
+  });
+});
+
+describe('workflow template export', () => {
+  const workflow = {
+    name: 'Release / prod:night ..',
+    graph: {
+      name: 'Release pipeline',
+      description: 'Build and review a release',
+      nodes: [{ id: 'build', type: 'agent' as const, prompt: 'Build the release', cli: 'claude' as const }],
+      edges: [],
+    },
+  };
+
+  it('downloads importer-compatible pretty-printed JSON with a filename-safe workflow name', () => {
+    const download = vi.fn();
+
+    downloadWorkflowTemplate(workflow, download);
+
+    expect(download).toHaveBeenCalledOnce();
+    const [filename, contents] = download.mock.calls[0] as [string, string];
+    expect(filename).toBe('Release-prod-night.json');
+    expect(contents).toBe(`${JSON.stringify(workflow.graph, null, 2)}\n`);
+    expect(contents).toContain('\n  "nodes": [\n');
+    expect(parseWorkflowTemplateJson(contents)).toEqual(workflow.graph);
+  });
+
+  it('exposes an accessible JSON export action for an active workflow card', () => {
+    const markup = renderToStaticMarkup(
+      <WorkflowExportAction workflow={workflow} onExport={vi.fn()} />,
+    );
+
+    expect(markup).toContain('aria-label="导出 JSON"');
+    expect(markup).toContain('title="导出 JSON"');
   });
 });

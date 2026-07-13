@@ -4,7 +4,7 @@
  */
 
 import { workflowDefSchema, type WorkflowDef } from '@co/protocol';
-import { Archive, ArchiveRestore, ChevronDown, ExternalLink, MessageCircle, Play, Plus, RefreshCw, Rocket, Star, Trash2, Upload, Workflow as WorkflowIcon, Pencil } from 'lucide-react';
+import { Archive, ArchiveRestore, ChevronDown, Download, ExternalLink, MessageCircle, Play, Plus, RefreshCw, Rocket, Star, Trash2, Upload, Workflow as WorkflowIcon, Pencil } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import type { CreateTriggerBody, ForgeKind, ProjectRow, RequirementRow, TriggerRow, WorkflowDefRow } from './api';
@@ -380,6 +380,7 @@ function WorkflowDefCard({
           </span>
         </div>
         <div className="flex items-center gap-1">
+          <WorkflowExportAction workflow={def} />
           <Button variant="ghost" size="icon" onClick={() => onEdit(def)} title="编辑并发布新版本">
             <MessageCircle size={13} />
           </Button>
@@ -472,6 +473,59 @@ export async function importWorkflowTemplateFile(
   await createWorkflow(graph, 'manual', projectId);
   refreshWorkflows();
   return graph;
+}
+
+export type DownloadWorkflowTemplate = (filename: string, contents: string) => void;
+
+export function workflowTemplateFilename(name: string): string {
+  const basename = name
+    .normalize('NFKC')
+    .replace(/[\u0000-\u001f\u007f<>:"/\\|?*]+/g, '-')
+    .replace(/\.+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[.\s-]+|[.\s-]+$/g, '')
+    .slice(0, 80)
+    .replace(/[.\s-]+$/g, '');
+  return `${basename || 'workflow'}.json`;
+}
+
+export function downloadWorkflowTemplate(
+  workflow: Pick<WorkflowDefRow, 'name' | 'graph'>,
+  download: DownloadWorkflowTemplate = (filename, contents) => {
+    const url = URL.createObjectURL(new Blob([contents], { type: 'application/json;charset=utf-8' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.hidden = true;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  },
+): void {
+  download(workflowTemplateFilename(workflow.name), `${JSON.stringify(workflow.graph, null, 2)}\n`);
+}
+
+export function WorkflowExportAction({
+  workflow,
+  onExport = downloadWorkflowTemplate,
+}: {
+  workflow: Pick<WorkflowDefRow, 'name' | 'graph'>;
+  onExport?: (workflow: Pick<WorkflowDefRow, 'name' | 'graph'>) => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label="导出 JSON"
+      title="导出 JSON"
+      onClick={() => onExport(workflow)}
+    >
+      <Download size={13} />
+    </Button>
+  );
 }
 
 export function WorkflowImportAction({
