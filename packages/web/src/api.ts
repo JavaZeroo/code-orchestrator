@@ -603,6 +603,10 @@ export const api = {
     fetch(`/api/sessions/${sessionId}/diff`).then((r) => j<{ ok: boolean; stat?: string; diff?: string; error?: string }>(r)),
   sessionPatch: (sessionId: string) =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/patch`).then(ok),
+  restoreWorkspaceFile: (sessionId: string, path: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/restore?path=${encodeURIComponent(path)}`, {
+      method: 'POST',
+    }).then((r) => j<{ ok: true; path: string }>(r)),
   workspaceFile: (sessionId: string, path: string) =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`).then(ok),
   workspaceArchive: (sessionId: string, path: string) =>

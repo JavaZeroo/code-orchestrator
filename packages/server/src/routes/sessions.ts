@@ -298,10 +298,19 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
   /** 会话工作目录的 git 变更（web diff 面板用） */
   app.get<{ Params: { id: string } }>('/api/sessions/:id/diff', async (req) => {
     const session = await findSession(req.params.id);
-    const result = await callRunner(session.machineId, 'machine.exec', {
-      cmd: `git -C ${JSON.stringify(session.cwd)} diff HEAD --stat && echo '---DIFF---' && git -C ${JSON.stringify(session.cwd)} diff HEAD`,
-      timeoutMs: 20_000,
-    });
+    const cmd = "git diff HEAD --stat && echo '---DIFF---' && git diff HEAD";
+    const result = session.containerId
+      ? await callRunner(session.machineId, 'container.exec', {
+        containerId: session.containerId,
+        cmd,
+        workdir: session.cwd,
+        timeoutMs: 20_000,
+      })
+      : await callRunner(session.machineId, 'machine.exec', {
+        cmd,
+        cwd: session.cwd,
+        timeoutMs: 20_000,
+      });
     if (result.exitCode !== 0) {
       return { ok: false, error: result.stderr.slice(0, 500) || '不是 git 仓库或无法读取变更' };
     }
@@ -332,6 +341,19 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       .header('content-length', String(patch.length))
       .header('content-disposition', `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(filename)}`)
       .send(patch);
+  });
+
+  /** Discard changes to exactly one tracked file in a host or container session workspace. */
+  app.post<{ Params: { id: string }; Querystring: { path?: string } }>('/api/sessions/:id/files/restore', async (req) => {
+    const session = await findSession(req.params.id);
+    const { path } = workspaceFileQuerySchema.parse(req.query);
+    const result = await callRunner(session.machineId, 'workspace.restore', {
+      root: session.cwd,
+      path,
+      containerId: session.containerId ?? undefined,
+    });
+    if (!result.ok) throw new HttpError(400, result.error ?? 'workspace file restore failed');
+    return { ok: true, path };
   });
 
   /** Download one bounded regular file from the host or container session workspace. */

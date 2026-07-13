@@ -86,6 +86,16 @@ describe('api client', () => {
     expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/patch');
   });
 
+  it('posts an encoded tracked file restore request', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, path: 'src/file name.ts' }));
+    await expect(api.restoreWorkspaceFile('session/one', 'src/file name.ts'))
+      .resolves.toEqual({ ok: true, path: 'src/file name.ts' });
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/sessions/session%2Fone/files/restore?path=src%2Ffile%20name.ts',
+      { method: 'POST' },
+    );
+  });
+
   it('downloads patch bytes using the attachment filename', async () => {
     const anchor = { href: '', download: '', click: vi.fn() };
     const createObjectURL = vi.fn().mockReturnValue('blob:session-patch');

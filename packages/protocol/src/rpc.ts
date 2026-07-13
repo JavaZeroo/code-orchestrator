@@ -174,6 +174,18 @@ export const runnerMethods = {
       error: z.string().optional(),
     }),
   },
+  /** Restore exactly one tracked workspace file from Git HEAD, including its index state. */
+  'workspace.restore': {
+    params: z.object({
+      root: z.string().min(1),
+      path: z.string().min(1),
+      containerId: z.string().min(1).optional(),
+    }),
+    result: z.object({
+      ok: z.boolean(),
+      error: z.string().optional(),
+    }),
+  },
   /** Archive one directory beneath a session workspace as a bounded gzip-compressed tar payload. */
   'workspace.archive': {
     params: z.object({

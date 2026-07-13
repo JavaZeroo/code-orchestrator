@@ -32,6 +32,12 @@ describe('createRunnerMethodHandler', () => {
     expect(result.error).toContain('not a git repository');
   });
 
+  it('dispatches workspace.restore through the scoped Git restorer', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-restore-'));
+    await expect(handler()('workspace.restore', { root, path: 'answer.txt' }))
+      .resolves.toMatchObject({ ok: false, error: 'not a git repository' });
+  });
+
   it('dispatches workspace.read through the bounded file reader', async () => {
     const root = await mkdtemp(join(tmpdir(), 'co-method-file-'));
     await writeFile(join(root, 'answer.txt'), 'runner bytes');
