@@ -16,6 +16,7 @@ import {
   SessionTitleEditor,
   TranscriptExportAction,
   WorkspaceBrowserEntries,
+  WorkspaceCreateFileAction,
   WorkspaceCreateFolderAction,
   WorkspaceFilePreview,
   WorkspaceSearchResults,
@@ -24,6 +25,7 @@ import {
   uploadSelectedWorkspaceFile,
   saveWorkspaceTextFile,
   createNamedWorkspaceFolder,
+  createNamedWorkspaceFile,
   requestWorkspaceFolderName,
   renameNamedWorkspaceEntry,
   requestWorkspaceEntryName,
@@ -345,6 +347,41 @@ describe('SessionView artifact download action', () => {
     await expect(createNamedWorkspaceFolder('session-1', 'reports', ' daily results ', request))
       .resolves.toBe('reports/daily results');
     expect(request).toHaveBeenCalledWith('session-1', 'reports/daily results');
+  });
+
+  it('creates an empty UTF-8 text file in the current directory from the browser action', async () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceCreateFileAction disabled={false} creating={false} onCreate={vi.fn()} />,
+    );
+    expect(markup).toContain('新建文件');
+
+    const request = vi.fn().mockResolvedValue({ ok: true, path: 'reports/notes.md', size: 0 });
+    await expect(createNamedWorkspaceFile('session-1', 'reports', ' notes.md ', [], request))
+      .resolves.toBe('reports/notes.md');
+    expect(request).toHaveBeenCalledOnce();
+    const [sessionId, path, contents] = request.mock.calls[0]!;
+    expect(sessionId).toBe('session-1');
+    expect(path).toBe('reports/notes.md');
+    expect(contents).toBeInstanceOf(Blob);
+    expect(await (contents as Blob).text()).toBe('');
+    expect((contents as Blob).type).toBe('text/plain;charset=utf-8');
+  });
+
+  it('rejects invalid or conflicting file names before writing', async () => {
+    const request = vi.fn();
+    const entries = [
+      { name: 'notes.md', type: 'file' as const, size: 12 },
+      { name: 'archive', type: 'directory' as const },
+    ];
+    for (const name of ['', '.', '..', '../escape', 'nested/file', 'nested\\file']) {
+      await expect(createNamedWorkspaceFile('session-1', 'reports', name, entries, request))
+        .rejects.toThrow('文件名称');
+    }
+    await expect(createNamedWorkspaceFile('session-1', 'reports', 'notes.md', entries, request))
+      .rejects.toThrow('已存在');
+    await expect(createNamedWorkspaceFile('session-1', 'reports', 'archive', entries, request))
+      .rejects.toThrow('已存在');
+    expect(request).not.toHaveBeenCalled();
   });
 
   it('rejects folder names that could address a different directory', async () => {

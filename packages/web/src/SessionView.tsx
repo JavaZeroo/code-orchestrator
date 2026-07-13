@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Copy, Download, File, Folder, FolderInput, FolderPlus, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Search, Send, Square, Trash2, Upload, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Copy, Download, File, FilePlus, Folder, FolderInput, FolderPlus, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Search, Send, Square, Trash2, Upload, X } from 'lucide-react';
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -7,7 +7,7 @@ import { UnifiedDiff } from './components/DiffView';
 import { RejectionFeedback, type ApprovalDecisionHandler } from './components/RejectionFeedback';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
 import { Button } from './components/ui/button';
-import { Badge, StatusDot, Textarea, type BadgeTone } from './components/ui/primitives';
+import { Badge, Input, StatusDot, Textarea, type BadgeTone } from './components/ui/primitives';
 import { useSessionEvents } from './useEvents';
 import { isCodexUserInputRequest, Timeline, type ApprovalItem } from './Timeline';
 import { invalidate, useMachines } from './lib/queries';
@@ -204,6 +204,36 @@ export function normalizeWorkspaceFolderName(value: string): string | null {
 }
 
 export const normalizeWorkspaceEntryName = normalizeWorkspaceFolderName;
+export const normalizeWorkspaceFileName = normalizeWorkspaceFolderName;
+
+export async function createNamedWorkspaceFile(
+  sessionId: string,
+  directory: string,
+  value: string,
+  entries: readonly WorkspaceEntry[],
+  request = api.uploadWorkspaceFile,
+): Promise<string> {
+  const name = normalizeWorkspaceFileName(value);
+  if (!name) throw new Error('文件名称不能为空，且不能包含路径分隔符');
+  if (entries.some((entry) => entry.name === name)) throw new Error(`当前目录已存在 ${name}`);
+  const destination = workspaceChildPath(directory, name);
+  await request(sessionId, destination, new Blob([''], { type: 'text/plain;charset=utf-8' }));
+  return destination;
+}
+
+export function WorkspaceCreateFileAction({
+  disabled,
+  creating,
+  onCreate,
+}: {
+  disabled: boolean;
+  creating: boolean;
+  onCreate: () => void;
+}) {
+  return <Button type="button" variant="outline" size="sm" disabled={disabled || creating} onClick={onCreate}>
+    <FilePlus size={13} /> {creating ? '创建中…' : '新建文件'}
+  </Button>;
+}
 
 export async function renameNamedWorkspaceEntry(
   sessionId: string,
@@ -611,6 +641,8 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [savingPreview, setSavingPreview] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [fileNameDraft, setFileNameDraft] = useState<string | null>(null);
+  const [creatingFile, setCreatingFile] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [moving, setMoving] = useState(false);
@@ -648,6 +680,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       setPreview(null);
       setEditingPreview(false);
       setPreviewDraft('');
+      setFileNameDraft(null);
       setSearchQuery('');
       setSearchMatches(null);
       setSearchTruncated(false);
@@ -756,6 +789,23 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .catch((error) => toast.error(`创建失败：${error}`))
       .finally(() => setCreating(false));
   };
+  const normalizedFileName = fileNameDraft === null ? null : normalizeWorkspaceFileName(fileNameDraft);
+  const fileNameConflict = normalizedFileName !== null && entries.some((entry) => entry.name === normalizedFileName);
+  const createFile = () => {
+    if (creatingFile || fileNameDraft === null) return;
+    setCreatingFile(true);
+    void createNamedWorkspaceFile(sessionId, path, fileNameDraft, entries)
+      .then((destination) => {
+        toast.success('文件已创建');
+        setListingVersion((version) => version + 1);
+        setFileNameDraft(null);
+        setPreview({ path: destination, text: '' });
+        setPreviewDraft('');
+        setEditingPreview(true);
+      })
+      .catch((error) => toast.error(`创建失败：${error}`))
+      .finally(() => setCreatingFile(false));
+  };
   const deleteEntry = (entry: WorkspaceEntry) => {
     if (deleting) return;
     const relativePath = workspaceChildPath(path, entry.name);
@@ -858,13 +908,35 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
             </Button>
           </form>
           <div className="flex items-center gap-2">
-            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || deleting || renaming || moving || copying} onClick={() => setPath(workspaceParentPath(path))}>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying} onClick={() => setPath(workspaceParentPath(path))}>
               <ChevronLeft size={14} />
             </Button>
             <div className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={path || '/'}>/{path}</div>
-            <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || deleting || renaming || moving || copying} creating={creating} onCreate={createFolder} />
-            <WorkspaceUploadAction disabled={loading || downloading || creating || deleting || renaming || moving || copying} uploading={uploading} onFile={uploadFile} />
+            <WorkspaceCreateFileAction disabled={loading || downloading || uploading || creating || fileNameDraft !== null || deleting || renaming || moving || copying} creating={creatingFile} onCreate={() => setFileNameDraft('')} />
+            <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying} creating={creating} onCreate={createFolder} />
+            <WorkspaceUploadAction disabled={loading || downloading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying} uploading={uploading} onFile={uploadFile} />
           </div>
+          {fileNameDraft !== null ? <form
+            className="flex items-start gap-2 rounded-md border border-line bg-panel-2 p-2"
+            onSubmit={(event) => { event.preventDefault(); createFile(); }}
+          >
+            <div className="min-w-0 flex-1 space-y-1">
+              <Input
+                autoFocus
+                aria-label="新文件名称"
+                placeholder="例如 notes.md"
+                value={fileNameDraft}
+                disabled={creatingFile}
+                onChange={(event) => setFileNameDraft(event.currentTarget.value)}
+              />
+              {fileNameDraft && !normalizedFileName ? <div className="text-xs text-danger">文件名称不能是 . 或 ..，且不能包含路径分隔符。</div> : null}
+              {fileNameConflict ? <div className="text-xs text-danger">当前目录已存在同名文件或文件夹。</div> : null}
+            </div>
+            <Button type="button" variant="ghost" size="sm" disabled={creatingFile} onClick={() => setFileNameDraft(null)}>取消</Button>
+            <Button type="submit" variant="outline" size="sm" disabled={!normalizedFileName || fileNameConflict || creatingFile}>
+              <Check size={13} /> {creatingFile ? '保存中…' : '保存并编辑'}
+            </Button>
+          </form> : null}
           {contentMatches !== null
             ? <WorkspaceContentSearchResults matches={contentMatches} disabled={downloading || contentSearching} onSelect={selectContentMatch} />
             : searchMatches !== null
@@ -874,7 +946,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
             : <WorkspaceBrowserEntries
                 path={path}
                 entries={entries}
-                disabled={downloading || uploading || creating || deleting || renaming || moving || copying}
+                disabled={downloading || uploading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying}
                 onDirectory={(name) => setPath(workspaceChildPath(path, name))}
                 onFile={selectFile}
                 onDelete={deleteEntry}
@@ -885,7 +957,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
           {searchMatches !== null && searchTruncated && <div className="text-xs text-faint">仅显示前 100 个匹配结果，请缩小搜索范围。</div>}
           {contentMatches !== null && contentTruncated && <div className="text-xs text-faint">仅显示前 100 个内容匹配，请缩小搜索范围。</div>}
           {searchMatches === null && truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
-          <div className="text-xs text-faint">可按文件名或文件内容递归搜索并直接打开结果；也可新建文件夹，重命名、移动、复制或删除当前目录中的文件和文件夹，或上传文件。支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
+          <div className="text-xs text-faint">可按文件名或文件内容递归搜索并直接打开结果；也可新建文本文件或文件夹，重命名、移动、复制或删除当前目录中的文件和文件夹，或上传文件。支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
         </div>}
       </DialogContent>
     </Dialog>
