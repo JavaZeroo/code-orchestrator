@@ -104,14 +104,128 @@ function CostBadge({ usage }: { usage: SessionUsage }) {
   );
 }
 
+function decodeGitPath(value: string): string {
+  if (!value.startsWith('"') || !value.endsWith('"')) return value;
+  const source = value.slice(1, -1);
+  const bytes: number[] = [];
+  const encoder = new TextEncoder();
+  const escapes: Record<string, number> = {
+    a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, '\\': 92,
+  };
+  for (let index = 0; index < source.length; index += 1) {
+    const codePoint = source.codePointAt(index)!;
+    const char = String.fromCodePoint(codePoint);
+    if (char !== '\\') {
+      bytes.push(...encoder.encode(char));
+      if (char.length === 2) index += 1;
+      continue;
+    }
+    const escaped = source[++index];
+    if (escaped === undefined) break;
+    if (/[0-7]/.test(escaped)) {
+      let octal = escaped;
+      while (octal.length < 3 && /[0-7]/.test(source[index + 1] ?? '')) octal += source[++index];
+      bytes.push(Number.parseInt(octal, 8));
+    } else {
+      bytes.push(escapes[escaped] ?? escaped.charCodeAt(0));
+    }
+  }
+  return new TextDecoder().decode(Uint8Array.from(bytes));
+}
+
+function stripGitPrefix(value: string): string | null {
+  const decoded = decodeGitPath(value);
+  if (!decoded || decoded === '/dev/null') return null;
+  return decoded.startsWith('a/') || decoded.startsWith('b/') ? decoded.slice(2) : decoded;
+}
+
+function pathFromDiffHeader(line: string): string | null {
+  const value = line.slice('diff --git '.length);
+  if (value.startsWith('"')) {
+    const match = value.match(/^("(?:\\.|[^"])*") ("(?:\\.|[^"])*")$/);
+    return match ? stripGitPrefix(match[2]!) : null;
+  }
+  let nextPath = value.indexOf(' b/');
+  while (nextPath >= 0) {
+    const before = value.slice(0, nextPath);
+    const after = value.slice(nextPath + 1);
+    if (before.startsWith('a/') && before.slice(2) === after.slice(2)) return stripGitPrefix(after);
+    nextPath = value.indexOf(' b/', nextPath + 1);
+  }
+  nextPath = value.lastIndexOf(' b/');
+  return nextPath >= 0 ? stripGitPrefix(value.slice(nextPath + 1)) : null;
+}
+
+/** Extract exact tracked paths from Git's unified diff, including deletions and mode-only changes. */
+export function changedWorkspacePaths(diff: string): string[] {
+  const paths = new Set<string>();
+  for (const block of diff.split(/(?=^diff --git )/m)) {
+    if (!block.startsWith('diff --git ')) continue;
+    const lines = block.split('\n');
+    const before = lines.find((line) => line.startsWith('--- '));
+    const after = lines.find((line) => line.startsWith('+++ '));
+    const path = stripGitPrefix(after?.slice(4) ?? '')
+      ?? stripGitPrefix(before?.slice(4) ?? '')
+      ?? pathFromDiffHeader(lines[0]!);
+    if (path) paths.add(path);
+  }
+  return [...paths];
+}
+
+export function WorkspaceDiscardActions({
+  paths,
+  restoringPath,
+  onDiscard,
+}: {
+  paths: string[];
+  restoringPath: string | null;
+  onDiscard: (path: string) => void;
+}) {
+  if (paths.length === 0) return null;
+  return (
+    <div className="mb-3 divide-y divide-line rounded-lg border border-line">
+      {paths.map((path) => (
+        <div key={path} className="flex items-center justify-between gap-3 px-3 py-2">
+          <code className="min-w-0 truncate text-xs text-dim" title={path}>{path}</code>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={restoringPath !== null}
+            aria-label={`丢弃 ${path} 的变更`}
+            onClick={() => onDiscard(path)}
+          >
+            <RotateCcw size={13} /> {restoringPath === path ? '丢弃中…' : '丢弃变更'}
+          </Button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export async function discardConfirmedWorkspaceChange(
+  sessionId: string,
+  path: string,
+  request = api.restoreWorkspaceFile,
+  confirmDiscard: (path: string) => boolean = (target) => window.confirm(
+    `确定丢弃 ${target} 的全部变更并恢复到 Git HEAD 吗？`,
+  ),
+): Promise<boolean> {
+  if (!confirmDiscard(path)) return false;
+  await request(sessionId, path);
+  return true;
+}
+
 function DiffDialog({ sessionId, open, onOpenChange }: { sessionId: string; open: boolean; onOpenChange: (v: boolean) => void }) {
   const [data, setData] = useState<{ stat?: string; diff?: string; error?: string } | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [restoringPath, setRestoringPath] = useState<string | null>(null);
+  const loadDiff = () => {
+    setData(null);
+    return api.sessionDiff(sessionId).then(setData).catch((e) => setData({ error: String(e) }));
+  };
   useEffect(() => {
-    if (open) {
-      setData(null);
-      api.sessionDiff(sessionId).then(setData).catch((e) => setData({ error: String(e) }));
-    }
+    if (open) void loadDiff();
   }, [open, sessionId]);
   const downloadPatch = async () => {
     setDownloading(true);
@@ -123,6 +237,19 @@ function DiffDialog({ sessionId, open, onOpenChange }: { sessionId: string; open
       setDownloading(false);
     }
   };
+  const discard = async (path: string) => {
+    setRestoringPath(path);
+    try {
+      if (!await discardConfirmedWorkspaceChange(sessionId, path)) return;
+      toast.success(`已丢弃 ${path} 的变更`);
+      await loadDiff();
+    } catch (err) {
+      toast.error(`丢弃变更失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setRestoringPath(null);
+    }
+  };
+  const changedPaths = data?.diff ? changedWorkspacePaths(data.diff) : [];
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent wide>
@@ -137,6 +264,7 @@ function DiffDialog({ sessionId, open, onOpenChange }: { sessionId: string; open
         ) : (
           <>
             {data.stat && <pre className="mb-2 font-mono text-xs text-dim">{data.stat}</pre>}
+            <WorkspaceDiscardActions paths={changedPaths} restoringPath={restoringPath} onDiscard={(path) => void discard(path)} />
             <UnifiedDiff diff={data.diff} />
           </>
         )}

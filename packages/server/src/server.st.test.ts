@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
-import { access, mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -2889,6 +2889,62 @@ describeSt('server ST: API + runner websocket', () => {
     const invalid = await app!.inject({ method: 'GET', url: '/api/sessions/session-patch-non-git-st/patch' });
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json().error).toContain('not a git repository');
+  });
+
+  it('discards one tracked file through REST and runner RPC without touching other changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-restore-st-'));
+    await run('git', ['init', '-q'], { cwd: root });
+    await writeFile(join(root, 'selected.txt'), 'selected before\n');
+    await writeFile(join(root, 'other.txt'), 'other before\n');
+    await run('git', ['add', '.'], { cwd: root });
+    await run('git', [
+      '-c', 'user.name=Restore ST', '-c', 'user.email=restore-st@example.com', 'commit', '-qm', 'base',
+    ], { cwd: root });
+    await writeFile(join(root, 'selected.txt'), 'selected changed\n');
+    await writeFile(join(root, 'other.txt'), 'other changed\n');
+    await writeFile(join(root, 'untracked.txt'), 'keep untracked\n');
+
+    const runnerMethod = createRunnerMethodHandler({ conn: null });
+    const runner = await FakeRunner.connect(baseUrl, {
+      'workspace.restore': (params) => runnerMethod('workspace.restore', params),
+    });
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: { id: 'm-restore', name: 'Restore Runner', labels: ['dev'], resources: [], runnerVersion: 'st', startedAt: Date.now() },
+    });
+    await getDb().insert(schema.sessions).values({
+      id: 'session-restore-st', machineId: 'm-restore', agent: 'claude', cwd: root, state: 'idle',
+    });
+
+    const restored = await app!.inject({
+      method: 'POST', url: '/api/sessions/session-restore-st/files/restore?path=selected.txt',
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json()).toEqual({ ok: true, path: 'selected.txt' });
+    expect(runner.calls).toContainEqual({
+      method: 'workspace.restore', params: { root, path: 'selected.txt' },
+    });
+    await expect(readFile(join(root, 'selected.txt'), 'utf8')).resolves.toBe('selected before\n');
+    await expect(readFile(join(root, 'other.txt'), 'utf8')).resolves.toBe('other changed\n');
+    expect((await run('git', ['diff', '--name-only', 'HEAD'], { cwd: root })).stdout).toBe('other.txt\n');
+
+    const untracked = await app!.inject({
+      method: 'POST', url: '/api/sessions/session-restore-st/files/restore?path=untracked.txt',
+    });
+    expect(untracked.statusCode).toBe(400);
+    expect(untracked.json().error).toContain('not a tracked file');
+    await expect(readFile(join(root, 'untracked.txt'), 'utf8')).resolves.toBe('keep untracked\n');
+
+    await writeFile(join(root, 'selected.txt'), 'must survive offline request\n');
+    await getDb().insert(schema.sessions).values({
+      id: 'session-restore-offline-st', machineId: 'm-restore-offline', agent: 'claude', cwd: root, state: 'idle',
+    });
+    const offline = await app!.inject({
+      method: 'POST', url: '/api/sessions/session-restore-offline-st/files/restore?path=selected.txt',
+    });
+    expect(offline.statusCode).toBe(500);
+    expect(offline.json().error).toContain('runner offline');
+    await expect(readFile(join(root, 'selected.txt'), 'utf8')).resolves.toBe('must survive offline request\n');
   });
 
   it('authorizes workspace file operations and forwards container-aware runner RPC', async () => {

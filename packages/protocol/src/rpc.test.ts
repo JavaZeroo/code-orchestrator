@@ -60,6 +60,17 @@ describe('runnerMethods contracts', () => {
     })).toThrow();
   });
 
+  it('validates single-file workspace restores for host and container sessions', () => {
+    expect(runnerMethods['workspace.restore'].params.parse({ root: '/work', path: 'src/main.ts' }))
+      .toEqual({ root: '/work', path: 'src/main.ts' });
+    expect(runnerMethods['workspace.restore'].params.parse({
+      root: '/workspace', path: 'src/main.ts', containerId: 'c1',
+    })).toEqual({ root: '/workspace', path: 'src/main.ts', containerId: 'c1' });
+    expect(() => runnerMethods['workspace.restore'].params.parse({ root: '/work', path: '' })).toThrow();
+    expect(runnerMethods['workspace.restore'].result.parse({ ok: false, error: 'not tracked' }))
+      .toEqual({ ok: false, error: 'not tracked' });
+  });
+
   it('validates bounded workspace directory archives for host and container sessions', () => {
     expect(runnerMethods['workspace.archive'].params.parse({ root: '/work', path: 'out/reports' })).toEqual({
       root: '/work', path: 'out/reports',

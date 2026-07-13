@@ -8,6 +8,8 @@ import {
   LoadEarlierAction,
   normalizeSessionTitle,
   PatchDownloadAction,
+  changedWorkspacePaths,
+  discardConfirmedWorkspaceChange,
   ResumeAction,
   SESSION_TITLE_MAX_LENGTH,
   sessionArchiveMode,
@@ -19,6 +21,7 @@ import {
   extractWorkspaceArchiveHere,
   isWorkspaceArchive,
   WorkspaceBrowserEntries,
+  WorkspaceDiscardActions,
   WorkspaceCreateFileAction,
   WorkspaceCreateFolderAction,
   WorkspaceFilePreview,
@@ -182,6 +185,55 @@ describe('SessionView patch download action', () => {
     expect(ready).not.toContain('disabled=""');
     expect(downloading).toContain('下载中…');
     expect(downloading).toContain('disabled=""');
+  });
+});
+
+describe('SessionView tracked change discard actions', () => {
+  it('extracts modified, deleted, quoted, and mode-only tracked paths from a Git diff', () => {
+    const diff = [
+      'diff --git a/src/main.ts b/src/main.ts',
+      '--- a/src/main.ts',
+      '+++ b/src/main.ts',
+      'diff --git a/old.txt b/old.txt',
+      '--- a/old.txt',
+      '+++ /dev/null',
+      'diff --git "a/docs/file\\040name.md" "b/docs/file\\040name.md"',
+      '--- "a/docs/file\\040name.md"',
+      '+++ "b/docs/file\\040name.md"',
+      'diff --git a/scripts/run me.sh b/scripts/run me.sh',
+      'old mode 100644',
+      'new mode 100755',
+    ].join('\n');
+    expect(changedWorkspacePaths(diff)).toEqual([
+      'src/main.ts', 'old.txt', 'docs/file name.md', 'scripts/run me.sh',
+    ]);
+  });
+
+  it('renders one disabled destructive action for each changed path while restoring', () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceDiscardActions
+        paths={['src/main.ts', 'docs/guide.md']}
+        restoringPath="src/main.ts"
+        onDiscard={vi.fn()}
+      />,
+    );
+    expect(markup).toContain('丢弃 src/main.ts 的变更');
+    expect(markup).toContain('丢弃 docs/guide.md 的变更');
+    expect(markup).toContain('丢弃中…');
+    expect(markup.match(/disabled=""/g)).toHaveLength(2);
+  });
+
+  it('requires confirmation before restoring the exact selected path', async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true, path: 'src/main.ts' });
+    await expect(discardConfirmedWorkspaceChange(
+      'session-1', 'src/main.ts', request, () => false,
+    )).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
+
+    await expect(discardConfirmedWorkspaceChange(
+      'session-1', 'src/main.ts', request, () => true,
+    )).resolves.toBe(true);
+    expect(request).toHaveBeenCalledWith('session-1', 'src/main.ts');
   });
 });
 
