@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, decodeWorkspaceTextPreview, WORKSPACE_TEXT_PREVIEW_MAX_BYTES, type WorkflowDef } from './api';
+import {
+  api,
+  decodeWorkspaceImagePreview,
+  decodeWorkspaceTextPreview,
+  isWorkspaceImagePreviewCandidate,
+  workspaceImageMimeType,
+  WORKSPACE_IMAGE_PREVIEW_MAX_BYTES,
+  WORKSPACE_TEXT_PREVIEW_MAX_BYTES,
+  type WorkflowDef,
+} from './api';
 
 function mockFetch(response: Response) {
   const fetch = vi.fn().mockResolvedValue(response);
@@ -83,6 +92,37 @@ describe('api client', () => {
     await expect(decodeWorkspaceTextPreview(new Response('small', {
       headers: { 'content-length': String(WORKSPACE_TEXT_PREVIEW_MAX_BYTES + 1) },
     }))).resolves.toEqual({ kind: 'oversized' });
+  });
+
+  it('classifies bounded PNG, JPEG, GIF, and WebP files as image previews', () => {
+    expect(workspaceImageMimeType('chart.PNG')).toBe('image/png');
+    expect(workspaceImageMimeType('photo.jpg')).toBe('image/jpeg');
+    expect(workspaceImageMimeType('photo.JPEG')).toBe('image/jpeg');
+    expect(workspaceImageMimeType('animation.gif')).toBe('image/gif');
+    expect(workspaceImageMimeType('capture.webp')).toBe('image/webp');
+    expect(isWorkspaceImagePreviewCandidate({ name: 'chart.png', type: 'file', size: WORKSPACE_IMAGE_PREVIEW_MAX_BYTES })).toBe(true);
+    expect(isWorkspaceImagePreviewCandidate({ name: 'chart.png', type: 'file', size: WORKSPACE_IMAGE_PREVIEW_MAX_BYTES + 1 })).toBe(false);
+    expect(isWorkspaceImagePreviewCandidate({ name: 'vector.svg', type: 'file', size: 42 })).toBe(false);
+  });
+
+  it('loads workspace images with a browser-renderable MIME type', async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const fetch = mockFetch(new Response(bytes));
+
+    const result = await api.workspaceImagePreview('session/one', 'screens/final chart.png');
+
+    expect(result.kind).toBe('image');
+    if (result.kind === 'image') {
+      expect(result.blob.type).toBe('image/png');
+      expect(new Uint8Array(await result.blob.arrayBuffer())).toEqual(bytes);
+    }
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files?path=screens%2Ffinal%20chart.png');
+  });
+
+  it('rejects oversized image responses before creating a preview blob', async () => {
+    await expect(decodeWorkspaceImagePreview(new Response('small', {
+      headers: { 'content-length': String(WORKSPACE_IMAGE_PREVIEW_MAX_BYTES + 1) },
+    }), 'image/webp')).resolves.toEqual({ kind: 'oversized' });
   });
 
   it('surfaces preview request errors', async () => {
