@@ -320,6 +320,28 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       .send(data);
   });
 
+  /** Download one bounded workspace directory as a gzip-compressed tar archive. */
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/sessions/:id/files/archive', async (req, reply) => {
+    const session = await findSession(req.params.id);
+    const { path } = workspaceFileQuerySchema.parse(req.query);
+    const result = await callRunner(session.machineId, 'workspace.archive', {
+      root: session.cwd,
+      path,
+      containerId: session.containerId ?? undefined,
+    });
+    if (!result.ok || result.data === undefined || result.basename === undefined || result.size === undefined) {
+      throw new HttpError(400, result.error ?? 'workspace directory archive unavailable');
+    }
+    const data = Buffer.from(result.data, 'base64');
+    if (data.length !== result.size) throw new HttpError(502, 'runner returned an invalid workspace archive');
+    const fallback = result.basename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_') || 'workspace.tar.gz';
+    void reply
+      .header('content-type', 'application/gzip')
+      .header('content-length', String(data.length))
+      .header('content-disposition', `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(result.basename)}`)
+      .send(data);
+  });
+
   /** Upload one bounded file into the host or container session workspace. */
   app.post<{ Params: { id: string }; Querystring: { path?: string }; Body: Buffer }>('/api/sessions/:id/files', {
     bodyLimit: WORKSPACE_UPLOAD_MAX_BYTES,

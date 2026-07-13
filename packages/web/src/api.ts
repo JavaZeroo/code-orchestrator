@@ -565,6 +565,8 @@ export const api = {
     fetch(`/api/sessions/${sessionId}/diff`).then((r) => j<{ ok: boolean; stat?: string; diff?: string; error?: string }>(r)),
   workspaceFile: (sessionId: string, path: string) =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`).then(ok),
+  workspaceArchive: (sessionId: string, path: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/archive?path=${encodeURIComponent(path)}`).then(ok),
   workspaceTextPreview: (sessionId: string, path: string) =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`)
       .then(ok)
