@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { isWorkspaceTextPreviewCandidate, WORKSPACE_TEXT_PREVIEW_MAX_BYTES, type SessionRow } from './api';
+import { isWorkspaceImagePreviewCandidate, isWorkspaceTextPreviewCandidate, WORKSPACE_IMAGE_PREVIEW_MAX_BYTES, WORKSPACE_TEXT_PREVIEW_MAX_BYTES, type SessionRow } from './api';
 import {
   ForkAction,
   isSessionForkable,
@@ -33,7 +33,9 @@ import {
   requestWorkspaceMoveDestination,
   copyNamedWorkspaceEntry,
   requestWorkspaceCopyDestination,
+  replaceWorkspaceImageObjectUrl,
   WORKSPACE_UPLOAD_MAX_BYTES,
+  workspaceFileOpenMode,
   workspaceChildPath,
   workspaceParentPath,
   workspaceSearchTarget,
@@ -407,6 +409,21 @@ describe('SessionView artifact download action', () => {
     expect(isWorkspaceTextPreviewCandidate({ name: 'report.txt', type: 'file' })).toBe(false);
   });
 
+  it('offers inline preview for bounded supported images but not other binary files', () => {
+    expect(isWorkspaceImagePreviewCandidate({ name: 'screenshot.png', type: 'file', size: 42 })).toBe(true);
+    expect(isWorkspaceImagePreviewCandidate({ name: 'chart.webp', type: 'file', size: WORKSPACE_IMAGE_PREVIEW_MAX_BYTES })).toBe(true);
+    expect(isWorkspaceImagePreviewCandidate({ name: 'diagram.svg', type: 'file', size: 42 })).toBe(false);
+    expect(isWorkspaceImagePreviewCandidate({ name: 'archive.zip', type: 'file', size: 42 })).toBe(false);
+    expect(isWorkspaceImagePreviewCandidate({ name: 'large.gif', type: 'file', size: WORKSPACE_IMAGE_PREVIEW_MAX_BYTES + 1 })).toBe(false);
+  });
+
+  it('keeps unsupported binary files on the download path', () => {
+    expect(workspaceFileOpenMode({ name: 'report.md', type: 'file', size: 42 })).toBe('text-preview');
+    expect(workspaceFileOpenMode({ name: 'screenshot.jpeg', type: 'file', size: 42 })).toBe('image-preview');
+    expect(workspaceFileOpenMode({ name: 'diagram.svg', type: 'file', size: 42 })).toBe('download');
+    expect(workspaceFileOpenMode({ name: 'archive.zip', type: 'file', size: 42 })).toBe('download');
+  });
+
   it('renders readable preview content with back navigation and explicit download', () => {
     const markup = renderToStaticMarkup(
       <WorkspaceFilePreview
@@ -422,6 +439,44 @@ describe('SessionView artifact download action', () => {
     expect(markup).toContain('# Final report');
     expect(markup).toContain('下载');
     expect(markup).toContain('编辑');
+  });
+
+  it('renders an image preview with back navigation and explicit download', () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceFilePreview
+        path="screens/result.png"
+        imageUrl="blob:workspace-image"
+        downloading={false}
+        onBack={vi.fn()}
+        onDownload={vi.fn()}
+      />,
+    );
+    expect(markup).toContain('返回目录列表');
+    expect(markup).toContain('src="blob:workspace-image"');
+    expect(markup).toContain('alt="工作区图片 screens/result.png"');
+    expect(markup).toContain('下载');
+    expect(markup).not.toContain('编辑');
+  });
+
+  it('revokes image object URLs when previews change or close', () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL')
+      .mockReturnValueOnce('blob:first')
+      .mockReturnValueOnce('blob:second');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    try {
+      const first = replaceWorkspaceImageObjectUrl(undefined, new Blob(['first'], { type: 'image/png' }));
+      const second = replaceWorkspaceImageObjectUrl(first, new Blob(['second'], { type: 'image/webp' }));
+      const closed = replaceWorkspaceImageObjectUrl(second);
+
+      expect(first).toBe('blob:first');
+      expect(second).toBe('blob:second');
+      expect(closed).toBeUndefined();
+      expect(revokeObjectURL).toHaveBeenNthCalledWith(1, 'blob:first');
+      expect(revokeObjectURL).toHaveBeenNthCalledWith(2, 'blob:second');
+    } finally {
+      createObjectURL.mockRestore();
+      revokeObjectURL.mockRestore();
+    }
   });
 
   it('writes exact UTF-8 text back to the same workspace path', async () => {

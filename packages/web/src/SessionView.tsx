@@ -2,7 +2,7 @@ import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2,
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, isWorkspaceTextPreviewCandidate, WORKSPACE_TEXT_PREVIEW_MAX_BYTES, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers, type WorkspaceContentMatch, type WorkspaceEntry, type WorkspaceSearchMatch } from './api';
+import { api, isWorkspaceImagePreviewCandidate, isWorkspaceTextPreviewCandidate, WORKSPACE_TEXT_PREVIEW_MAX_BYTES, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers, type WorkspaceContentMatch, type WorkspaceEntry, type WorkspaceSearchMatch } from './api';
 import { UnifiedDiff } from './components/DiffView';
 import { RejectionFeedback, type ApprovalDecisionHandler } from './components/RejectionFeedback';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
@@ -167,6 +167,12 @@ export function workspaceSearchTarget(match: WorkspaceSearchMatch):
     path: match.path,
     entry: { name: match.path.split('/').at(-1) ?? match.path, type: 'file', size: match.size },
   };
+}
+
+export function workspaceFileOpenMode(entry: WorkspaceEntry): 'text-preview' | 'image-preview' | 'download' {
+  if (isWorkspaceTextPreviewCandidate(entry)) return 'text-preview';
+  if (isWorkspaceImagePreviewCandidate(entry)) return 'image-preview';
+  return 'download';
 }
 
 export const WORKSPACE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
@@ -543,6 +549,7 @@ export function WorkspaceContentSearchResults({
 export function WorkspaceFilePreview({
   path,
   text,
+  imageUrl,
   error,
   downloading,
   onBack,
@@ -559,6 +566,7 @@ export function WorkspaceFilePreview({
 }: {
   path: string;
   text?: string;
+  imageUrl?: string;
   error?: string;
   downloading: boolean;
   onBack: () => void;
@@ -615,6 +623,10 @@ export function WorkspaceFilePreview({
           </div>
         : error
         ? <div className="rounded-md border border-line bg-panel-2 px-3 py-8 text-center text-sm text-dim">{error}</div>
+        : imageUrl
+          ? <div className="flex max-h-[60vh] justify-center overflow-auto rounded-md border border-line bg-bg-2 p-3">
+              <img className="max-h-[55vh] max-w-full object-contain" src={imageUrl} alt={`工作区图片 ${path}`} />
+            </div>
         : line && text
           ? <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-bg-2 p-3 font-mono text-xs leading-5 text-ink">
               {text.split(/\r?\n/).map((value, index) => {
@@ -627,6 +639,11 @@ export function WorkspaceFilePreview({
   );
 }
 
+export function replaceWorkspaceImageObjectUrl(currentUrl?: string, blob?: Blob): string | undefined {
+  if (currentUrl) URL.revokeObjectURL(currentUrl);
+  return blob ? URL.createObjectURL(blob) : undefined;
+}
+
 export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sessionId: string; open: boolean; onOpenChange: (v: boolean) => void }) {
   const [path, setPath] = useState('');
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
@@ -634,7 +651,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
-  const [preview, setPreview] = useState<{ path: string; line?: number; text?: string; error?: string } | null>(null);
+  const [preview, setPreview] = useState<{ path: string; line?: number; text?: string; imageUrl?: string; error?: string } | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [editingPreview, setEditingPreview] = useState(false);
   const [previewDraft, setPreviewDraft] = useState('');
@@ -657,6 +674,16 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [contentSearching, setContentSearching] = useState(false);
   const [listingVersion, setListingVersion] = useState(0);
   const previewRequestRef = useRef(0);
+  const imageObjectUrlRef = useRef<string | undefined>(undefined);
+  const replaceImageObjectUrl = (blob?: Blob) => {
+    const nextUrl = replaceWorkspaceImageObjectUrl(imageObjectUrlRef.current, blob);
+    imageObjectUrlRef.current = nextUrl;
+    return nextUrl;
+  };
+  useEffect(() => () => {
+    replaceWorkspaceImageObjectUrl(imageObjectUrlRef.current);
+    imageObjectUrlRef.current = undefined;
+  }, []);
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -677,6 +704,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       setPath('');
       setEntries([]);
       setError(null);
+      replaceImageObjectUrl();
       setPreview(null);
       setEditingPreview(false);
       setPreviewDraft('');
@@ -700,19 +728,25 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .finally(() => setDownloading(false));
   };
   const openFile = (relativePath: string, entry: WorkspaceEntry, line?: number) => {
-    if (!isWorkspaceTextPreviewCandidate(entry)) {
+    const openMode = workspaceFileOpenMode(entry);
+    if (openMode === 'download') {
       downloadFile(relativePath);
       return;
     }
     const requestId = ++previewRequestRef.current;
+    replaceImageObjectUrl();
     setPreview({ path: relativePath, line });
     setEditingPreview(false);
     setPreviewDraft('');
     setPreviewing(true);
-    void api.workspaceTextPreview(sessionId, relativePath)
+    const request = openMode === 'image-preview'
+      ? api.workspaceImagePreview(sessionId, relativePath)
+      : api.workspaceTextPreview(sessionId, relativePath);
+    void request
       .then((result) => {
         if (previewRequestRef.current !== requestId) return;
-        if (result.kind === 'text') setPreview({ path: relativePath, line, text: result.text });
+        if (result.kind === 'image') setPreview({ path: relativePath, imageUrl: replaceImageObjectUrl(result.blob) });
+        else if (result.kind === 'text') setPreview({ path: relativePath, line, text: result.text });
         else setPreview({ path: relativePath, line, error: result.kind === 'oversized' ? '文件过大，无法预览，请下载后查看。' : '文件不是可预览的 UTF-8 文本，请下载后查看。' });
       })
       .catch((error) => {
@@ -853,6 +887,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
         {preview ? <WorkspaceFilePreview
           path={preview.path}
           text={previewing ? '加载中…' : preview.text}
+          imageUrl={previewing ? undefined : preview.imageUrl}
           error={previewing ? undefined : preview.error}
           downloading={downloading}
           editing={editingPreview}
@@ -863,7 +898,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
           onDraftChange={setPreviewDraft}
           onCancel={() => { setPreviewDraft(preview.text ?? ''); setEditingPreview(false); }}
           onSave={savePreview}
-          onBack={() => { previewRequestRef.current += 1; setPreviewing(false); setEditingPreview(false); setPreview(null); }}
+          onBack={() => { previewRequestRef.current += 1; replaceImageObjectUrl(); setPreviewing(false); setEditingPreview(false); setPreview(null); }}
           onDownload={() => downloadFile(preview.path, false)}
           line={preview.line}
         /> : <div className="space-y-3">
@@ -957,7 +992,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
           {searchMatches !== null && searchTruncated && <div className="text-xs text-faint">仅显示前 100 个匹配结果，请缩小搜索范围。</div>}
           {contentMatches !== null && contentTruncated && <div className="text-xs text-faint">仅显示前 100 个内容匹配，请缩小搜索范围。</div>}
           {searchMatches === null && truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
-          <div className="text-xs text-faint">可按文件名或文件内容递归搜索并直接打开结果；也可新建文本文件或文件夹，重命名、移动、复制或删除当前目录中的文件和文件夹，或上传文件。支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
+          <div className="text-xs text-faint">可按文件名或文件内容递归搜索并直接打开结果；也可新建文本文件或文件夹，重命名、移动、复制或删除当前目录中的文件和文件夹，或上传文件。支持的 UTF-8 文本及 PNG、JPEG、GIF、WebP 图片可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
         </div>}
       </DialogContent>
     </Dialog>

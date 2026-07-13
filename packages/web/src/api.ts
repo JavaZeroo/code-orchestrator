@@ -119,11 +119,38 @@ export interface WorkspaceContentSearchResult {
 }
 
 export const WORKSPACE_TEXT_PREVIEW_MAX_BYTES = 512 * 1024;
+export const WORKSPACE_IMAGE_PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
+
+export type WorkspaceImageMimeType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+
+const WORKSPACE_IMAGE_MIME_TYPES: Record<string, WorkspaceImageMimeType> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+};
 
 export type WorkspaceTextPreview =
   | { kind: 'text'; text: string }
   | { kind: 'binary' }
   | { kind: 'oversized' };
+
+export type WorkspaceImagePreview =
+  | { kind: 'image'; blob: Blob }
+  | { kind: 'oversized' };
+
+export function workspaceImageMimeType(name: string): WorkspaceImageMimeType | null {
+  const extension = name.toLowerCase().match(/\.([^.]+)$/)?.[1];
+  return extension ? WORKSPACE_IMAGE_MIME_TYPES[extension] ?? null : null;
+}
+
+export function isWorkspaceImagePreviewCandidate(entry: WorkspaceEntry): boolean {
+  return entry.type === 'file'
+    && entry.size !== undefined
+    && entry.size <= WORKSPACE_IMAGE_PREVIEW_MAX_BYTES
+    && workspaceImageMimeType(entry.name) !== null;
+}
 
 export function isWorkspaceTextPreviewCandidate(entry: WorkspaceEntry): boolean {
   if (entry.type !== 'file' || entry.size === undefined || entry.size > WORKSPACE_TEXT_PREVIEW_MAX_BYTES) return false;
@@ -151,6 +178,17 @@ export async function decodeWorkspaceTextPreview(response: Response): Promise<Wo
   }
   if (text.length > 0 && controls / text.length > 0.01) return { kind: 'binary' };
   return { kind: 'text', text };
+}
+
+export async function decodeWorkspaceImagePreview(
+  response: Response,
+  mimeType: WorkspaceImageMimeType,
+): Promise<WorkspaceImagePreview> {
+  const declaredSize = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredSize) && declaredSize > WORKSPACE_IMAGE_PREVIEW_MAX_BYTES) return { kind: 'oversized' };
+  const bytes = await response.arrayBuffer();
+  if (bytes.byteLength > WORKSPACE_IMAGE_PREVIEW_MAX_BYTES) return { kind: 'oversized' };
+  return { kind: 'image', blob: new Blob([bytes], { type: mimeType }) };
 }
 
 export interface MachineRow {
@@ -531,6 +569,13 @@ export const api = {
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`)
       .then(ok)
       .then(decodeWorkspaceTextPreview),
+  workspaceImagePreview: (sessionId: string, path: string) => {
+    const mimeType = workspaceImageMimeType(path);
+    if (!mimeType) return Promise.reject(new Error('unsupported workspace image type'));
+    return fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`)
+      .then(ok)
+      .then((response) => decodeWorkspaceImagePreview(response, mimeType));
+  },
   workspaceFiles: (sessionId: string, path = '') =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/list?path=${encodeURIComponent(path)}`)
       .then((r) => j<WorkspaceListing>(r)),
