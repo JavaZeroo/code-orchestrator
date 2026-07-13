@@ -28,6 +28,8 @@ import {
   requestWorkspaceEntryName,
   moveNamedWorkspaceEntry,
   requestWorkspaceMoveDestination,
+  copyNamedWorkspaceEntry,
+  requestWorkspaceCopyDestination,
   WORKSPACE_UPLOAD_MAX_BYTES,
   workspaceChildPath,
   workspaceParentPath,
@@ -184,6 +186,7 @@ describe('SessionView artifact download action', () => {
         onDelete={vi.fn()}
         onRename={vi.fn()}
         onMove={vi.fn()}
+        onCopy={vi.fn()}
       />,
     );
     expect(markup).toContain('reports');
@@ -199,6 +202,8 @@ describe('SessionView artifact download action', () => {
     expect(markup).toContain('重命名 result.bin');
     expect(markup).toContain('移动 reports');
     expect(markup).toContain('移动 result.bin');
+    expect(markup).toContain('复制 reports');
+    expect(markup).toContain('复制 result.bin');
   });
 
   it('renders recursive search paths that can be opened directly', () => {
@@ -270,6 +275,30 @@ describe('SessionView artifact download action', () => {
     const request = vi.fn();
     for (const destination of ['', '.', '..', '/archive/draft', '../escape', 'archive/../draft', 'archive\\draft', 'archive//draft']) {
       await expect(moveNamedWorkspaceEntry('session-1', 'reports/draft', destination, request))
+        .rejects.toThrow('目标路径');
+    }
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('copies a file or folder to a prompted workspace-relative destination', async () => {
+    const entry = { name: 'draft', type: 'directory' as const };
+    const onCopy = vi.fn();
+    requestWorkspaceCopyDestination(entry, 'reports', onCopy, (_message, initial) => {
+      expect(initial).toBe('reports/draft-copy');
+      return 'archive/draft';
+    });
+    expect(onCopy).toHaveBeenCalledWith(entry, 'archive/draft');
+
+    const request = vi.fn().mockResolvedValue({ ok: true, path: 'archive/draft' });
+    await expect(copyNamedWorkspaceEntry('session-1', 'reports/draft', ' archive/draft ', request))
+      .resolves.toBe('archive/draft');
+    expect(request).toHaveBeenCalledWith('session-1', 'reports/draft', 'archive/draft');
+  });
+
+  it('rejects copy destinations outside the workspace', async () => {
+    const request = vi.fn();
+    for (const destination of ['', '.', '..', '/archive/draft', '../escape', 'archive/../draft', 'archive\\draft', 'archive//draft']) {
+      await expect(copyNamedWorkspaceEntry('session-1', 'reports/draft', destination, request))
         .rejects.toThrow('目标路径');
     }
     expect(request).not.toHaveBeenCalled();

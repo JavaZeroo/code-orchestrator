@@ -81,6 +81,20 @@ describe('runnerMethods contracts', () => {
     expect(() => runnerMethods['workspace.mkdir'].params.parse({ root: '/work', path: '' })).toThrow();
   });
 
+  it('validates workspace copies for host and container sessions', () => {
+    expect(runnerMethods['workspace.copy'].params.parse({
+      root: '/work', path: 'reports/draft', destinationPath: 'archive/draft',
+    })).toEqual({ root: '/work', path: 'reports/draft', destinationPath: 'archive/draft' });
+    expect(runnerMethods['workspace.copy'].params.parse({
+      root: '/workspace', path: 'reports', destinationPath: 'reports-copy', containerId: 'c1',
+    })).toMatchObject({ containerId: 'c1', destinationPath: 'reports-copy' });
+    expect(() => runnerMethods['workspace.copy'].params.parse({
+      root: '/work', path: '', destinationPath: 'copy',
+    })).toThrow();
+    expect(runnerMethods['workspace.copy'].result.parse({ ok: true, path: 'archive/draft' }))
+      .toEqual({ ok: true, path: 'archive/draft' });
+  });
+
   it('validates workspace directory listings for host and container sessions', () => {
     expect(runnerMethods['workspace.list'].params.parse({ root: '/work' })).toEqual({ root: '/work', path: '' });
     expect(runnerMethods['workspace.list'].params.parse({ root: '/workspace', path: 'out', containerId: 'c1' }))
