@@ -2,7 +2,7 @@ import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2,
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, isWorkspaceTextPreviewCandidate, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers, type WorkspaceContentMatch, type WorkspaceEntry, type WorkspaceSearchMatch } from './api';
+import { api, isWorkspaceTextPreviewCandidate, WORKSPACE_TEXT_PREVIEW_MAX_BYTES, type ApprovalRequest, type SessionNoteEventRow, type SessionRow, type SessionUsage, type UserInputAnswers, type WorkspaceContentMatch, type WorkspaceEntry, type WorkspaceSearchMatch } from './api';
 import { UnifiedDiff } from './components/DiffView';
 import { RejectionFeedback, type ApprovalDecisionHandler } from './components/RejectionFeedback';
 import { Dialog, DialogContent, DialogTitle } from './components/ui/dialog';
@@ -170,6 +170,19 @@ export function workspaceSearchTarget(match: WorkspaceSearchMatch):
 }
 
 export const WORKSPACE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+export async function saveWorkspaceTextFile(
+  sessionId: string,
+  path: string,
+  text: string,
+  request = api.uploadWorkspaceFile,
+): Promise<void> {
+  const contents = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  if (contents.size > WORKSPACE_TEXT_PREVIEW_MAX_BYTES) {
+    throw new Error(`文件超过 ${WORKSPACE_TEXT_PREVIEW_MAX_BYTES} 字节编辑上限`);
+  }
+  await request(sessionId, path, contents);
+}
 
 export async function uploadSelectedWorkspaceFile(
   sessionId: string,
@@ -504,6 +517,14 @@ export function WorkspaceFilePreview({
   downloading,
   onBack,
   onDownload,
+  editing = false,
+  saving = false,
+  draft = text ?? '',
+  editable = text !== undefined && error === undefined,
+  onEdit,
+  onDraftChange,
+  onCancel,
+  onSave,
   line,
 }: {
   path: string;
@@ -512,24 +533,57 @@ export function WorkspaceFilePreview({
   downloading: boolean;
   onBack: () => void;
   onDownload: () => void;
+  editing?: boolean;
+  saving?: boolean;
+  draft?: string;
+  editable?: boolean;
+  onEdit?: () => void;
+  onDraftChange?: (value: string) => void;
+  onCancel?: () => void;
+  onSave?: () => void;
   line?: number;
 }) {
   const matchedLineRef = useRef<HTMLSpanElement>(null);
+  const draftSize = new Blob([draft]).size;
+  const draftOversized = draftSize > WORKSPACE_TEXT_PREVIEW_MAX_BYTES;
   useEffect(() => {
     if (line && text) matchedLineRef.current?.scrollIntoView({ block: 'center' });
   }, [line, text]);
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <Button type="button" variant="ghost" size="icon-sm" aria-label="返回目录列表" disabled={downloading} onClick={onBack}>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label="返回目录列表" disabled={downloading || saving} onClick={onBack}>
           <ChevronLeft size={14} />
         </Button>
         <div className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={path}>/{path}{line ? `:${line}` : ''}</div>
-        <Button type="button" variant="outline" size="sm" disabled={downloading} onClick={onDownload}>
+        {editable && !editing ? <Button type="button" variant="outline" size="sm" disabled={downloading || saving} onClick={onEdit}>
+          <Pencil size={13} /> 编辑
+        </Button> : null}
+        {editing ? <>
+          <Button type="button" variant="ghost" size="sm" disabled={saving} onClick={onCancel}>取消</Button>
+          <Button type="button" variant="outline" size="sm" disabled={saving || draftOversized} onClick={onSave}>
+            <Check size={13} /> {saving ? '保存中…' : '保存'}
+          </Button>
+        </> : null}
+        <Button type="button" variant="outline" size="sm" disabled={downloading || saving} onClick={onDownload}>
           <Download size={13} /> {downloading ? '下载中…' : '下载'}
         </Button>
       </div>
-      {error
+      {editing
+        ? <div className="space-y-1">
+            <Textarea
+              autoFocus
+              aria-label="工作区文件内容"
+              className="min-h-[50vh] resize-y font-mono text-xs leading-5"
+              disabled={saving}
+              value={draft}
+              onChange={(event) => onDraftChange?.(event.currentTarget.value)}
+            />
+            <div className={draftOversized ? 'text-xs text-danger' : 'text-xs text-faint'}>
+              {draftSize} / {WORKSPACE_TEXT_PREVIEW_MAX_BYTES} 字节
+            </div>
+          </div>
+        : error
         ? <div className="rounded-md border border-line bg-panel-2 px-3 py-8 text-center text-sm text-dim">{error}</div>
         : line && text
           ? <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-bg-2 p-3 font-mono text-xs leading-5 text-ink">
@@ -552,6 +606,9 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [downloading, setDownloading] = useState(false);
   const [preview, setPreview] = useState<{ path: string; line?: number; text?: string; error?: string } | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [editingPreview, setEditingPreview] = useState(false);
+  const [previewDraft, setPreviewDraft] = useState('');
+  const [savingPreview, setSavingPreview] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -589,6 +646,8 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       setEntries([]);
       setError(null);
       setPreview(null);
+      setEditingPreview(false);
+      setPreviewDraft('');
       setSearchQuery('');
       setSearchMatches(null);
       setSearchTruncated(false);
@@ -614,6 +673,8 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
     }
     const requestId = ++previewRequestRef.current;
     setPreview({ path: relativePath, line });
+    setEditingPreview(false);
+    setPreviewDraft('');
     setPreviewing(true);
     void api.workspaceTextPreview(sessionId, relativePath)
       .then((result) => {
@@ -629,6 +690,22 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       });
   };
   const selectFile = (entry: WorkspaceEntry) => openFile(workspaceChildPath(path, entry.name), entry);
+  const savePreview = () => {
+    if (!preview || savingPreview) return;
+    const previewPath = preview.path;
+    setSavingPreview(true);
+    void saveWorkspaceTextFile(sessionId, previewPath, previewDraft)
+      .then(() => api.workspaceTextPreview(sessionId, previewPath))
+      .then((result) => {
+        if (result.kind !== 'text') throw new Error('保存后的文件无法作为 UTF-8 文本读取');
+        setPreview({ path: previewPath, text: result.text });
+        setPreviewDraft(result.text);
+        setEditingPreview(false);
+        toast.success('文件已保存');
+      })
+      .catch((error) => toast.error(`保存失败：${error}`))
+      .finally(() => setSavingPreview(false));
+  };
   const searchWorkspace = () => {
     const query = searchQuery.trim();
     if (!query || searching) return;
@@ -728,7 +805,15 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
           text={previewing ? '加载中…' : preview.text}
           error={previewing ? undefined : preview.error}
           downloading={downloading}
-          onBack={() => { previewRequestRef.current += 1; setPreviewing(false); setPreview(null); }}
+          editing={editingPreview}
+          saving={savingPreview}
+          draft={previewDraft}
+          editable={!previewing && preview.text !== undefined && preview.error === undefined}
+          onEdit={() => { setPreviewDraft(preview.text ?? ''); setEditingPreview(true); }}
+          onDraftChange={setPreviewDraft}
+          onCancel={() => { setPreviewDraft(preview.text ?? ''); setEditingPreview(false); }}
+          onSave={savePreview}
+          onBack={() => { previewRequestRef.current += 1; setPreviewing(false); setEditingPreview(false); setPreview(null); }}
           onDownload={() => downloadFile(preview.path, false)}
           line={preview.line}
         /> : <div className="space-y-3">

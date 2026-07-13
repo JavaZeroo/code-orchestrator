@@ -22,6 +22,7 @@ import {
   WorkspaceContentSearchResults,
   WorkspaceUploadAction,
   uploadSelectedWorkspaceFile,
+  saveWorkspaceTextFile,
   createNamedWorkspaceFolder,
   requestWorkspaceFolderName,
   renameNamedWorkspaceEntry,
@@ -383,6 +384,60 @@ describe('SessionView artifact download action', () => {
     expect(markup).toContain('reports/final.md');
     expect(markup).toContain('# Final report');
     expect(markup).toContain('下载');
+    expect(markup).toContain('编辑');
+  });
+
+  it('writes exact UTF-8 text back to the same workspace path', async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true, path: 'reports/final.md', size: 16 });
+    const text = '第一行\nsecond line\n';
+    await saveWorkspaceTextFile('session-1', 'reports/final.md', text, request);
+
+    expect(request).toHaveBeenCalledOnce();
+    const [sessionId, path, contents] = request.mock.calls[0]!;
+    expect(sessionId).toBe('session-1');
+    expect(path).toBe('reports/final.md');
+    expect(contents).toBeInstanceOf(Blob);
+    expect(await (contents as Blob).text()).toBe(text);
+    expect((contents as Blob).type).toBe('text/plain;charset=utf-8');
+  });
+
+  it('renders Save and Cancel only while editing, with the persisted text as the draft', () => {
+    const preview = renderToStaticMarkup(
+      <WorkspaceFilePreview
+        path="reports/final.md"
+        text="persisted"
+        draft="changed"
+        editing
+        downloading={false}
+        onBack={vi.fn()}
+        onDownload={vi.fn()}
+        onDraftChange={vi.fn()}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+    expect(preview).toContain('工作区文件内容');
+    expect(preview).toContain('changed');
+    expect(preview).toContain('取消');
+    expect(preview).toContain('保存');
+    expect(preview).not.toContain('>编辑<');
+  });
+
+  it('rejects oversized UTF-8 edits before writing', async () => {
+    const request = vi.fn();
+    await expect(saveWorkspaceTextFile(
+      'session-1',
+      'reports/final.md',
+      '界'.repeat(Math.floor(WORKSPACE_TEXT_PREVIEW_MAX_BYTES / 3) + 1),
+      request,
+    )).rejects.toThrow('编辑上限');
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('keeps workspace write failures observable to the editor', async () => {
+    const request = vi.fn().mockRejectedValue(new Error('runner offline'));
+    await expect(saveWorkspaceTextFile('session-1', 'reports/final.md', 'changed', request))
+      .rejects.toThrow('runner offline');
   });
 
   it('keeps download available when a preview cannot be loaded', () => {
@@ -398,6 +453,7 @@ describe('SessionView artifact download action', () => {
     expect(markup).toContain('预览加载失败');
     expect(markup).toContain('返回目录列表');
     expect(markup).toContain('下载');
+    expect(markup).not.toContain('编辑');
   });
 });
 
