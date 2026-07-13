@@ -157,6 +157,18 @@ describe('api client', () => {
     });
   });
 
+  it('moves an encoded workspace entry to a destination path', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, path: 'archive/draft.txt' }));
+    await expect(api.moveWorkspaceEntry('session/one', 'reports/draft.txt', 'archive/draft.txt')).resolves.toEqual({
+      ok: true, path: 'archive/draft.txt',
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files/move?path=reports%2Fdraft.txt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ destinationPath: 'archive/draft.txt' }),
+    });
+  });
+
   it('posts JSON bodies for session spawn', async () => {
     const fetch = mockFetch(Response.json({ sessionId: 's1' }));
 

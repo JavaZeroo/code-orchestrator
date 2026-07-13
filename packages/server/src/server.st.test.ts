@@ -2619,6 +2619,7 @@ describeSt('server ST: API + runner websocket', () => {
     let deletedPath: string | undefined;
     let createdDirectory: string | undefined;
     let renamedEntry: { path: string; newName: string } | undefined;
+    let movedEntry: { path: string; destinationPath: string } | undefined;
     const runner = await FakeRunner.connect(baseUrl, {
       'workspace.list': (params) => {
         expect(params).toEqual({ root: '/tmp/artifact-work', path: '', containerId: 'artifact-container' });
@@ -2677,6 +2678,13 @@ describeSt('server ST: API + runner websocket', () => {
         renamedEntry = params as { path: string; newName: string };
         return { ok: true, path: 'out/final' };
       },
+      'workspace.move': (params) => {
+        expect(params).toEqual({
+          root: '/tmp/artifact-work', path: 'reports/draft', destinationPath: 'archive/draft', containerId: 'artifact-container',
+        });
+        movedEntry = params as { path: string; destinationPath: string };
+        return { ok: true, path: 'archive/draft' };
+      },
     });
     runners.push(runner);
     await runner.callServer('machine.register', {
@@ -2729,6 +2737,13 @@ describeSt('server ST: API + runner websocket', () => {
       payload: { name: 'final' },
     });
     expect(unauthorizedRename.statusCode).toBe(401);
+    const unauthorizedMove = await app!.inject({
+      method: 'POST',
+      url: '/api/sessions/session-artifact-st/files/move?path=reports%2Fdraft',
+      headers: { host: 'localhost:7620', 'content-type': 'application/json' },
+      payload: { destinationPath: 'archive/draft' },
+    });
+    expect(unauthorizedMove.statusCode).toBe(401);
     const listing = await app!.inject({
       method: 'GET',
       url: '/api/sessions/session-artifact-st/files/list?path=',
@@ -2804,6 +2819,17 @@ describeSt('server ST: API + runner websocket', () => {
     expect(renamedEntry).toEqual({
       root: '/tmp/artifact-work', path: 'out/draft', newName: 'final', containerId: 'artifact-container',
     });
+    const move = await app!.inject({
+      method: 'POST',
+      url: '/api/sessions/session-artifact-st/files/move?path=reports%2Fdraft',
+      headers: { host: 'localhost:7620', cookie, 'content-type': 'application/json' },
+      payload: { destinationPath: 'archive/draft' },
+    });
+    expect(move.statusCode).toBe(200);
+    expect(move.json()).toEqual({ ok: true, path: 'archive/draft' });
+    expect(movedEntry).toEqual({
+      root: '/tmp/artifact-work', path: 'reports/draft', destinationPath: 'archive/draft', containerId: 'artifact-container',
+    });
     expect(runner.calls.some((call) => call.method === 'workspace.list')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.search')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.searchContent')).toBe(true);
@@ -2812,6 +2838,7 @@ describeSt('server ST: API + runner websocket', () => {
     expect(runner.calls.some((call) => call.method === 'workspace.delete')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.mkdir')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.rename')).toBe(true);
+    expect(runner.calls.some((call) => call.method === 'workspace.move')).toBe(true);
   });
 
   it('posts forge comments through authenticated refs with the requester token', async () => {

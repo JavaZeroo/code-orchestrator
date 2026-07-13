@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Download, File, Folder, FolderPlus, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Search, Send, Square, Trash2, Upload, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Download, File, Folder, FolderInput, FolderPlus, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Search, Send, Square, Trash2, Upload, X } from 'lucide-react';
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -213,6 +213,37 @@ export function requestWorkspaceEntryName(
   if (name !== null) onRename(entry, name);
 }
 
+export function normalizeWorkspaceMoveDestination(value: string): string | null {
+  const path = value.trim();
+  const parts = path.split('/');
+  return path && !path.startsWith('/') && !path.includes('\\') && parts.every((part) => part && part !== '.' && part !== '..')
+    ? path
+    : null;
+}
+
+export async function moveNamedWorkspaceEntry(
+  sessionId: string,
+  path: string,
+  value: string,
+  request = api.moveWorkspaceEntry,
+): Promise<string> {
+  const destinationPath = normalizeWorkspaceMoveDestination(value);
+  if (!destinationPath) throw new Error('目标路径必须是工作区内的相对路径，且不能包含空段或 ..');
+  const result = await request(sessionId, path, destinationPath);
+  return result.path;
+}
+
+export function requestWorkspaceMoveDestination(
+  entry: WorkspaceEntry,
+  currentPath: string,
+  onMove: (entry: WorkspaceEntry, destinationPath: string) => void,
+  ask: (message: string, initial: string) => string | null = (message, initial) => prompt(message, initial),
+): void {
+  const sourcePath = workspaceChildPath(currentPath, entry.name);
+  const destinationPath = ask(`请输入 ${entry.name} 的目标相对路径`, sourcePath);
+  if (destinationPath !== null) onMove(entry, destinationPath);
+}
+
 export async function createNamedWorkspaceFolder(
   sessionId: string,
   directory: string,
@@ -298,19 +329,23 @@ export function WorkspaceUploadAction({
 }
 
 export function WorkspaceBrowserEntries({
+  path,
   entries,
   disabled,
   onDirectory,
   onFile,
   onDelete,
   onRename,
+  onMove,
 }: {
+  path: string;
   entries: WorkspaceEntry[];
   disabled: boolean;
   onDirectory: (name: string) => void;
   onFile: (entry: WorkspaceEntry) => void;
   onDelete: (entry: WorkspaceEntry) => void;
   onRename: (entry: WorkspaceEntry, name: string) => void;
+  onMove: (entry: WorkspaceEntry, destinationPath: string) => void;
 }) {
   if (entries.length === 0) return <div className="py-8 text-center text-sm text-faint">此目录为空</div>;
   return (
@@ -340,6 +375,17 @@ export function WorkspaceBrowserEntries({
             onClick={() => requestWorkspaceEntryName(entry, onRename)}
           >
             <Pencil size={13} />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 text-dim"
+            aria-label={`移动 ${entry.name}`}
+            disabled={disabled}
+            onClick={() => requestWorkspaceMoveDestination(entry, path, onMove)}
+          >
+            <FolderInput size={13} />
           </Button>
           <Button
             type="button"
@@ -474,6 +520,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMatches, setSearchMatches] = useState<WorkspaceSearchMatch[] | null>(null);
   const [searchTruncated, setSearchTruncated] = useState(false);
@@ -617,6 +664,15 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .catch((error) => toast.error(`重命名失败：${error}`))
       .finally(() => setRenaming(false));
   };
+  const moveEntry = (entry: WorkspaceEntry, destinationPath: string) => {
+    if (moving) return;
+    const relativePath = workspaceChildPath(path, entry.name);
+    setMoving(true);
+    void moveNamedWorkspaceEntry(sessionId, relativePath, destinationPath)
+      .then(() => { toast.success('条目已移动'); setListingVersion((version) => version + 1); })
+      .catch((error) => toast.error(`移动失败：${error}`))
+      .finally(() => setMoving(false));
+  };
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent>
@@ -671,12 +727,12 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
             </Button>
           </form>
           <div className="flex items-center gap-2">
-            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || deleting || renaming} onClick={() => setPath(workspaceParentPath(path))}>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || deleting || renaming || moving} onClick={() => setPath(workspaceParentPath(path))}>
               <ChevronLeft size={14} />
             </Button>
             <div className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={path || '/'}>/{path}</div>
-            <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || deleting || renaming} creating={creating} onCreate={createFolder} />
-            <WorkspaceUploadAction disabled={loading || downloading || creating || deleting || renaming} uploading={uploading} onFile={uploadFile} />
+            <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || deleting || renaming || moving} creating={creating} onCreate={createFolder} />
+            <WorkspaceUploadAction disabled={loading || downloading || creating || deleting || renaming || moving} uploading={uploading} onFile={uploadFile} />
           </div>
           {contentMatches !== null
             ? <WorkspaceContentSearchResults matches={contentMatches} disabled={downloading || contentSearching} onSelect={selectContentMatch} />
@@ -685,17 +741,19 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
             : loading ? <div className="py-8 text-center text-sm text-dim">加载中…</div>
             : error ? <div className="py-8 text-center text-sm text-danger">目录加载失败：{error}</div>
             : <WorkspaceBrowserEntries
+                path={path}
                 entries={entries}
-                disabled={downloading || uploading || creating || deleting || renaming}
+                disabled={downloading || uploading || creating || deleting || renaming || moving}
                 onDirectory={(name) => setPath(workspaceChildPath(path, name))}
                 onFile={selectFile}
                 onDelete={deleteEntry}
                 onRename={renameEntry}
+                onMove={moveEntry}
               />}
           {searchMatches !== null && searchTruncated && <div className="text-xs text-faint">仅显示前 100 个匹配结果，请缩小搜索范围。</div>}
           {contentMatches !== null && contentTruncated && <div className="text-xs text-faint">仅显示前 100 个内容匹配，请缩小搜索范围。</div>}
           {searchMatches === null && truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
-          <div className="text-xs text-faint">可按文件名或文件内容递归搜索并直接打开结果；也可新建文件夹，重命名或删除当前目录中的文件和空文件夹，或上传文件。支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
+          <div className="text-xs text-faint">可按文件名或文件内容递归搜索并直接打开结果；也可新建文件夹，重命名、移动或删除当前目录中的文件和空文件夹，或上传文件。支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
         </div>}
       </DialogContent>
     </Dialog>
