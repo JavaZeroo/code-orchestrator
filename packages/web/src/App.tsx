@@ -13,7 +13,7 @@ import { Button } from './components/ui/button';
 import { Spinner, StatusDot } from './components/ui/primitives';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { isWaitingRun, isWaitingSession, waitingCountByProject, type AttentionItem } from './lib/attention';
-import { invalidate, useArchivedRuns, useArchivedSessions, useProjects, useRuns, useSession, useSessions } from './lib/queries';
+import { invalidate, useArchivedRuns, useArchivedSessions, useConversationSearch, useProjects, useRuns, useSession, useSessions } from './lib/queries';
 import { ProjectProvider, useCurrentProject, useProjectScope } from './lib/project';
 import { runDisplayTitle, runMatchesSearch } from './lib/runTitle';
 import { listenForThreadSelection, parseThreadSelection, pushThreadSelection, type ThreadSelection } from './lib/urlSelection';
@@ -289,6 +289,7 @@ function HomeScreen({
   );
 
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'session' | 'run'>('all');
   const [showHistory, setShowHistory] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -296,7 +297,19 @@ function HomeScreen({
   const [updatingRunArchive, setUpdatingRunArchive] = useState<string | null>(null);
   const [updatingRunProgression, setUpdatingRunProgression] = useState<string | null>(null);
 
-  const q = search.trim().toLowerCase();
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  const trimmedSearch = search.trim();
+  const q = trimmedSearch.toLowerCase();
+  const contentQuery = trimmedSearch && debouncedSearch === trimmedSearch ? debouncedSearch : '';
+  const { data: contentMatches = [], isFetching: contentSearchPending } = useConversationSearch(contentQuery, projectId);
+  const filteredContentMatches = useMemo(
+    () => contentMatches.filter((match) => filter === 'all' || match.kind === filter),
+    [contentMatches, filter],
+  );
   const visible = useMemo(() => allThreads.filter((t) => {
     if (filter === 'session' && t.kind !== 'session') return false;
     if (filter === 'run' && t.kind !== 'run') return false;
@@ -514,7 +527,7 @@ function HomeScreen({
         {/* 搜索 */}
         <input
           type="text"
-          placeholder="搜索标题/cwd/模型/id…"
+          placeholder="搜索标题、消息内容、cwd、模型或 id…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-full rounded-lg border border-line bg-bg-2 px-2.5 py-1.5 text-[12px] text-ink-2 outline-none placeholder:text-faint focus:border-accent"
@@ -535,6 +548,32 @@ function HomeScreen({
 
         {/* 线程列表 */}
         <div className="flex flex-1 flex-col gap-1 overflow-y-auto">
+          {contentQuery && (contentSearchPending || filteredContentMatches.length > 0) && (
+            <>
+              <div className="flex items-center gap-1.5 px-2 pt-1 pb-0.5">
+                <span className="text-[10px] font-semibold tracking-wide text-accent uppercase">消息内容</span>
+                {contentSearchPending
+                  ? <Spinner />
+                  : <span className="mono-nums text-[10px] text-faint">{filteredContentMatches.length}</span>}
+              </div>
+              {filteredContentMatches.map((match) => (
+                <button
+                  key={`content:${match.kind}:${match.id}`}
+                  className="rounded-lg p-2 text-left transition-colors hover:bg-panel-2"
+                  onClick={() => setSelected(match.kind === 'session' ? { session: match.id } : { run: match.id })}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <span className="block min-w-0 flex-1 truncate text-[13px] font-medium text-ink-2">{match.title}</span>
+                    {match.archived && <span className="shrink-0 text-[9px] text-faint">已归档</span>}
+                  </span>
+                  <span className="mt-0.5 block line-clamp-2 text-[10px] leading-4 text-dim" title={match.snippet}>
+                    {match.role === 'user' ? '你' : 'Agent'}：{match.snippet}
+                  </span>
+                </button>
+              ))}
+            </>
+          )}
+
           {/* 等我处理置顶区 */}
           {waiting.length > 0 && (
             <>
@@ -585,7 +624,9 @@ function HomeScreen({
             </>
           )}
 
-          {visible.length === 0 && visibleArchived.length === 0 && <p className="px-2 py-6 text-center text-xs text-faint">还没有线程</p>}
+          {visible.length === 0 && visibleArchived.length === 0 && filteredContentMatches.length === 0 && !contentSearchPending && (
+            <p className="px-2 py-6 text-center text-xs text-faint">{q ? '没有匹配的线程或消息' : '还没有线程'}</p>
+          )}
         </div>
       </aside>
 

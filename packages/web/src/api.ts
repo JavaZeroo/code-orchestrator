@@ -52,6 +52,18 @@ export interface SessionEventPage {
   };
 }
 
+export interface ConversationSearchResult {
+  kind: 'session' | 'run';
+  id: string;
+  sessionId: string;
+  title: string;
+  snippet: string;
+  role: 'user' | 'agent';
+  archived: boolean;
+  projectId: string | null;
+  eventSeq: number;
+}
+
 export type SessionEventCursor =
   | { before: number; since?: never }
   | { before?: never; since: number };
@@ -484,6 +496,13 @@ export const api = {
   session: (sessionId: string) =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}`).then((r) => j<{ session: SessionRow }>(r)).then((d) => d.session),
   archivedSessions: () => fetch('/api/sessions?archived=true').then((r) => j<{ sessions: SessionRow[] }>(r)).then((d) => d.sessions),
+  searchConversations: (query: string, projectId?: string | null) => {
+    const params = new URLSearchParams({ q: query });
+    if (projectId) params.set('projectId', projectId);
+    return fetch(`/api/conversations/search?${params.toString()}`)
+      .then((r) => j<{ results: ConversationSearchResult[] }>(r))
+      .then((data) => data.results);
+  },
   renameSession: (sessionId: string, title: string) =>
     fetch(`/api/sessions/${sessionId}`, {
       method: 'PATCH',

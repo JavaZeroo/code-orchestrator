@@ -20,6 +20,7 @@ import { registerProjectRoutes } from './routes/projects';
 import { registerSessionRoutes } from './routes/sessions';
 import { registerTaskQueueRoutes } from './routes/taskQueue';
 import { registerComponentRoutes } from './routes/components';
+import { registerConversationSearchRoutes } from './routes/conversationSearch';
 import { registerTriggerRoutes } from './routes/triggers';
 import { registerWorkRoutes } from './routes/work';
 import { registerWorkflowRoutes } from './routes/workflows';
@@ -209,6 +210,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
   await registerRunnerHub(app);
   registerClientHub(app, authEnabled);
   await registerSessionRoutes(app);
+  await registerConversationSearchRoutes(app);
   await registerTaskQueueRoutes(app);
   await registerWorkflowRoutes(app);
   await registerForgeRoutes(app);
