@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Copy, Download, File, FilePlus, Folder, FolderInput, FolderPlus, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Search, Send, Square, Trash2, Upload, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Copy, Download, File, FilePlus, Folder, FolderInput, FolderPlus, GitCompare, GitFork, NotebookPen, PackageOpen, Pencil, RotateCcw, Search, Send, Square, Trash2, Upload, X } from 'lucide-react';
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -182,6 +182,19 @@ export function workspaceFileOpenMode(entry: WorkspaceEntry): 'text-preview' | '
   if (isWorkspaceTextPreviewCandidate(entry)) return 'text-preview';
   if (isWorkspaceImagePreviewCandidate(entry)) return 'image-preview';
   return 'download';
+}
+
+export function isWorkspaceArchive(entry: WorkspaceEntry): boolean {
+  return entry.type === 'file' && entry.name.toLowerCase().endsWith('.tar.gz');
+}
+
+export async function extractWorkspaceArchiveHere(
+  sessionId: string,
+  path: string,
+  request = api.extractWorkspaceArchive,
+): Promise<number> {
+  const result = await request(sessionId, path);
+  return result.entries;
 }
 
 export const WORKSPACE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
@@ -428,6 +441,7 @@ export function WorkspaceBrowserEntries({
   onDirectory,
   onFile,
   onDownloadDirectory,
+  onExtractArchive,
   onDelete,
   onRename,
   onMove,
@@ -440,6 +454,7 @@ export function WorkspaceBrowserEntries({
   onDirectory: (name: string) => void;
   onFile: (entry: WorkspaceEntry) => void;
   onDownloadDirectory: (entry: WorkspaceEntry) => void;
+  onExtractArchive: (entry: WorkspaceEntry) => void;
   onDelete: (entry: WorkspaceEntry) => void;
   onRename: (entry: WorkspaceEntry, name: string) => void;
   onMove: (entry: WorkspaceEntry, destinationPath: string) => void;
@@ -475,6 +490,18 @@ export function WorkspaceBrowserEntries({
             onClick={() => onDownloadDirectory(entry)}
           >
             <Download size={13} />
+          </Button>}
+          {isWorkspaceArchive(entry) && <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 text-dim"
+            aria-label={`在此处解压 ${entry.name}`}
+            title="在此处解压"
+            disabled={disabled}
+            onClick={() => onExtractArchive(entry)}
+          >
+            <PackageOpen size={13} />
           </Button>}
           {entry.type === 'file' && <Button
             type="button"
@@ -715,6 +742,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [moving, setMoving] = useState(false);
   const [copying, setCopying] = useState(false);
   const [changingMode, setChangingMode] = useState(false);
+  const [extracting, setExtracting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMatches, setSearchMatches] = useState<WorkspaceSearchMatch[] | null>(null);
   const [searchTruncated, setSearchTruncated] = useState(false);
@@ -786,6 +814,18 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .then(() => toast.success('文件夹归档已下载'))
       .catch((error) => toast.error(`下载失败：${error}`))
       .finally(() => setDownloading(false));
+  };
+  const extractArchive = (entry: WorkspaceEntry) => {
+    if (extracting) return;
+    setExtracting(true);
+    const relativePath = workspaceChildPath(path, entry.name);
+    void extractWorkspaceArchiveHere(sessionId, relativePath)
+      .then((count) => {
+        toast.success(`已解压 ${count} 个条目`);
+        setListingVersion((version) => version + 1);
+      })
+      .catch((error) => toast.error(`解压失败：${error}`))
+      .finally(() => setExtracting(false));
   };
   const openFile = (relativePath: string, entry: WorkspaceEntry, line?: number) => {
     const openMode = workspaceFileOpenMode(entry);
@@ -1015,13 +1055,13 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
             </Button>
           </form>
           <div className="flex items-center gap-2">
-            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode} onClick={() => setPath(workspaceParentPath(path))}>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode || extracting} onClick={() => setPath(workspaceParentPath(path))}>
               <ChevronLeft size={14} />
             </Button>
             <div className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={path || '/'}>/{path}</div>
-            <WorkspaceCreateFileAction disabled={loading || downloading || uploading || creating || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode} creating={creatingFile} onCreate={() => setFileNameDraft('')} />
-            <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode} creating={creating} onCreate={createFolder} />
-            <WorkspaceUploadAction disabled={loading || downloading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode} uploading={uploading} onFile={uploadFile} />
+            <WorkspaceCreateFileAction disabled={loading || downloading || uploading || creating || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode || extracting} creating={creatingFile} onCreate={() => setFileNameDraft('')} />
+            <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode || extracting} creating={creating} onCreate={createFolder} />
+            <WorkspaceUploadAction disabled={loading || downloading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode || extracting} uploading={uploading} onFile={uploadFile} />
           </div>
           {fileNameDraft !== null ? <form
             className="flex items-start gap-2 rounded-md border border-line bg-panel-2 p-2"
@@ -1053,10 +1093,11 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
             : <WorkspaceBrowserEntries
                 path={path}
                 entries={entries}
-                disabled={downloading || uploading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode}
+                disabled={downloading || uploading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode || extracting}
                 onDirectory={(name) => setPath(workspaceChildPath(path, name))}
                 onFile={selectFile}
                 onDownloadDirectory={downloadDirectory}
+                onExtractArchive={extractArchive}
                 onDelete={deleteEntry}
                 onRename={renameEntry}
                 onMove={moveEntry}

@@ -15,6 +15,8 @@ import {
   sessionNoteAction,
   SessionTitleEditor,
   TranscriptExportAction,
+  extractWorkspaceArchiveHere,
+  isWorkspaceArchive,
   WorkspaceBrowserEntries,
   WorkspaceCreateFileAction,
   WorkspaceCreateFolderAction,
@@ -201,6 +203,7 @@ describe('SessionView artifact download action', () => {
         onDirectory={vi.fn()}
         onFile={vi.fn()}
         onDownloadDirectory={vi.fn()}
+        onExtractArchive={vi.fn()}
         onDelete={vi.fn()}
         onRename={vi.fn()}
         onMove={vi.fn()}
@@ -228,6 +231,35 @@ describe('SessionView artifact download action', () => {
     expect(markup).not.toContain('下载 result.bin');
   });
 
+  it('offers Extract here only for .tar.gz files and calls the extraction API', async () => {
+    const onExtractArchive = vi.fn();
+    const archive = { name: 'results.TAR.GZ', type: 'file' as const, size: 42 };
+    const markup = renderToStaticMarkup(
+      <WorkspaceBrowserEntries
+        path="uploads"
+        entries={[archive, { name: 'result.zip', type: 'file', size: 12 }]}
+        disabled={false}
+        onDirectory={vi.fn()}
+        onFile={vi.fn()}
+        onDownloadDirectory={vi.fn()}
+        onExtractArchive={onExtractArchive}
+        onDelete={vi.fn()}
+        onRename={vi.fn()}
+        onMove={vi.fn()}
+        onCopy={vi.fn()}
+        onExecutableChange={vi.fn()}
+      />,
+    );
+    expect(markup).toContain('在此处解压 results.TAR.GZ');
+    expect(markup).not.toContain('在此处解压 result.zip');
+    expect(isWorkspaceArchive(archive)).toBe(true);
+    expect(isWorkspaceArchive({ name: 'results.tar.gz', type: 'directory' })).toBe(false);
+
+    const request = vi.fn().mockResolvedValue({ ok: true, path: 'uploads/results.tar.gz', entries: 3 });
+    await expect(extractWorkspaceArchiveHere('session-1', 'uploads/results.tar.gz', request)).resolves.toBe(3);
+    expect(request).toHaveBeenCalledWith('session-1', 'uploads/results.tar.gz');
+  });
+
   it('renders executable state and persists either side of the file toggle', async () => {
     const markup = renderToStaticMarkup(
       <WorkspaceBrowserEntries
@@ -237,6 +269,7 @@ describe('SessionView artifact download action', () => {
         onDirectory={vi.fn()}
         onFile={vi.fn()}
         onDownloadDirectory={vi.fn()}
+        onExtractArchive={vi.fn()}
         onDelete={vi.fn()}
         onRename={vi.fn()}
         onMove={vi.fn()}

@@ -85,6 +85,16 @@ describe('api client', () => {
     expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files/archive?path=reports%2Ffinal%20results');
   });
 
+  it('constructs an encoded workspace archive extraction request', async () => {
+    const fetch = mockFetch(Response.json({ ok: true, path: 'uploads/results.tar.gz', entries: 4 }));
+    await expect(api.extractWorkspaceArchive('session/one', 'uploads/results.tar.gz')).resolves.toEqual({
+      ok: true, path: 'uploads/results.tar.gz', entries: 4,
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Fone/files/extract?path=uploads%2Fresults.tar.gz', {
+      method: 'POST',
+    });
+  });
+
   it('loads an encoded workspace file as an inline UTF-8 preview', async () => {
     const fetch = mockFetch(new Response('# Report\nAll checks passed.'));
     await expect(api.workspaceTextPreview('session/one', 'reports/final report.md')).resolves.toEqual({

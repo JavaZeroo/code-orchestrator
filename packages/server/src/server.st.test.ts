@@ -2787,6 +2787,12 @@ describeSt('server ST: API + runner websocket', () => {
           data: archiveBytes.toString('base64'),
         };
       },
+      'workspace.extract': (params) => {
+        expect(params).toEqual({
+          root: '/tmp/artifact-work', path: 'out/reports.tar.gz', containerId: 'artifact-container',
+        });
+        return { ok: true, entries: 4 };
+      },
       'workspace.write': (params) => {
         expect(params).toMatchObject({
           root: '/tmp/artifact-work', path: 'out/upload.bin', containerId: 'artifact-container', size: uploadedBytes.length,
@@ -2868,6 +2874,12 @@ describeSt('server ST: API + runner websocket', () => {
       headers: { host: 'localhost:7620' },
     });
     expect(unauthorizedArchive.statusCode).toBe(401);
+    const unauthorizedExtract = await app!.inject({
+      method: 'POST',
+      url: '/api/sessions/session-artifact-st/files/extract?path=out%2Freports.tar.gz',
+      headers: { host: 'localhost:7620' },
+    });
+    expect(unauthorizedExtract.statusCode).toBe(401);
     const unauthorizedUpload = await app!.inject({
       method: 'POST',
       url: '/api/sessions/session-artifact-st/files?path=out%2Fupload.bin',
@@ -2967,6 +2979,13 @@ describeSt('server ST: API + runner websocket', () => {
     expect(downloadedArchive.headers['content-length']).toBe(String(archiveBytes.length));
     expect(downloadedArchive.headers['content-disposition']).toContain('reports.tar.gz');
     expect(downloadedArchive.rawPayload).toEqual(archiveBytes);
+    const extractedArchive = await app!.inject({
+      method: 'POST',
+      url: '/api/sessions/session-artifact-st/files/extract?path=out%2Freports.tar.gz',
+      headers: { host: 'localhost:7620', cookie },
+    });
+    expect(extractedArchive.statusCode).toBe(200);
+    expect(extractedArchive.json()).toEqual({ ok: true, path: 'out/reports.tar.gz', entries: 4 });
     const upload = await app!.inject({
       method: 'POST',
       url: '/api/sessions/session-artifact-st/files?path=out%2Fupload.bin',
@@ -3041,6 +3060,7 @@ describeSt('server ST: API + runner websocket', () => {
     expect(runner.calls.some((call) => call.method === 'workspace.searchContent')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.read')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.archive')).toBe(true);
+    expect(runner.calls.some((call) => call.method === 'workspace.extract')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.write')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.chmod')).toBe(true);
     expect(runner.calls.some((call) => call.method === 'workspace.delete')).toBe(true);
