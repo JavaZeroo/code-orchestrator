@@ -104,6 +104,17 @@ describe('createRunnerMethodHandler', () => {
     await expect(readFile(join(root, 'archive', 'draft.txt'), 'utf8')).resolves.toBe('runner bytes');
   });
 
+  it('dispatches workspace.copy through the confined recursive copier', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-copy-'));
+    await import('node:fs/promises').then(({ mkdir }) => mkdir(join(root, 'reports')));
+    await writeFile(join(root, 'reports', 'answer.txt'), 'runner bytes');
+    await expect(handler()('workspace.copy', {
+      root, path: 'reports', destinationPath: 'reports-copy',
+    })).resolves.toEqual({ ok: true, path: 'reports-copy' });
+    await expect(readFile(join(root, 'reports-copy', 'answer.txt'), 'utf8')).resolves.toBe('runner bytes');
+    await expect(readFile(join(root, 'reports', 'answer.txt'), 'utf8')).resolves.toBe('runner bytes');
+  });
+
   it('rejects unsupported opencode session spawn without creating a session', async () => {
     const result = await handler()('session.spawn', {
       sessionId: 's-opencode',

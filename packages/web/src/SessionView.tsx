@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Download, File, Folder, FolderInput, FolderPlus, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Search, Send, Square, Trash2, Upload, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Check, ChevronLeft, Code2, Copy, Download, File, Folder, FolderInput, FolderPlus, GitCompare, GitFork, NotebookPen, Pencil, RotateCcw, Search, Send, Square, Trash2, Upload, X } from 'lucide-react';
 import { SESSION_NOTE_MAX_LENGTH } from '@co/protocol';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -244,6 +244,29 @@ export function requestWorkspaceMoveDestination(
   if (destinationPath !== null) onMove(entry, destinationPath);
 }
 
+export async function copyNamedWorkspaceEntry(
+  sessionId: string,
+  path: string,
+  value: string,
+  request = api.copyWorkspaceEntry,
+): Promise<string> {
+  const destinationPath = normalizeWorkspaceMoveDestination(value);
+  if (!destinationPath) throw new Error('目标路径必须是工作区内的相对路径，且不能包含空段或 ..');
+  const result = await request(sessionId, path, destinationPath);
+  return result.path;
+}
+
+export function requestWorkspaceCopyDestination(
+  entry: WorkspaceEntry,
+  currentPath: string,
+  onCopy: (entry: WorkspaceEntry, destinationPath: string) => void,
+  ask: (message: string, initial: string) => string | null = (message, initial) => prompt(message, initial),
+): void {
+  const sourcePath = workspaceChildPath(currentPath, entry.name);
+  const destinationPath = ask(`请输入 ${entry.name} 的副本相对路径`, `${sourcePath}-copy`);
+  if (destinationPath !== null) onCopy(entry, destinationPath);
+}
+
 export async function createNamedWorkspaceFolder(
   sessionId: string,
   directory: string,
@@ -337,6 +360,7 @@ export function WorkspaceBrowserEntries({
   onDelete,
   onRename,
   onMove,
+  onCopy,
 }: {
   path: string;
   entries: WorkspaceEntry[];
@@ -346,6 +370,7 @@ export function WorkspaceBrowserEntries({
   onDelete: (entry: WorkspaceEntry) => void;
   onRename: (entry: WorkspaceEntry, name: string) => void;
   onMove: (entry: WorkspaceEntry, destinationPath: string) => void;
+  onCopy: (entry: WorkspaceEntry, destinationPath: string) => void;
 }) {
   if (entries.length === 0) return <div className="py-8 text-center text-sm text-faint">此目录为空</div>;
   return (
@@ -386,6 +411,17 @@ export function WorkspaceBrowserEntries({
             onClick={() => requestWorkspaceMoveDestination(entry, path, onMove)}
           >
             <FolderInput size={13} />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`复制 ${entry.name}`}
+            title="复制"
+            disabled={disabled}
+            onClick={() => requestWorkspaceCopyDestination(entry, path, onCopy)}
+          >
+            <Copy size={13} />
           </Button>
           <Button
             type="button"
@@ -521,6 +557,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [deleting, setDeleting] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [copying, setCopying] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMatches, setSearchMatches] = useState<WorkspaceSearchMatch[] | null>(null);
   const [searchTruncated, setSearchTruncated] = useState(false);
@@ -673,6 +710,15 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .catch((error) => toast.error(`移动失败：${error}`))
       .finally(() => setMoving(false));
   };
+  const copyEntry = (entry: WorkspaceEntry, destinationPath: string) => {
+    if (copying) return;
+    const relativePath = workspaceChildPath(path, entry.name);
+    setCopying(true);
+    void copyNamedWorkspaceEntry(sessionId, relativePath, destinationPath)
+      .then(() => { toast.success('条目已复制'); setListingVersion((version) => version + 1); })
+      .catch((error) => toast.error(`复制失败：${error}`))
+      .finally(() => setCopying(false));
+  };
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent>
@@ -727,12 +773,12 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
             </Button>
           </form>
           <div className="flex items-center gap-2">
-            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || deleting || renaming || moving} onClick={() => setPath(workspaceParentPath(path))}>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || deleting || renaming || moving || copying} onClick={() => setPath(workspaceParentPath(path))}>
               <ChevronLeft size={14} />
             </Button>
             <div className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={path || '/'}>/{path}</div>
-            <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || deleting || renaming || moving} creating={creating} onCreate={createFolder} />
-            <WorkspaceUploadAction disabled={loading || downloading || creating || deleting || renaming || moving} uploading={uploading} onFile={uploadFile} />
+            <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || deleting || renaming || moving || copying} creating={creating} onCreate={createFolder} />
+            <WorkspaceUploadAction disabled={loading || downloading || creating || deleting || renaming || moving || copying} uploading={uploading} onFile={uploadFile} />
           </div>
           {contentMatches !== null
             ? <WorkspaceContentSearchResults matches={contentMatches} disabled={downloading || contentSearching} onSelect={selectContentMatch} />
@@ -743,17 +789,18 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
             : <WorkspaceBrowserEntries
                 path={path}
                 entries={entries}
-                disabled={downloading || uploading || creating || deleting || renaming || moving}
+                disabled={downloading || uploading || creating || deleting || renaming || moving || copying}
                 onDirectory={(name) => setPath(workspaceChildPath(path, name))}
                 onFile={selectFile}
                 onDelete={deleteEntry}
                 onRename={renameEntry}
                 onMove={moveEntry}
+                onCopy={copyEntry}
               />}
           {searchMatches !== null && searchTruncated && <div className="text-xs text-faint">仅显示前 100 个匹配结果，请缩小搜索范围。</div>}
           {contentMatches !== null && contentTruncated && <div className="text-xs text-faint">仅显示前 100 个内容匹配，请缩小搜索范围。</div>}
           {searchMatches === null && truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
-          <div className="text-xs text-faint">可按文件名或文件内容递归搜索并直接打开结果；也可新建文件夹，重命名、移动或删除当前目录中的文件和空文件夹，或上传文件。支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
+          <div className="text-xs text-faint">可按文件名或文件内容递归搜索并直接打开结果；也可新建文件夹，重命名、移动、复制或删除当前目录中的文件和文件夹，或上传文件。支持的 UTF-8 文本文件可在线预览，其他文件可下载。单个文件上限 10 MiB。</div>
         </div>}
       </DialogContent>
     </Dialog>

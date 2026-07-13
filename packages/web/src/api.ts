@@ -566,6 +566,12 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ destinationPath }),
     }).then((r) => j<{ ok: true; path: string }>(r)),
+  copyWorkspaceEntry: (sessionId: string, path: string, destinationPath: string) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/copy?path=${encodeURIComponent(path)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ destinationPath }),
+    }).then((r) => j<{ ok: true; path: string }>(r)),
   decide: (approvalId: string, behavior: 'allow' | 'deny', message?: string) =>
     post(`/api/approvals/${approvalId}/decide`, {
       decision: behavior === 'allow' ? { behavior } : { behavior, message },
