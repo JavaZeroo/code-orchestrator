@@ -95,6 +95,15 @@ describe('createRunnerMethodHandler', () => {
     await expect(readFile(join(root, 'final.txt'), 'utf8')).resolves.toBe('runner bytes');
   });
 
+  it('dispatches workspace.move through the confined entry mover', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'co-method-move-'));
+    await import('node:fs/promises').then(({ mkdir }) => mkdir(join(root, 'archive')));
+    await writeFile(join(root, 'draft.txt'), 'runner bytes');
+    await expect(handler()('workspace.move', { root, path: 'draft.txt', destinationPath: 'archive/draft.txt' }))
+      .resolves.toEqual({ ok: true, path: 'archive/draft.txt' });
+    await expect(readFile(join(root, 'archive', 'draft.txt'), 'utf8')).resolves.toBe('runner bytes');
+  });
+
   it('rejects unsupported opencode session spawn without creating a session', async () => {
     const result = await handler()('session.spawn', {
       sessionId: 's-opencode',

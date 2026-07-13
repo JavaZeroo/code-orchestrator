@@ -26,6 +26,8 @@ import {
   requestWorkspaceFolderName,
   renameNamedWorkspaceEntry,
   requestWorkspaceEntryName,
+  moveNamedWorkspaceEntry,
+  requestWorkspaceMoveDestination,
   WORKSPACE_UPLOAD_MAX_BYTES,
   workspaceChildPath,
   workspaceParentPath,
@@ -174,12 +176,14 @@ describe('SessionView artifact download action', () => {
   it('renders discoverable directories and downloadable files', () => {
     const markup = renderToStaticMarkup(
       <WorkspaceBrowserEntries
+        path=""
         entries={[{ name: 'reports', type: 'directory' }, { name: 'result.bin', type: 'file', size: 42 }]}
         disabled={false}
         onDirectory={vi.fn()}
         onFile={vi.fn()}
         onDelete={vi.fn()}
         onRename={vi.fn()}
+        onMove={vi.fn()}
       />,
     );
     expect(markup).toContain('reports');
@@ -193,6 +197,8 @@ describe('SessionView artifact download action', () => {
     expect(markup).toContain('删除 reports');
     expect(markup).toContain('重命名 reports');
     expect(markup).toContain('重命名 result.bin');
+    expect(markup).toContain('移动 reports');
+    expect(markup).toContain('移动 result.bin');
   });
 
   it('renders recursive search paths that can be opened directly', () => {
@@ -244,6 +250,27 @@ describe('SessionView artifact download action', () => {
     for (const name of ['', '.', '..', '../escape', 'nested/file', 'nested\\file']) {
       await expect(renameNamedWorkspaceEntry('session-1', 'reports/draft.txt', name, request))
         .rejects.toThrow('新名称');
+    }
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('moves a file or folder to a workspace-relative destination path', async () => {
+    const entry = { name: 'draft', type: 'directory' as const };
+    const onMove = vi.fn();
+    requestWorkspaceMoveDestination(entry, 'reports', onMove, () => 'archive/draft');
+    expect(onMove).toHaveBeenCalledWith(entry, 'archive/draft');
+
+    const request = vi.fn().mockResolvedValue({ ok: true, path: 'archive/draft' });
+    await expect(moveNamedWorkspaceEntry('session-1', 'reports/draft', ' archive/draft ', request))
+      .resolves.toBe('archive/draft');
+    expect(request).toHaveBeenCalledWith('session-1', 'reports/draft', 'archive/draft');
+  });
+
+  it('rejects move destinations outside the workspace', async () => {
+    const request = vi.fn();
+    for (const destination of ['', '.', '..', '/archive/draft', '../escape', 'archive/../draft', 'archive\\draft', 'archive//draft']) {
+      await expect(moveNamedWorkspaceEntry('session-1', 'reports/draft', destination, request))
+        .rejects.toThrow('目标路径');
     }
     expect(request).not.toHaveBeenCalled();
   });

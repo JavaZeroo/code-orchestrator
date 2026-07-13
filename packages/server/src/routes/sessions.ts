@@ -55,6 +55,7 @@ const workspaceFileQuerySchema = z.object({ path: z.string().min(1) });
 const workspaceListQuerySchema = z.object({ path: z.string().default('') });
 const workspaceSearchQuerySchema = z.object({ q: z.string().trim().min(1).max(100) });
 const workspaceRenameBodySchema = z.object({ name: z.string().min(1) }).strict();
+const workspaceMoveBodySchema = z.object({ destinationPath: z.string().min(1) }).strict();
 const WORKSPACE_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 const EVENT_PAGE_SIZE = 2000;
 
@@ -377,6 +378,21 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       containerId: session.containerId ?? undefined,
     });
     if (!result.ok || result.path === undefined) throw new HttpError(400, result.error ?? 'workspace entry rename failed');
+    return { ok: true, path: result.path };
+  });
+
+  /** Move one file or directory to another existing workspace directory without overwriting. */
+  app.post<{ Params: { id: string }; Querystring: { path?: string }; Body: unknown }>('/api/sessions/:id/files/move', async (req) => {
+    const session = await findSession(req.params.id);
+    const { path } = workspaceFileQuerySchema.parse(req.query);
+    const { destinationPath } = workspaceMoveBodySchema.parse(req.body);
+    const result = await callRunner(session.machineId, 'workspace.move', {
+      root: session.cwd,
+      path,
+      destinationPath,
+      containerId: session.containerId ?? undefined,
+    });
+    if (!result.ok || result.path === undefined) throw new HttpError(400, result.error ?? 'workspace entry move failed');
     return { ok: true, path: result.path };
   });
 

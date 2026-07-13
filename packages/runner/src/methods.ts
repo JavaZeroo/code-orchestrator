@@ -13,6 +13,7 @@ import { writeWorkspaceFile } from './workspaceWrite';
 import { deleteWorkspaceFile } from './workspaceDelete';
 import { createWorkspaceDirectory } from './workspaceMkdir';
 import { renameWorkspaceEntry } from './workspaceRename';
+import { moveWorkspaceEntry } from './workspaceMove';
 import { searchWorkspace } from './workspaceSearch';
 import { searchWorkspaceContent } from './workspaceContentSearch';
 
@@ -128,6 +129,9 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
       }
       case 'workspace.rename': {
         return renameWorkspaceEntry(runnerMethods['workspace.rename'].params.parse(params));
+      }
+      case 'workspace.move': {
+        return moveWorkspaceEntry(runnerMethods['workspace.move'].params.parse(params));
       }
       case 'workspace.list': {
         return listWorkspaceDirectory(runnerMethods['workspace.list'].params.parse(params));
