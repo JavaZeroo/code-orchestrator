@@ -11,6 +11,7 @@ import { readWorkspaceFile } from './workspaceFile';
 import { archiveWorkspaceDirectory } from './workspaceArchive';
 import { listWorkspaceDirectory } from './workspaceList';
 import { writeWorkspaceFile } from './workspaceWrite';
+import { chmodWorkspaceFile } from './workspaceChmod';
 import { deleteWorkspaceFile } from './workspaceDelete';
 import { createWorkspaceDirectory } from './workspaceMkdir';
 import { renameWorkspaceEntry } from './workspaceRename';
@@ -125,6 +126,9 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
       }
       case 'workspace.write': {
         return writeWorkspaceFile(runnerMethods['workspace.write'].params.parse(params));
+      }
+      case 'workspace.chmod': {
+        return chmodWorkspaceFile(runnerMethods['workspace.chmod'].params.parse(params));
       }
       case 'workspace.delete': {
         return deleteWorkspaceFile(runnerMethods['workspace.delete'].params.parse(params));

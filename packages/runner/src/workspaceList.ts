@@ -11,6 +11,19 @@ const run = promisify(execFile);
 type WorkspaceEntry = NonNullable<RunnerResult<'workspace.list'>['entries']>[number];
 type ContainerList = (containerId: string, root: string, path: string) => Promise<WorkspaceEntry[]>;
 
+export function parseContainerWorkspaceEntries(stdout: Buffer): WorkspaceEntry[] {
+  const fields = stdout.toString('utf8').split('\0');
+  const entries: WorkspaceEntry[] = [];
+  for (let i = 0; i + 3 < fields.length; i += 4) {
+    const [name, type, rawSize, rawExecutable] = fields.slice(i, i + 4);
+    if (!name || (type !== 'file' && type !== 'directory')) continue;
+    entries.push(type === 'file'
+      ? { name, type, size: Number(rawSize), executable: rawExecutable === '1' }
+      : { name, type });
+  }
+  return entries;
+}
+
 function confined(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
@@ -51,7 +64,12 @@ export async function listHostWorkspaceDirectory(root: string, path: string): Pr
       if (!confined(realRoot, resolvedEntry)) continue;
       const entryStat = entry.isSymbolicLink() ? await stat(resolvedEntry) : await lstat(requestedEntry);
       if (entryStat.isDirectory()) entries.push({ name: entry.name, type: 'directory' });
-      else if (entryStat.isFile()) entries.push({ name: entry.name, type: 'file', size: entryStat.size });
+      else if (entryStat.isFile()) entries.push({
+        name: entry.name,
+        type: 'file',
+        size: entryStat.size,
+        executable: (entryStat.mode & 0o111) !== 0,
+      });
       if (entries.length > WORKSPACE_LIST_MAX_ENTRIES) break;
     }
     return { ok: true, path, ...sortAndBound(entries) };
@@ -73,10 +91,11 @@ for candidate in "$requested"/* "$requested"/.[!.]* "$requested"/..?*; do
   case "$resolved/" in "$root/"*) ;; *) continue;; esac
   name=\${candidate##*/}
   if [ -d "$resolved" ]; then
-    printf "%s\\0directory\\0\\0" "$name"
+    printf "%s\\0directory\\0\\0\\0" "$name"
   elif [ -f "$resolved" ]; then
     size=$(wc -c < "$resolved")
-    printf "%s\\0file\\0%s\\0" "$name" "$size"
+    if [ -x "$resolved" ]; then executable=1; else executable=0; fi
+    printf "%s\\0file\\0%s\\0%s\\0" "$name" "$size" "$executable"
   else
     continue
   fi
@@ -86,14 +105,7 @@ done`;
   const { stdout } = await run('docker', ['exec', containerId, 'sh', '-c', script, 'sh', root, path], {
     encoding: 'buffer', maxBuffer: CONTAINER_LIST_MAX_BUFFER,
   });
-  const fields = stdout.toString('utf8').split('\0');
-  const entries: WorkspaceEntry[] = [];
-  for (let i = 0; i + 2 < fields.length; i += 3) {
-    const [name, type, rawSize] = fields.slice(i, i + 3);
-    if (!name || (type !== 'file' && type !== 'directory')) continue;
-    entries.push(type === 'file' ? { name, type, size: Number(rawSize) } : { name, type });
-  }
-  return entries;
+  return parseContainerWorkspaceEntries(stdout);
 };
 
 export async function listWorkspaceDirectory(

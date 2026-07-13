@@ -2,7 +2,12 @@ import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { listHostWorkspaceDirectory, listWorkspaceDirectory, WORKSPACE_LIST_MAX_ENTRIES } from './workspaceList';
+import {
+  listHostWorkspaceDirectory,
+  listWorkspaceDirectory,
+  parseContainerWorkspaceEntries,
+  WORKSPACE_LIST_MAX_ENTRIES,
+} from './workspaceList';
 
 describe('listHostWorkspaceDirectory', () => {
   it('lists directories before regular files with file sizes', async () => {
@@ -15,7 +20,7 @@ describe('listHostWorkspaceDirectory', () => {
       path: '',
       entries: [
         { name: 'reports', type: 'directory' },
-        { name: 'answer.txt', type: 'file', size: 4 },
+        { name: 'answer.txt', type: 'file', size: 4, executable: false },
       ],
       truncated: false,
     });
@@ -48,7 +53,7 @@ describe('listHostWorkspaceDirectory', () => {
     const listContainer = async (containerId: string, root: string, path: string) => {
       expect({ containerId, root, path }).toEqual({ containerId: 'c1', root: '/workspace', path: 'out' });
       return Array.from({ length: WORKSPACE_LIST_MAX_ENTRIES + 1 }, (_, i) => ({
-        name: `result-${i}.bin`, type: 'file' as const, size: i,
+        name: `result-${i}.bin`, type: 'file' as const, size: i, executable: i % 2 === 0,
       }));
     };
     const result = await listWorkspaceDirectory({
@@ -56,5 +61,21 @@ describe('listHostWorkspaceDirectory', () => {
     }, listContainer);
     expect(result).toMatchObject({ ok: true, path: 'out', truncated: true });
     expect(result.entries).toHaveLength(WORKSPACE_LIST_MAX_ENTRIES);
+  });
+});
+
+describe('parseContainerWorkspaceEntries', () => {
+  it('decodes executable metadata for container files without adding it to directories', () => {
+    const output = Buffer.from([
+      'scripts', 'directory', '', '',
+      'run.sh', 'file', '12', '1',
+      'notes.txt', 'file', '4', '0',
+      '',
+    ].join('\0'));
+    expect(parseContainerWorkspaceEntries(output)).toEqual([
+      { name: 'scripts', type: 'directory' },
+      { name: 'run.sh', type: 'file', size: 12, executable: true },
+      { name: 'notes.txt', type: 'file', size: 4, executable: false },
+    ]);
   });
 });

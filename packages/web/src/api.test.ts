@@ -171,6 +171,20 @@ describe('api client', () => {
     });
   });
 
+  it('changes executable state on an encoded workspace file path', async () => {
+    const result = { ok: true as const, path: 'scripts/run task.sh', executable: true };
+    const fetch = mockFetch(Response.json(result));
+    await expect(api.setWorkspaceFileExecutable('session/one', 'scripts/run task.sh', true)).resolves.toEqual(result);
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/sessions/session%2Fone/files/executable?path=scripts%2Frun%20task.sh',
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ executable: true }),
+      },
+    );
+  });
+
   it('deletes an encoded workspace file path', async () => {
     const fetch = mockFetch(Response.json({ ok: true, path: 'reports/old result.bin' }));
     await expect(api.deleteWorkspaceFile('session/one', 'reports/old result.bin')).resolves.toEqual({

@@ -88,6 +88,7 @@ export interface WorkspaceEntry {
   name: string;
   type: 'file' | 'directory';
   size?: number;
+  executable?: boolean;
 }
 
 export interface WorkspaceListing {
@@ -593,6 +594,12 @@ export const api = {
       headers: { 'content-type': 'application/octet-stream' },
       body: file,
     }).then((r) => j<{ ok: true; path: string; size: number }>(r)),
+  setWorkspaceFileExecutable: (sessionId: string, path: string, executable: boolean) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files/executable?path=${encodeURIComponent(path)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ executable }),
+    }).then((r) => j<{ ok: true; path: string; executable: boolean }>(r)),
   deleteWorkspaceFile: (sessionId: string, path: string) =>
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}`, {
       method: 'DELETE',

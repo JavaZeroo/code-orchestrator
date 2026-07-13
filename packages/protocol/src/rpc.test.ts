@@ -75,6 +75,20 @@ describe('runnerMethods contracts', () => {
     })).toThrow();
   });
 
+  it('validates workspace executable-bit changes for host and container sessions', () => {
+    expect(runnerMethods['workspace.chmod'].params.parse({
+      root: '/work', path: 'scripts/run.sh', executable: true,
+    })).toEqual({ root: '/work', path: 'scripts/run.sh', executable: true });
+    expect(runnerMethods['workspace.chmod'].params.parse({
+      root: '/workspace', path: 'run.sh', executable: false, containerId: 'c1',
+    })).toEqual({ root: '/workspace', path: 'run.sh', executable: false, containerId: 'c1' });
+    expect(() => runnerMethods['workspace.chmod'].params.parse({
+      root: '/work', path: '', executable: true,
+    })).toThrow();
+    expect(runnerMethods['workspace.chmod'].result.parse({ ok: true, executable: true }))
+      .toEqual({ ok: true, executable: true });
+  });
+
   it('validates workspace file deletion for host and container sessions', () => {
     expect(runnerMethods['workspace.delete'].params.parse({ root: '/work', path: 'out/result.bin' }))
       .toEqual({ root: '/work', path: 'out/result.bin' });
@@ -115,9 +129,12 @@ describe('runnerMethods contracts', () => {
     expect(runnerMethods['workspace.list'].result.parse({
       ok: true,
       path: 'out',
-      entries: [{ name: 'models', type: 'directory' }, { name: 'result.bin', type: 'file', size: 42 }],
+      entries: [
+        { name: 'models', type: 'directory' },
+        { name: 'result.bin', type: 'file', size: 42, executable: true },
+      ],
       truncated: false,
-    })).toMatchObject({ entries: [{ type: 'directory' }, { type: 'file', size: 42 }] });
+    })).toMatchObject({ entries: [{ type: 'directory' }, { type: 'file', size: 42, executable: true }] });
   });
 
   it('validates bounded workspace filename searches for host and container sessions', () => {

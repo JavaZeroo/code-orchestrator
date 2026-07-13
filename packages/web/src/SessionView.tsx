@@ -213,6 +213,16 @@ export async function uploadSelectedWorkspaceFile(
   return destination;
 }
 
+export async function setWorkspaceFileExecutable(
+  sessionId: string,
+  path: string,
+  executable: boolean,
+  request = api.setWorkspaceFileExecutable,
+): Promise<boolean> {
+  const result = await request(sessionId, path, executable);
+  return result.executable;
+}
+
 export function normalizeWorkspaceFolderName(value: string): string | null {
   const name = value.trim();
   return name && name !== '.' && name !== '..' && !/[\\/]/.test(name) ? name : null;
@@ -422,6 +432,7 @@ export function WorkspaceBrowserEntries({
   onRename,
   onMove,
   onCopy,
+  onExecutableChange,
 }: {
   path: string;
   entries: WorkspaceEntry[];
@@ -433,6 +444,7 @@ export function WorkspaceBrowserEntries({
   onRename: (entry: WorkspaceEntry, name: string) => void;
   onMove: (entry: WorkspaceEntry, destinationPath: string) => void;
   onCopy: (entry: WorkspaceEntry, destinationPath: string) => void;
+  onExecutableChange: (entry: WorkspaceEntry, executable: boolean) => void;
 }) {
   if (entries.length === 0) return <div className="py-8 text-center text-sm text-faint">此目录为空</div>;
   return (
@@ -463,6 +475,19 @@ export function WorkspaceBrowserEntries({
             onClick={() => onDownloadDirectory(entry)}
           >
             <Download size={13} />
+          </Button>}
+          {entry.type === 'file' && <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className={`shrink-0 ${entry.executable ? 'text-accent' : 'text-dim'}`}
+            aria-label={`${entry.executable ? '移除' : '添加'} ${entry.name} 的可执行权限`}
+            aria-pressed={entry.executable === true}
+            title={entry.executable ? '移除可执行权限' : '设为可执行'}
+            disabled={disabled}
+            onClick={() => onExecutableChange(entry, !entry.executable)}
+          >
+            <Code2 size={13} />
           </Button>}
           <Button
             type="button"
@@ -689,6 +714,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
   const [renaming, setRenaming] = useState(false);
   const [moving, setMoving] = useState(false);
   const [copying, setCopying] = useState(false);
+  const [changingMode, setChangingMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMatches, setSearchMatches] = useState<WorkspaceSearchMatch[] | null>(null);
   const [searchTruncated, setSearchTruncated] = useState(false);
@@ -914,6 +940,18 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
       .catch((error) => toast.error(`复制失败：${error}`))
       .finally(() => setCopying(false));
   };
+  const changeExecutable = (entry: WorkspaceEntry, executable: boolean) => {
+    if (changingMode || entry.type !== 'file') return;
+    const relativePath = workspaceChildPath(path, entry.name);
+    setChangingMode(true);
+    void setWorkspaceFileExecutable(sessionId, relativePath, executable)
+      .then((persisted) => {
+        toast.success(persisted ? '文件已设为可执行' : '文件可执行权限已移除');
+        setListingVersion((version) => version + 1);
+      })
+      .catch((error) => toast.error(`权限更新失败：${error}`))
+      .finally(() => setChangingMode(false));
+  };
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent>
@@ -977,13 +1015,13 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
             </Button>
           </form>
           <div className="flex items-center gap-2">
-            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying} onClick={() => setPath(workspaceParentPath(path))}>
+            <Button type="button" variant="ghost" size="icon-sm" aria-label="返回上级目录" disabled={!path || loading || downloading || uploading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode} onClick={() => setPath(workspaceParentPath(path))}>
               <ChevronLeft size={14} />
             </Button>
             <div className="min-w-0 flex-1 truncate font-mono text-xs text-dim" title={path || '/'}>/{path}</div>
-            <WorkspaceCreateFileAction disabled={loading || downloading || uploading || creating || fileNameDraft !== null || deleting || renaming || moving || copying} creating={creatingFile} onCreate={() => setFileNameDraft('')} />
-            <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying} creating={creating} onCreate={createFolder} />
-            <WorkspaceUploadAction disabled={loading || downloading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying} uploading={uploading} onFile={uploadFile} />
+            <WorkspaceCreateFileAction disabled={loading || downloading || uploading || creating || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode} creating={creatingFile} onCreate={() => setFileNameDraft('')} />
+            <WorkspaceCreateFolderAction disabled={loading || downloading || uploading || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode} creating={creating} onCreate={createFolder} />
+            <WorkspaceUploadAction disabled={loading || downloading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode} uploading={uploading} onFile={uploadFile} />
           </div>
           {fileNameDraft !== null ? <form
             className="flex items-start gap-2 rounded-md border border-line bg-panel-2 p-2"
@@ -1015,7 +1053,7 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
             : <WorkspaceBrowserEntries
                 path={path}
                 entries={entries}
-                disabled={downloading || uploading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying}
+                disabled={downloading || uploading || creating || creatingFile || fileNameDraft !== null || deleting || renaming || moving || copying || changingMode}
                 onDirectory={(name) => setPath(workspaceChildPath(path, name))}
                 onFile={selectFile}
                 onDownloadDirectory={downloadDirectory}
@@ -1023,11 +1061,12 @@ export function ArtifactDownloadDialog({ sessionId, open, onOpenChange }: { sess
                 onRename={renameEntry}
                 onMove={moveEntry}
                 onCopy={copyEntry}
+                onExecutableChange={changeExecutable}
               />}
           {searchMatches !== null && searchTruncated && <div className="text-xs text-faint">仅显示前 100 个匹配结果，请缩小搜索范围。</div>}
           {contentMatches !== null && contentTruncated && <div className="text-xs text-faint">仅显示前 100 个内容匹配，请缩小搜索范围。</div>}
           {searchMatches === null && truncated && !loading && !error && <div className="text-xs text-faint">仅显示前 200 项，请进入子目录继续浏览。</div>}
-          <div className="text-xs text-faint">可按文件名或文件内容递归搜索并直接打开结果；也可新建文本文件或文件夹，重命名、移动、复制或删除当前目录中的文件和文件夹，或上传文件。文件夹可下载为 .tar.gz 归档；支持的 UTF-8 文本及 PNG、JPEG、GIF、WebP 图片可在线预览，其他文件可下载。单个文件或归档上限 10 MiB。</div>
+          <div className="text-xs text-faint">可按文件名或文件内容递归搜索并直接打开结果；也可新建文本文件或文件夹，切换文件可执行权限，重命名、移动、复制或删除当前目录中的文件和文件夹，或上传文件。文件夹可下载为 .tar.gz 归档；支持的 UTF-8 文本及 PNG、JPEG、GIF、WebP 图片可在线预览，其他文件可下载。单个文件或归档上限 10 MiB。</div>
         </div>}
       </DialogContent>
     </Dialog>

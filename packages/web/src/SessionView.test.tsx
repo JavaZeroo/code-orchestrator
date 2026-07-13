@@ -24,6 +24,7 @@ import {
   WorkspaceUploadAction,
   uploadSelectedWorkspaceFile,
   saveWorkspaceTextFile,
+  setWorkspaceFileExecutable,
   createNamedWorkspaceFolder,
   createNamedWorkspaceFile,
   requestWorkspaceFolderName,
@@ -204,11 +205,13 @@ describe('SessionView artifact download action', () => {
         onRename={vi.fn()}
         onMove={vi.fn()}
         onCopy={vi.fn()}
+        onExecutableChange={vi.fn()}
       />,
     );
     expect(markup).toContain('reports');
     expect(markup).toContain('result.bin');
     expect(markup).toContain('42 B');
+    expect(markup).toContain('添加 result.bin 的可执行权限');
     expect(workspaceChildPath('', 'reports')).toBe('reports');
     expect(workspaceChildPath('reports', 'daily')).toBe('reports/daily');
     expect(workspaceParentPath('reports/daily')).toBe('reports');
@@ -223,6 +226,30 @@ describe('SessionView artifact download action', () => {
     expect(markup).toContain('复制 result.bin');
     expect(markup).toContain('下载 reports');
     expect(markup).not.toContain('下载 result.bin');
+  });
+
+  it('renders executable state and persists either side of the file toggle', async () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceBrowserEntries
+        path="scripts"
+        entries={[{ name: 'run.sh', type: 'file', size: 12, executable: true }]}
+        disabled={false}
+        onDirectory={vi.fn()}
+        onFile={vi.fn()}
+        onDownloadDirectory={vi.fn()}
+        onDelete={vi.fn()}
+        onRename={vi.fn()}
+        onMove={vi.fn()}
+        onCopy={vi.fn()}
+        onExecutableChange={vi.fn()}
+      />,
+    );
+    expect(markup).toContain('移除 run.sh 的可执行权限');
+    expect(markup).toContain('aria-pressed="true"');
+
+    const request = vi.fn().mockResolvedValue({ ok: true, path: 'scripts/run.sh', executable: false });
+    await expect(setWorkspaceFileExecutable('session-1', 'scripts/run.sh', false, request)).resolves.toBe(false);
+    expect(request).toHaveBeenCalledWith('session-1', 'scripts/run.sh', false);
   });
 
   it('renders recursive search paths that can be opened directly', () => {
