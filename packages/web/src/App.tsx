@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, FolderGit2, type LucideIcon, LogOut, MessageSquareText, Pause, Play, Settings } from 'lucide-react';
+import { Archive, ArchiveRestore, FolderGit2, type LucideIcon, LogOut, MessageSquareText, Pause, Pin, PinOff, Play, Settings } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from './api';
@@ -16,6 +16,7 @@ import { isWaitingRun, isWaitingSession, waitingCountByProject, type AttentionIt
 import { invalidate, useArchivedRuns, useArchivedSessions, useConversationSearch, useProjects, useRuns, useSession, useSessions } from './lib/queries';
 import { ProjectProvider, useCurrentProject, useProjectScope } from './lib/project';
 import { runDisplayTitle, runMatchesSearch } from './lib/runTitle';
+import { partitionThreadList } from './lib/threadPinning';
 import { listenForThreadSelection, parseThreadSelection, pushThreadSelection, type ThreadSelection } from './lib/urlSelection';
 import { cn, relTime, fmtCost, shortModel } from './lib/utils';
 
@@ -223,6 +224,10 @@ function threadActiveTime(t: ThreadItem): string {
   return t.run.endedAt ?? t.run.startedAt;
 }
 
+function threadPinnedAt(t: ThreadItem): string | null {
+  return t.kind === 'session' ? t.session.pinnedAt : t.run.pinnedAt;
+}
+
 function threadTitle(t: ThreadItem): string {
   if (t.kind === 'session') return t.session.title ?? (t.session.cwd.split('/').pop() || t.session.cwd);
   return runDisplayTitle(t.run);
@@ -296,6 +301,7 @@ function HomeScreen({
   const [updatingSessionArchive, setUpdatingSessionArchive] = useState<string | null>(null);
   const [updatingRunArchive, setUpdatingRunArchive] = useState<string | null>(null);
   const [updatingRunProgression, setUpdatingRunProgression] = useState<string | null>(null);
+  const [updatingPin, setUpdatingPin] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 250);
@@ -335,14 +341,13 @@ function HomeScreen({
     });
   }, [allArchivedThreads, filter, q]);
 
-  // 分区
-  const waiting = useMemo(() => visible.filter(isThreadWaiting), [visible]);
-  const rest = useMemo(() => visible.filter((t) => !isThreadWaiting(t)), [visible]);
-
-  // 其余按活跃时间降序
-  const sortedRest = useMemo(
-    () => [...rest].sort((a, b) => new Date(threadActiveTime(b)).getTime() - new Date(threadActiveTime(a)).getTime()),
-    [rest],
+  const { waiting, pinned, rest: sortedRest } = useMemo(
+    () => partitionThreadList(visible, {
+      isWaiting: isThreadWaiting,
+      pinnedAt: threadPinnedAt,
+      activeAt: threadActiveTime,
+    }),
+    [visible],
   );
 
   const active = sortedRest.filter((t) => {
@@ -402,6 +407,30 @@ function HomeScreen({
       .finally(() => setUpdatingRunProgression(null));
   };
 
+  const changeSessionPin = (session: import('./api').SessionRow) => {
+    const pinned = session.pinnedAt === null;
+    setUpdatingPin(`session:${session.id}`);
+    api.pinSession(session.id, pinned)
+      .then(() => {
+        invalidate('sessions');
+        toast.success(pinned ? '会话已置顶' : '会话已取消置顶');
+      })
+      .catch((error) => toast.error(`${pinned ? '置顶' : '取消置顶'}失败：${error}`))
+      .finally(() => setUpdatingPin(null));
+  };
+
+  const changeRunPin = (run: import('./api').RunRow) => {
+    const pinned = run.pinnedAt === null;
+    setUpdatingPin(`run:${run.id}`);
+    api.pinRun(run.id, pinned)
+      .then(() => {
+        invalidate('runs');
+        toast.success(pinned ? '运行已置顶' : '运行已取消置顶');
+      })
+      .catch((error) => toast.error(`${pinned ? '置顶' : '取消置顶'}失败：${error}`))
+      .finally(() => setUpdatingPin(null));
+  };
+
   const renderSessionRow = (s: import('./api').SessionRow) => {
     const archiveMode = sessionArchiveMode(s, s.state);
     return (
@@ -422,6 +451,18 @@ function HomeScreen({
           </span>
         </button>
         {isWaitingSession(s) && <span className="mr-2 size-2 rounded-full bg-danger" />}
+        {s.archivedAt === null && s.runId === null && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            disabled={updatingPin === `session:${s.id}`}
+            aria-label={s.pinnedAt === null ? '置顶会话' : '取消置顶会话'}
+            title={s.pinnedAt === null ? '置顶会话' : '取消置顶会话'}
+            onClick={() => changeSessionPin(s)}
+          >
+            {s.pinnedAt === null ? <Pin size={13} /> : <PinOff size={13} className="text-accent" />}
+          </Button>
+        )}
         {archiveMode && (
           <Button
             variant="ghost"
@@ -459,6 +500,18 @@ function HomeScreen({
           </span>
         </button>
         {isWaitingRun(r) && <span className="mr-2 size-2 rounded-full bg-danger" />}
+        {r.archivedAt === null && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            disabled={updatingPin === `run:${r.id}`}
+            aria-label={r.pinnedAt === null ? '置顶运行' : '取消置顶运行'}
+            title={r.pinnedAt === null ? '置顶运行' : '取消置顶运行'}
+            onClick={() => changeRunPin(r)}
+          >
+            {r.pinnedAt === null ? <Pin size={13} /> : <PinOff size={13} className="text-accent" />}
+          </Button>
+        )}
         {progressionMode && (
           <Button
             variant="ghost"
@@ -583,6 +636,17 @@ function HomeScreen({
                 <span className="mono-nums text-[10px] text-faint">{waiting.length}</span>
               </div>
               {waiting.map(renderThreadRow)}
+            </>
+          )}
+
+          {pinned.length > 0 && (
+            <>
+              <div className="flex items-center gap-1.5 px-2 pt-2 pb-0.5">
+                <Pin size={11} className="text-accent" />
+                <span className="text-[10px] font-semibold tracking-wide text-accent uppercase">已置顶</span>
+                <span className="mono-nums text-[10px] text-faint">{pinned.length}</span>
+              </div>
+              {pinned.map(renderThreadRow)}
             </>
           )}
 

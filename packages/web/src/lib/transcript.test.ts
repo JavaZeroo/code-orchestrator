@@ -23,6 +23,7 @@ const session: SessionRow = {
   containerId: null,
   usage: null,
   archivedAt: null,
+  pinnedAt: null,
   createdAt: '2026-07-12T00:00:00.000Z',
 };
 

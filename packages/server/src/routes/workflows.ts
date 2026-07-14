@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { createId } from '@paralleldrive/cuid2';
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import * as z from 'zod';
 import { runNoteMarkdownSchema, workflowDefSchema } from '@co/protocol';
 import { getDb, schema } from '../db/index';
@@ -30,8 +30,9 @@ const patchDefSchema = z.object({
 });
 
 const patchRunSchema = z.object({
-  title: z.string().trim().min(1).max(120),
-}).strict();
+  title: z.string().trim().min(1).max(120).optional(),
+  pinned: z.boolean().optional(),
+}).strict().refine((body) => body.title !== undefined || body.pinned !== undefined, { message: 'no update fields' });
 
 const createRunNoteSchema = z.object({
   markdown: runNoteMarkdownSchema,
@@ -141,16 +142,37 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
 
   app.patch<{ Params: { id: string } }>('/api/runs/:id', async (req, reply) => {
     const body = patchRunSchema.parse(req.body);
+    const update: { title?: string; pinnedAt?: Date | null } = {};
+    if (body.title !== undefined) update.title = body.title;
+    if (body.pinned !== undefined) update.pinnedAt = body.pinned ? new Date() : null;
+    const eligibility = body.pinned === undefined
+      ? eq(schema.workflowRuns.id, req.params.id)
+      : and(eq(schema.workflowRuns.id, req.params.id), isNull(schema.workflowRuns.archivedAt));
     const [run] = await getDb()
       .update(schema.workflowRuns)
-      .set({ title: body.title })
-      .where(eq(schema.workflowRuns.id, req.params.id))
-      .returning({ id: schema.workflowRuns.id, title: schema.workflowRuns.title });
+      .set(update)
+      .where(eligibility)
+      .returning({ id: schema.workflowRuns.id, title: schema.workflowRuns.title, pinnedAt: schema.workflowRuns.pinnedAt });
     if (!run) {
+      if (body.pinned !== undefined) {
+        const existing = await getDb().select({ id: schema.workflowRuns.id }).from(schema.workflowRuns)
+          .where(eq(schema.workflowRuns.id, req.params.id)).limit(1);
+        if (existing[0]) {
+          void reply.code(409);
+          return { error: 'only non-archived workflow runs can be pinned' };
+        }
+      }
       void reply.code(404);
       return { error: 'run not found' };
     }
-    return { ok: true, run };
+    return {
+      ok: true,
+      run: {
+        id: run.id,
+        ...(body.title !== undefined ? { title: run.title } : {}),
+        ...(body.pinned !== undefined ? { pinnedAt: run.pinnedAt } : {}),
+      },
+    };
   });
 
   app.post<{ Params: { id: string } }>('/api/runs/:id/notes', async (req, reply) => {
@@ -315,11 +337,14 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
         startedAt: schema.workflowRuns.startedAt,
         endedAt: schema.workflowRuns.endedAt,
         archivedAt: schema.workflowRuns.archivedAt,
+        pinnedAt: schema.workflowRuns.pinnedAt,
       })
       .from(schema.workflowRuns)
       .leftJoin(schema.workflowDefs, eq(schema.workflowRuns.defId, schema.workflowDefs.id))
       .where(archived === 'true' ? isNotNull(schema.workflowRuns.archivedAt) : isNull(schema.workflowRuns.archivedAt))
-      .orderBy(desc(archived === 'true' ? schema.workflowRuns.archivedAt : schema.workflowRuns.startedAt))
+      .orderBy(...(archived === 'true'
+        ? [desc(schema.workflowRuns.archivedAt)]
+        : [sql`${schema.workflowRuns.pinnedAt} desc nulls last`, desc(schema.workflowRuns.startedAt)]))
       .limit(100);
     return { runs };
   });

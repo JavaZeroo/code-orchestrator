@@ -31,6 +31,7 @@ const run: RunRow = {
   startedAt: '2026-07-12T00:00:00.000Z',
   endedAt: '2026-07-12T00:10:00.000Z',
   archivedAt: null,
+  pinnedAt: null,
 };
 
 const def: WorkflowDefRow = {

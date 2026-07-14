@@ -1071,6 +1071,127 @@ describeSt('server ST: API + runner websocket', () => {
     expect(unchanged?.title).toBe('Production rollout');
   });
 
+  it('persists pin state for top-level sessions and workflow runs across REST lists and reloads', async () => {
+    const db = getDb();
+    const projectId = 'pinning-project';
+    const defId = 'pinning-workflow';
+    const sessionId = 'pinning-session';
+    const runId = 'pinning-run';
+    await db.insert(schema.projects).values({
+      id: projectId,
+      name: 'Pinned operations',
+      forge: 'github',
+      repo: 'example/pinned-operations',
+    });
+    await db.insert(schema.machines).values({ id: 'pinning-machine', name: 'Pinning Runner' });
+    await db.insert(schema.workflowDefs).values({
+      id: defId,
+      name: 'Pinned workflow',
+      projectId,
+      graph: { name: 'Pinned workflow', nodes: [], edges: [] },
+    });
+    await db.insert(schema.sessions).values([
+      {
+        id: sessionId,
+        machineId: 'pinning-machine',
+        agent: 'claude',
+        cwd: '/tmp/pinning-session',
+        projectId,
+        state: 'idle',
+      },
+      {
+        id: 'pinning-child-session',
+        machineId: 'pinning-machine',
+        agent: 'claude',
+        cwd: '/tmp/pinning-child',
+        projectId,
+        runId,
+        state: 'idle',
+      },
+      {
+        id: 'pinning-archived-session',
+        machineId: 'pinning-machine',
+        agent: 'claude',
+        cwd: '/tmp/pinning-archived',
+        projectId,
+        state: 'dead',
+        archivedAt: new Date('2026-07-14T01:00:00Z'),
+      },
+    ]);
+    await db.insert(schema.workflowRuns).values([
+      { id: runId, defId, projectId },
+      {
+        id: 'pinning-archived-run',
+        defId,
+        projectId,
+        status: 'done',
+        endedAt: new Date('2026-07-14T01:00:00Z'),
+        archivedAt: new Date('2026-07-14T02:00:00Z'),
+      },
+    ]);
+
+    const [pinnedSession, pinnedRun] = await Promise.all([
+      app!.inject({ method: 'PATCH', url: `/api/sessions/${sessionId}`, payload: { pinned: true } }),
+      app!.inject({ method: 'PATCH', url: `/api/runs/${runId}`, payload: { pinned: true } }),
+    ]);
+    expect(pinnedSession.statusCode).toBe(200);
+    expect(pinnedSession.json()).toMatchObject({
+      ok: true,
+      session: { id: sessionId, pinnedAt: expect.any(String) },
+    });
+    expect(pinnedRun.statusCode).toBe(200);
+    expect(pinnedRun.json()).toMatchObject({
+      ok: true,
+      run: { id: runId, pinnedAt: expect.any(String) },
+    });
+
+    const [persistedSession] = await db.select({ pinnedAt: schema.sessions.pinnedAt })
+      .from(schema.sessions).where(eq(schema.sessions.id, sessionId));
+    const [persistedRun] = await db.select({ pinnedAt: schema.workflowRuns.pinnedAt })
+      .from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+    expect(persistedSession?.pinnedAt).toBeInstanceOf(Date);
+    expect(persistedRun?.pinnedAt).toBeInstanceOf(Date);
+
+    for (const [url, payload] of [
+      ['/api/sessions/pinning-child-session', { pinned: true }],
+      ['/api/sessions/pinning-archived-session', { pinned: true }],
+      ['/api/runs/pinning-archived-run', { pinned: true }],
+    ] as const) {
+      const rejected = await app!.inject({ method: 'PATCH', url, payload });
+      expect(rejected.statusCode).toBe(409);
+    }
+
+    await app!.close();
+    app = null;
+    await closeDb();
+    await startApp();
+
+    const [sessionsList, runsList] = await Promise.all([
+      app!.inject({ method: 'GET', url: '/api/sessions' }),
+      app!.inject({ method: 'GET', url: '/api/runs' }),
+    ]);
+    expect(sessionsList.json()).toMatchObject({
+      sessions: [expect.objectContaining({ id: sessionId, projectId, pinnedAt: expect.any(String) })],
+    });
+    expect(runsList.json()).toMatchObject({
+      runs: [expect.objectContaining({ id: runId, projectId, pinnedAt: expect.any(String) })],
+    });
+
+    const [unpinnedSession, unpinnedRun] = await Promise.all([
+      app!.inject({ method: 'PATCH', url: `/api/sessions/${sessionId}`, payload: { pinned: false } }),
+      app!.inject({ method: 'PATCH', url: `/api/runs/${runId}`, payload: { pinned: false } }),
+    ]);
+    expect(unpinnedSession.json()).toEqual({ ok: true, session: { id: sessionId, pinnedAt: null } });
+    expect(unpinnedRun.json()).toEqual({ ok: true, run: { id: runId, pinnedAt: null } });
+
+    const [unpersistedSession] = await getDb().select({ pinnedAt: schema.sessions.pinnedAt })
+      .from(schema.sessions).where(eq(schema.sessions.id, sessionId));
+    const [unpersistedRun] = await getDb().select({ pinnedAt: schema.workflowRuns.pinnedAt })
+      .from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+    expect(unpersistedSession?.pinnedAt).toBeNull();
+    expect(unpersistedRun?.pinnedAt).toBeNull();
+  });
+
   it('persists operator notes from REST to the live and reloaded run thread without runner dispatch', async () => {
     await app!.close();
     app = null;

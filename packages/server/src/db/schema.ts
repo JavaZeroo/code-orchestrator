@@ -299,8 +299,10 @@ export const sessions = pgTable('sessions', {
   usage: jsonb('usage').$type<Record<string, number>>(),
   /** 手动会话归档时间；null 表示仍在默认会话列表中 */
   archivedAt: timestamp('archived_at', { withTimezone: true }),
+  /** 操作员置顶时间；null 表示按常规状态与活跃时间展示 */
+  pinnedAt: timestamp('pinned_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-}, (t) => [index('sessions_archived_at_idx').on(t.archivedAt)]);
+}, (t) => [index('sessions_archived_at_idx').on(t.archivedAt), index('sessions_pinned_at_idx').on(t.pinnedAt)]);
 
 /** append-only 事件日志：系统地基（design §2） */
 export const events = pgTable(
@@ -368,8 +370,10 @@ export const workflowRuns = pgTable(
     endedAt: timestamp('ended_at', { withTimezone: true }),
     /** 终态运行归档时间；null 表示仍在默认线程列表中 */
     archivedAt: timestamp('archived_at', { withTimezone: true }),
+    /** 操作员置顶时间；null 表示按常规状态与活跃时间展示 */
+    pinnedAt: timestamp('pinned_at', { withTimezone: true }),
   },
-  (t) => [index('workflow_runs_archived_at_idx').on(t.archivedAt)],
+  (t) => [index('workflow_runs_archived_at_idx').on(t.archivedAt), index('workflow_runs_pinned_at_idx').on(t.pinnedAt)],
 );
 
 export const nodeStates = pgTable(
