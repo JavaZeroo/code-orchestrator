@@ -4,7 +4,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
-import { and, asc, desc, eq, gt, isNotNull, isNull, lt } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import * as z from 'zod';
 import { approvalDecisionSchema, MessageMetaSchema, sessionAgentSchema, sessionNoteMarkdownSchema } from '@co/protocol';
 import { getDb, hasDb, schema } from '../db/index';
@@ -48,7 +48,10 @@ const spawnBodySchema = z.object({
 const sendBodySchema = z.object({ text: z.string().min(1), meta: MessageMetaSchema.optional() });
 const createSessionNoteSchema = z.object({ markdown: sessionNoteMarkdownSchema }).strict();
 const noteIdSchema = z.coerce.number().int().positive();
-const renameBodySchema = z.object({ title: z.string().trim().min(1).max(120) }).strict();
+const patchSessionSchema = z.object({
+  title: z.string().trim().min(1).max(120).optional(),
+  pinned: z.boolean().optional(),
+}).strict().refine((body) => body.title !== undefined || body.pinned !== undefined, { message: 'no update fields' });
 const listSessionsQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
 const decideBodySchema = z.object({ decision: approvalDecisionSchema, decidedBy: z.string().optional() });
 const workspaceFileQuerySchema = z.object({ path: z.string().min(1) });
@@ -189,7 +192,9 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
       .select()
       .from(schema.sessions)
       .where(archived === 'true' ? isNotNull(schema.sessions.archivedAt) : isNull(schema.sessions.archivedAt))
-      .orderBy(desc(archived === 'true' ? schema.sessions.archivedAt : schema.sessions.createdAt))
+      .orderBy(...(archived === 'true'
+        ? [desc(schema.sessions.archivedAt)]
+        : [sql`${schema.sessions.pinnedAt} desc nulls last`, desc(schema.sessions.createdAt)]))
       .limit(100);
     return { sessions: rows };
   });
@@ -201,16 +206,40 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
 
   app.patch<{ Params: { id: string } }>('/api/sessions/:id', async (req) => {
     const db = requireDb();
-    const body = renameBodySchema.parse(req.body);
+    const body = patchSessionSchema.parse(req.body);
+    const update: { title?: string; pinnedAt?: Date | null } = {};
+    if (body.title !== undefined) update.title = body.title;
+    if (body.pinned !== undefined) update.pinnedAt = body.pinned ? new Date() : null;
+    const eligibility = body.pinned === undefined
+      ? eq(schema.sessions.id, req.params.id)
+      : and(
+          eq(schema.sessions.id, req.params.id),
+          isNull(schema.sessions.archivedAt),
+          isNull(schema.sessions.runId),
+        );
     const [session] = await db
       .update(schema.sessions)
-      .set({ title: body.title })
-      .where(eq(schema.sessions.id, req.params.id))
-      .returning({ id: schema.sessions.id, title: schema.sessions.title });
+      .set(update)
+      .where(eligibility)
+      .returning({ id: schema.sessions.id, title: schema.sessions.title, pinnedAt: schema.sessions.pinnedAt });
     if (!session) {
+      if (body.pinned !== undefined) {
+        const existing = await db.select({ id: schema.sessions.id }).from(schema.sessions)
+          .where(eq(schema.sessions.id, req.params.id)).limit(1);
+        if (existing[0]) {
+          throw new HttpError(409, 'only non-archived top-level sessions can be pinned');
+        }
+      }
       throw new HttpError(404, `session not found: ${req.params.id}`);
     }
-    return { ok: true, session };
+    return {
+      ok: true,
+      session: {
+        id: session.id,
+        ...(body.title !== undefined ? { title: session.title } : {}),
+        ...(body.pinned !== undefined ? { pinnedAt: session.pinnedAt } : {}),
+      },
+    };
   });
 
   app.post<{ Params: { id: string } }>('/api/sessions/:id/resume', async (req) => {

@@ -72,6 +72,33 @@ describe('api client', () => {
     expect(fetch).toHaveBeenCalledWith('/api/sessions/session%2Folder');
   });
 
+  it('pins and unpins standalone sessions and workflow runs through PATCH', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ ok: true, session: { id: 'session/one', pinnedAt: '2026-07-14T08:00:00Z' } }))
+      .mockResolvedValueOnce(Response.json({ ok: true, run: { id: 'run/one', pinnedAt: null } }));
+    vi.stubGlobal('fetch', fetch);
+
+    await expect(api.pinSession('session/one', true)).resolves.toMatchObject({
+      ok: true,
+      session: { id: 'session/one', pinnedAt: expect.any(String) },
+    });
+    await expect(api.pinRun('run/one', false)).resolves.toEqual({
+      ok: true,
+      run: { id: 'run/one', pinnedAt: null },
+    });
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/sessions/session%2Fone', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pinned: true }),
+    });
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/runs/run%2Fone', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pinned: false }),
+    });
+  });
+
   it('constructs an encoded workspace file request', async () => {
     const response = new Response('bytes');
     const fetch = mockFetch(response);

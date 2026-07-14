@@ -93,6 +93,7 @@ export interface SessionRow {
   containerId: string | null;
   usage: SessionUsage | null;
   archivedAt: string | null;
+  pinnedAt: string | null;
   createdAt: string;
 }
 
@@ -278,6 +279,7 @@ export interface RunRow {
   startedAt: string;
   endedAt: string | null;
   archivedAt: string | null;
+  pinnedAt: string | null;
 }
 
 export interface RunRetryResult {
@@ -509,6 +511,12 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title }),
     }).then((r) => j<{ ok: true; session: Pick<SessionRow, 'id' | 'title'> }>(r)),
+  pinSession: (sessionId: string, pinned: boolean) =>
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pinned }),
+    }).then((r) => j<{ ok: true; session: Pick<SessionRow, 'id' | 'pinnedAt'> }>(r)),
   events: (sessionId: string, cursor?: SessionEventCursor) => {
     const query = new URLSearchParams();
     if (cursor?.before) query.set('before', String(cursor.before));
@@ -551,6 +559,12 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title }),
     }).then((r) => j<{ ok: true; run: Pick<RunRow, 'id' | 'title'> }>(r)),
+  pinRun: (runId: string, pinned: boolean) =>
+    fetch(`/api/runs/${encodeURIComponent(runId)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pinned }),
+    }).then((r) => j<{ ok: true; run: Pick<RunRow, 'id' | 'pinnedAt'> }>(r)),
   addRunNote: (runId: string, markdown: string) =>
     post(`/api/runs/${encodeURIComponent(runId)}/notes`, { markdown })
       .then((r) => j<{ note: RunNoteEventRow }>(r)),
