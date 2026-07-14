@@ -1,7 +1,7 @@
 import { Archive, ArchiveRestore, ArrowLeft, Check, Download, ExternalLink, Pause, Pencil, Play, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api, type ApprovalRow, type ForgeRefRow, type NodeStateRow, type RunNoteEventRow, type RunRetryResult, type RunRow, type WorkflowDefRow } from './api';
+import { api, type ApprovalRow, type ForgeRefRow, type NodeStateRow, type RunNoteEventRow, type RunRerunResult, type RunRetryResult, type RunRow, type WorkflowDefRow } from './api';
 import { FlowGraph } from './FlowGraph';
 import { RunTimeline } from './RunTimeline';
 import { Markdown } from './components/Markdown';
@@ -200,6 +200,51 @@ export function RunRetryAction({
   );
 }
 
+export interface RunRerunActionDependencies {
+  request(runId: string): Promise<RunRerunResult>;
+  success(message: string): void;
+  error(message: string): void;
+  open(runId: string): void;
+}
+
+export function isRunRerunEligible(run: Pick<RunRow, 'status'> | null): boolean {
+  return run !== null && ['done', 'failed', 'cancelled'].includes(run.status);
+}
+
+export async function runRerunAction(
+  runId: string,
+  deps: RunRerunActionDependencies,
+): Promise<RunRerunResult> {
+  try {
+    const result = await deps.request(runId);
+    deps.success('已启动新的工作流运行');
+    deps.open(result.runId);
+    return result;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    deps.error(`再次运行失败：${detail}`);
+    throw err;
+  }
+}
+
+export function RunRerunAction({
+  eligible,
+  rerunning,
+  onRerun,
+}: {
+  eligible: boolean;
+  rerunning: boolean;
+  onRerun: () => void;
+}) {
+  if (!eligible) return null;
+  return (
+    <Button variant="secondary" size="sm" disabled={rerunning} onClick={onRerun}>
+      <Play size={12} />
+      {rerunning ? '启动中…' : '再次运行'}
+    </Button>
+  );
+}
+
 export type RunProgressionMode = 'pause' | 'resume';
 
 export function runProgressionMode(run: Pick<RunRow, 'status'> | null): RunProgressionMode | null {
@@ -267,9 +312,20 @@ export function RunTranscriptExportAction({
   );
 }
 
-export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpenSession: (id: string) => void; onBack: () => void }) {
+export function RunView({
+  runId,
+  onOpenSession,
+  onOpenRun,
+  onBack,
+}: {
+  runId: string;
+  onOpenSession: (id: string) => void;
+  onOpenRun: (id: string) => void;
+  onBack: () => void;
+}) {
   const [mode, setMode] = useState<'thread' | 'graph'>('thread');
   const [retrying, setRetrying] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
   const [updatingProgression, setUpdatingProgression] = useState(false);
   const [updatingArchive, setUpdatingArchive] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -384,6 +440,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
   const gate = pending.find((a) => a.kind === 'gate' && a.runId === runId && a.nodeId === selected);
   const runMeta = RUN_META[effectiveRun?.status ?? ''] ?? { label: effectiveRun?.status ?? '', tone: 'neutral' as const };
   const retryEligible = isRunRetryEligible(effectiveRun);
+  const rerunEligible = isRunRerunEligible(effectiveRun);
   const progressionMode = runProgressionMode(effectiveRun);
   const archiveMode = runArchiveMode(effectiveRun);
   const effectiveTitle = effectiveRun
@@ -477,6 +534,22 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
       .catch(() => {})
       .finally(() => setRetrying(false));
   }, [refreshGraph, refreshThread, retryEligible, retrying, runId]);
+
+  const handleRerun = useCallback(() => {
+    if (!rerunEligible || rerunning) return;
+    setRerunning(true);
+    void runRerunAction(runId, {
+      request: api.rerunRun,
+      success: toast.success,
+      error: toast.error,
+      open: (newRunId) => {
+        invalidate('runs');
+        onOpenRun(newRunId);
+      },
+    })
+      .catch(() => {})
+      .finally(() => setRerunning(false));
+  }, [onOpenRun, rerunEligible, rerunning, runId]);
 
   const handleArchiveChange = useCallback(() => {
     if (!archiveMode) return;
@@ -585,6 +658,7 @@ export function RunView({ runId, onOpenSession, onBack }: { runId: string; onOpe
           <Badge tone={runMeta.tone}>{runMeta.label}</Badge>
           <RunProgressionAction mode={progressionMode} updating={updatingProgression} onChange={handleProgressionChange} />
           <RunRetryAction eligible={retryEligible} retrying={retrying} onRetry={handleRetry} />
+          <RunRerunAction eligible={rerunEligible} rerunning={rerunning} onRerun={handleRerun} />
           <RunArchiveAction mode={archiveMode} updating={updatingArchive} onChange={handleArchiveChange} />
           {(effectiveRun?.status === 'running' || effectiveRun?.status === 'waiting_human' || effectiveRun?.status === 'paused') && (
             <Button
