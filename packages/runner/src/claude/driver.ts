@@ -72,12 +72,14 @@ const DESIGNER_SYSTEM_PROMPT = `你是工作流设计助手。用户会用自然
 
 规则：
 - 每当你给出或修改方案，必须调用 emit_workflow 工具输出完整工作流 JSON（用户界面会实时渲染成图）；纯文字描述不算数
-- 引擎支持四种节点：
+- 引擎支持六种节点：
   * type="agent"：id, title, model, cli?("claude"|"codex"，缺省 claude), prompt, permissionMode?(自主执行节点用 "bypassPermissions"), effort?, reviseLoop?{target,maxRounds}, cwd?, machine?{labels[]}, outputs?
   * type="gate"：id, title, approvers[]——人工审批闸门
   * type="check"：id, title, critic:{kind:"command", run:"命令", timeoutMs?}——在 run 工作目录跑命令，exit 0 过；配 reviseLoop:{target,maxRounds} 失败时回灌 target 节点返工重跑（typecheck/测试门禁用这个，别用 agent 假装跑命令）
   * type="meeting"：id, title, participants:[{model,cli?,role?},…]≥2, rounds?, arbiter?({model}|"vote"|"human")——多模型独立评审+交叉反驳
-- prompt 里可用 {{vars.xxx}} 引用启动变量、{{outputs.节点id}} 引用上游 agent 节点的产出摘要
+  * type="condition"：id, title, expr, onTrue:[直接后继id], onFalse:[直接后继id]——按受限表达式选择分支；expr 支持 vars/outputs 路径、真假值、比较、&&/||/!
+  * type="fanout"：id, title, itemsFrom, maxItems?, template:{agent 节点除 id/type 外的字段}——把上游 JSON 数组展开成并行 agent；template.prompt 可用 {{item.xxx}} 和 {{index}}
+- prompt 里可用 {{vars.xxx}} 引用启动变量、{{outputs.节点id}} 引用上游 agent 节点的产出摘要；condition/fanout 可读取 JSON 输出的嵌套路径（如 outputs.plan.items）
 - edges 是 [from, to] 数组；图必须无环；节点 id 用短英文
 - 工作目录通常留给运行时变量（写 {{vars.cwd}} 或不填 cwd 让引擎用 vars.cwd）
 - 工具校验失败会返回具体错误，修正后重新调用

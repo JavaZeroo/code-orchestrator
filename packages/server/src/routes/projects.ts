@@ -134,7 +134,7 @@ export async function registerProjectRoutes(app: FastifyInstance): Promise<void>
     }
 
     try {
-      const runId = await startRun(defId, vars, project.id);
+      const runId = await startRun(defId, vars, project.id, undefined, req.user?.id);
       if (intakeId) {
         await db.update(schema.requirementIntakes).set({ runId }).where(eq(schema.requirementIntakes.id, intakeId));
       }

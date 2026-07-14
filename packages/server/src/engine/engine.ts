@@ -1,14 +1,13 @@
 /**
- * 工作流引擎（M2）：事件驱动的薄状态机，设计文档 §7。
+ * Agent 执行内核：事件驱动、可恢复的 DAG 状态机，设计文档 §7。
  * - startRun：建 run + 全量 node_states(pending)，触发首次 tick
  * - tick：按 DAG 就绪判定执行节点（按 runId 串行化，幂等）
- * - agent 节点：挑机器 → spawn 会话 → 监听该会话 turn-end → 捕获输出进 context.outputs
+ * - agent / fanout / meeting：统一走项目自动就位与资源队列，监听 turn-end 并持久聚合输出
+ * - condition：受限表达式选择分支，未选分支显式 skipped，汇合点继续执行
  * - gate 节点：建 kind=gate 审批，挂起（可挂数天）；决议后恢复
- * - 崩溃恢复：boot 时重建 会话→节点 索引，补查漏掉的 turn-end
- * M2 仅支持 agent | gate 节点；其余类型在 startRun 拒绝。
+ * - 崩溃恢复：boot 时重建普通、fanout、meeting 会话索引，补查漏掉的 turn-end
  */
 
-import { existsSync } from 'node:fs';
 import { createId } from '@paralleldrive/cuid2';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import {
@@ -16,6 +15,8 @@ import {
   type AgentNode,
   type ApprovalDecision,
   type CheckNode,
+  type ConditionNode,
+  type FanoutNode,
   type GateNode,
   type MeetingNode,
   type SessionEnvelope,
@@ -26,11 +27,21 @@ import { bus, publish } from '../events';
 import { parseForgeUrl } from '../forge/registry';
 import { callRunner, listMachines } from '../ws/runnerHub';
 import { spawnSession, SpawnError } from '../services/spawn';
+import { resolveAndSpawn } from '../services/spawnAuto';
+import { ContainerSpawnQueued } from '../services/spawnContainer';
 import { machineForRun, matchMachine } from './runMachine';
+import {
+  evaluateConditionExpression,
+  resolveFanoutItems,
+  skippedBranchNodeIds,
+  substituteTemplate,
+} from './kernel';
 
 type RunContext = {
   vars: Record<string, string>;
   outputs: Record<string, string>;
+  /** 发起本次 run 的用户；用于项目 token / 模型凭证解析。 */
+  actorId?: string;
   /** 每个评审节点已用返工轮次（持久化在 run.context，重启后仍守住上限） */
   reviseRounds?: Record<string, number>;
 };
@@ -46,7 +57,16 @@ export class EngineError extends Error {
 }
 
 /** 会话 → 所属节点（内存索引，boot 时从 DB 重建） */
-const sessionNodes = new Map<string, { runId: string; nodeId: string }>();
+type SessionNodeRef = {
+  runId: string;
+  /** 静态 node_state id；fanout 子任务都归到父节点。 */
+  nodeId: string;
+  /** fanout 子任务索引；缺省表示普通 agent 节点。 */
+  fanoutIndex?: number;
+  /** 会话/事件中展示的执行节点 id。 */
+  executionNodeId?: string;
+};
+const sessionNodes = new Map<string, SessionNodeRef>();
 /** 每个 run 的 tick 串行链，避免并发状态竞争 */
 const tickChains = new Map<string, Promise<void>>();
 
@@ -61,15 +81,7 @@ function parseDef(graph: unknown): WorkflowDef {
   return workflowDefSchema.parse(graph);
 }
 
-function substitute(template: string, ctx: RunContext): string {
-  return template.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (_, key: string) => {
-    if (key.startsWith('outputs.')) {
-      return ctx.outputs[key.slice('outputs.'.length)] ?? '';
-    }
-    const name = key.startsWith('vars.') ? key.slice('vars.'.length) : key;
-    return ctx.vars[name] ?? '';
-  });
-}
+const substitute = substituteTemplate;
 
 function depsOf(def: WorkflowDef, nodeId: string): string[] {
   return def.edges.filter(([, to]) => to === nodeId).map(([from]) => from);
@@ -89,6 +101,7 @@ export async function startRun(
   vars: Record<string, string>,
   projectId?: string | null,
   onCreate?: (tx: RunTransaction, runId: string) => Promise<void>,
+  actorId?: string,
 ): Promise<string> {
   const db = getDb();
   const defRows = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, defId)).limit(1);
@@ -97,13 +110,8 @@ export async function startRun(
     throw new EngineError(404, `workflow not found: ${defId}`);
   }
   const def = parseDef(defRow.graph);
-  const unsupported = def.nodes.filter((n) => !['agent', 'gate', 'meeting', 'check'].includes(n.type));
-  if (unsupported.length > 0) {
-    throw new EngineError(400, `当前支持 agent|gate|meeting|check 节点，含不支持类型: ${unsupported.map((n) => `${n.id}(${n.type})`).join(', ')}`);
-  }
-
   const runId = createId();
-  const context: RunContext = { vars: { ...(def.vars ?? {}), ...vars }, outputs: {} };
+  const context: RunContext = { vars: { ...(def.vars ?? {}), ...vars }, outputs: {}, actorId: actorId ?? defRow.createdBy ?? undefined };
   const effectiveProjectId = projectId === undefined ? defRow.projectId ?? undefined : projectId ?? undefined;
   await db.transaction(async (tx) => {
     await tx.insert(schema.workflowRuns).values({ id: runId, defId, projectId: effectiveProjectId, status: 'running', context });
@@ -153,6 +161,115 @@ export function scheduleRetriedRun(runId: string, retriedNodeIds: string[]): voi
   scheduleTick(runId);
 }
 
+/** run 终止后清理不会再收到完成事件的内存索引；持久化终态由调用方负责。 */
+export function forgetRunExecution(runId: string): void {
+  for (const [sessionId, ref] of sessionNodes) {
+    if (ref.runId === runId) sessionNodes.delete(sessionId);
+  }
+  for (const key of meetings.keys()) {
+    if (meetings.get(key)?.runId === runId) meetings.delete(key);
+  }
+  for (const [sessionId, ref] of meetingSessions) {
+    if (ref.key.startsWith(`${runId}:`)) meetingSessions.delete(sessionId);
+  }
+  for (const key of agentAttempts.keys()) {
+    if (key.startsWith(`${runId}:`)) agentAttempts.delete(key);
+  }
+}
+
+async function reconcileQueuedExecutions(
+  runId: string,
+  states: Array<typeof schema.nodeStates.$inferSelect>,
+): Promise<boolean> {
+  const db = getDb();
+  let changed = false;
+  for (const state of states) {
+    if (state.status !== 'running') continue;
+    const fanout = asFanoutOutput(state.output);
+    if (fanout) {
+      for (const child of fanout.children.filter((candidate) => candidate.status === 'queued' && candidate.queuedTaskId)) {
+        const [task] = await db
+          .select({ status: schema.taskQueue.status })
+          .from(schema.taskQueue)
+          .where(eq(schema.taskQueue.id, child.queuedTaskId!))
+          .limit(1);
+        if (task?.status === 'running') {
+          child.status = 'running';
+          changed = true;
+        } else if (task?.status === 'failed' || task?.status === 'cancelled') {
+          child.status = 'failed';
+          child.error = `queued task ${task.status}: ${child.queuedTaskId}`;
+          await abortFanoutSiblings(runId, child.index, fanout.children);
+          await persistFanout(runId, state.nodeId, fanout, 'failed');
+          await publishNodeState(runId, state.nodeId, 'failed', { child: child.index, error: child.error });
+          return true;
+        }
+      }
+      if (changed) await persistFanout(runId, state.nodeId, fanout);
+      continue;
+    }
+
+    const meeting = asMeetingOutput(state.output);
+    if (meeting) {
+      let meetingChanged = false;
+      for (const session of meeting.sessions.filter((candidate) => candidate.status === 'queued' && candidate.queuedTaskId)) {
+        const [task] = await db
+          .select({ status: schema.taskQueue.status })
+          .from(schema.taskQueue)
+          .where(eq(schema.taskQueue.id, session.queuedTaskId!))
+          .limit(1);
+        if (task?.status === 'running') {
+          session.status = 'running';
+          const live = meetings.get(meetingKey(runId, state.nodeId))?.pendingSessions.get(session.sessionId);
+          if (live) live.status = 'running';
+          meetingChanged = true;
+        } else if (task?.status === 'failed' || task?.status === 'cancelled') {
+          const ref = meetingSessions.get(session.sessionId);
+          if (ref && meetings.has(ref.key)) {
+            await onMeetingSessionDone(session.sessionId, ref, 'failed');
+          } else {
+            await failNode(runId, state.nodeId, `meeting queued task ${task.status}: ${session.queuedTaskId}`);
+          }
+          return true;
+        }
+      }
+      if (meetingChanged) {
+        await db
+          .update(schema.nodeStates)
+          .set({ output: meeting, updatedAt: new Date() })
+          .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, state.nodeId)));
+        changed = true;
+      }
+      continue;
+    }
+
+    const queuedOutput = state.output as { queuedTaskId?: string; phase?: string } | null;
+    const queuedTaskId = queuedOutput?.queuedTaskId;
+    if (!queuedTaskId) continue;
+    const [task] = await db
+      .select({ status: schema.taskQueue.status })
+      .from(schema.taskQueue)
+      .where(eq(schema.taskQueue.id, queuedTaskId))
+      .limit(1);
+    if (task?.status === 'running' && queuedOutput?.phase !== 'running') {
+      await db
+        .update(schema.nodeStates)
+        .set({ output: { phase: 'running', queuedTaskId }, updatedAt: new Date() })
+        .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, state.nodeId)));
+      changed = true;
+    } else if (task?.status === 'failed' || task?.status === 'cancelled') {
+      if (state.sessionId) sessionNodes.delete(state.sessionId);
+      await db
+        .update(schema.nodeStates)
+        .set({ status: 'failed', output: { error: `queued task ${task.status}: ${queuedTaskId}`, queuedTaskId }, updatedAt: new Date() })
+        .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, state.nodeId)));
+      await publishNodeState(runId, state.nodeId, 'failed', { queuedTaskId, queueStatus: task.status });
+      return true;
+    }
+  }
+  return changed;
+}
+
 async function tick(runId: string): Promise<void> {
   const db = getDb();
   const runRows = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId)).limit(1);
@@ -166,6 +283,10 @@ async function tick(runId: string): Promise<void> {
   }
   const def = parseDef(defRows[0].graph);
   const states = await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, runId));
+  if (await reconcileQueuedExecutions(runId, states)) {
+    scheduleTick(runId);
+    return;
+  }
   const byId = new Map(states.map((s) => [s.nodeId, s]));
   const context = run.context as RunContext;
 
@@ -179,13 +300,13 @@ async function tick(runId: string): Promise<void> {
     return;
   }
 
-  // 就绪节点：pending 且所有依赖 done
+  // 就绪节点：pending 且所有依赖已结束；condition 跳过的分支也满足汇合依赖。
   const ready = def.nodes.filter((n) => {
     const st = byId.get(n.id);
     if (!st || st.status !== 'pending') {
       return false;
     }
-    return depsOf(def, n.id).every((dep) => byId.get(dep)?.status === 'done');
+    return depsOf(def, n.id).every((dep) => ['done', 'skipped'].includes(byId.get(dep)?.status ?? ''));
   });
 
   for (const node of ready) {
@@ -197,6 +318,10 @@ async function tick(runId: string): Promise<void> {
       await execMeeting(runId, node, context);
     } else if (node.type === 'check') {
       await execCheck(runId, node, context);
+    } else if (node.type === 'condition') {
+      await execCondition(runId, node, def, context);
+    } else if (node.type === 'fanout') {
+      await execFanout(runId, node, context);
     }
   }
 
@@ -225,29 +350,7 @@ function pickMachine(selector: AgentNode['machine']): string | null {
   return matchMachine(listMachines(), selector);
 }
 
-async function execAgent(runId: string, node: AgentNode, context: RunContext): Promise<void> {
-  const db = getDb();
-  const machineId = pickMachine(node.machine);
-  const cwdTpl = node.cwd ?? context.vars.cwd;
-
-  const fail = async (error: string) => {
-    await db
-      .update(schema.nodeStates)
-      .set({ status: 'failed', output: { error }, updatedAt: new Date() })
-      .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
-    await publishNodeState(runId, node.id, 'failed', { error });
-    scheduleTick(runId);
-  };
-
-  if (!machineId) {
-    await fail(`没有匹配的可调度在线机器（selector: ${JSON.stringify(node.machine ?? {})}）`);
-    return;
-  }
-  if (!cwdTpl) {
-    await fail(`节点未指定 cwd 且运行时 vars.cwd 缺失`);
-    return;
-  }
-
+function agentMeta(node: Omit<AgentNode, 'id' | 'type'>): NonNullable<Parameters<typeof spawnSession>[0]['meta']> | undefined {
   const meta: NonNullable<Parameters<typeof spawnSession>[0]['meta']> = {};
   if (node.role) {
     meta.appendSystemPrompt = `你在工作流中承担「${node.role}」角色。`;
@@ -258,27 +361,276 @@ async function execAgent(runId: string, node: AgentNode, context: RunContext): P
   if (node.effort) {
     meta.effort = node.effort;
   }
+  return Object.keys(meta).length > 0 ? meta : undefined;
+}
+
+async function spawnWorkflowAgent(
+  runId: string,
+  executionNodeId: string,
+  node: Omit<AgentNode, 'id' | 'type'>,
+  context: RunContext,
+  locals: Record<string, unknown> = {},
+  sessionRef: SessionNodeRef = { runId, nodeId: executionNodeId },
+  onReserved?: (sessionId: string) => Promise<void>,
+  extraMeta?: NonNullable<Parameters<typeof spawnSession>[0]['meta']>,
+): Promise<{ sessionId: string; queuedTaskId?: string }> {
+  const db = getDb();
+  const [run] = await db
+    .select({ projectId: schema.workflowRuns.projectId })
+    .from(schema.workflowRuns)
+    .where(eq(schema.workflowRuns.id, runId))
+    .limit(1);
+  if (!run) throw new SpawnError(404, `run not found: ${runId}`);
+
+  const machineId = node.machine ? pickMachine(node.machine) : undefined;
+  if (node.machine && !machineId) {
+    throw new SpawnError(400, `没有匹配的可调度在线机器（selector: ${JSON.stringify(node.machine)}）`);
+  }
+  const cwdTpl = node.cwd ?? context.vars.cwd;
+  if (!run.projectId && !cwdTpl) {
+    throw new SpawnError(400, '未归属项目的工作流节点需要指定 cwd 或 vars.cwd');
+  }
+  if (!run.projectId && !machineId) {
+    throw new SpawnError(400, '未归属项目的工作流节点需要 machine selector');
+  }
+
+  const stableSessionId = createId();
+  sessionNodes.set(stableSessionId, sessionRef);
+  try {
+    await onReserved?.(stableSessionId);
+  } catch (err) {
+    sessionNodes.delete(stableSessionId);
+    throw err;
+  }
+  const request = {
+    sessionId: stableSessionId,
+    machineId: machineId ?? undefined,
+    cwd: cwdTpl ? substitute(cwdTpl, context, locals) : undefined,
+    prompt: substitute(node.prompt, context, locals),
+    agent: node.cli,
+    model: node.model,
+    role: node.role,
+    runId,
+    nodeId: executionNodeId,
+    projectId: run.projectId ?? undefined,
+    createdBy: context.actorId,
+    meta: extraMeta ? { ...(agentMeta(node) ?? {}), ...extraMeta } : agentMeta(node),
+    effort: node.effort,
+  } satisfies Parameters<typeof resolveAndSpawn>[0];
 
   try {
-    const { sessionId } = await spawnSession({
-      machineId,
-      cwd: substitute(cwdTpl, context),
-      prompt: substitute(node.prompt, context),
-      agent: node.cli,
-      model: node.model,
-      role: node.role,
+    const { sessionId } = await resolveAndSpawn(request);
+    if (sessionId !== stableSessionId) {
+      sessionNodes.delete(stableSessionId);
+      sessionNodes.set(sessionId, sessionRef);
+    }
+    return { sessionId };
+  } catch (err) {
+    if (err instanceof ContainerSpawnQueued) {
+      return { sessionId: err.sessionId, queuedTaskId: err.taskId };
+    }
+    sessionNodes.delete(stableSessionId);
+    throw err;
+  }
+}
+
+async function failNode(runId: string, nodeId: string, error: string): Promise<void> {
+  await getDb()
+    .update(schema.nodeStates)
+    .set({ status: 'failed', output: { error }, updatedAt: new Date() })
+    .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, nodeId)));
+  await publishNodeState(runId, nodeId, 'failed', { error });
+  scheduleTick(runId);
+}
+
+async function execAgent(runId: string, node: AgentNode, context: RunContext): Promise<void> {
+  const db = getDb();
+  try {
+    const { sessionId, queuedTaskId } = await spawnWorkflowAgent(
       runId,
-      nodeId: node.id,
-      meta: Object.keys(meta).length > 0 ? meta : undefined,
-    });
-    sessionNodes.set(sessionId, { runId, nodeId: node.id });
+      node.id,
+      node,
+      context,
+      {},
+      { runId, nodeId: node.id },
+      async (stableSessionId) => {
+        await db
+          .update(schema.nodeStates)
+          .set({ status: 'running', sessionId: stableSessionId, output: null, updatedAt: new Date() })
+          .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
+      },
+    );
     await db
       .update(schema.nodeStates)
-      .set({ status: 'running', sessionId, updatedAt: new Date() })
+      .set({
+        status: 'running',
+        sessionId,
+        output: queuedTaskId ? { phase: 'queued', queuedTaskId } : null,
+        updatedAt: new Date(),
+      })
       .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
-    await publishNodeState(runId, node.id, 'running', { sessionId });
+    await publishNodeState(runId, node.id, 'running', {
+      sessionId,
+      ...(queuedTaskId ? { phase: 'queued', queuedTaskId } : {}),
+    });
   } catch (err) {
-    await fail(err instanceof SpawnError ? err.message : String(err));
+    await failNode(runId, node.id, err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function execCondition(
+  runId: string,
+  node: ConditionNode,
+  def: WorkflowDef,
+  context: RunContext,
+): Promise<void> {
+  let result: boolean;
+  try {
+    result = evaluateConditionExpression(node.expr, context);
+  } catch (err) {
+    await failNode(runId, node.id, err instanceof Error ? err.message : String(err));
+    return;
+  }
+  const selected = result ? node.onTrue : node.onFalse;
+  const rejected = result ? node.onFalse : node.onTrue;
+  const skipped = skippedBranchNodeIds(def, selected, rejected);
+  const db = getDb();
+  await db.transaction(async (tx) => {
+    for (const nodeId of skipped) {
+      await tx
+        .update(schema.nodeStates)
+        .set({ status: 'skipped', output: { reason: `condition ${node.id}=${result}` }, updatedAt: new Date() })
+        .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, nodeId), eq(schema.nodeStates.status, 'pending')));
+    }
+    await tx
+      .update(schema.nodeStates)
+      .set({ status: 'done', output: { result, selected, skipped }, updatedAt: new Date() })
+      .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
+    context.outputs[node.id] = JSON.stringify({ result, selected });
+    await tx.update(schema.workflowRuns).set({ context }).where(eq(schema.workflowRuns.id, runId));
+  });
+  for (const nodeId of skipped) await publishNodeState(runId, nodeId, 'skipped', { condition: node.id, result });
+  await publishNodeState(runId, node.id, 'done', { result, selected, skipped });
+  scheduleTick(runId);
+}
+
+type FanoutChildStatus = 'pending' | 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+interface FanoutChildState {
+  index: number;
+  item: unknown;
+  status: FanoutChildStatus;
+  sessionId?: string;
+  queuedTaskId?: string;
+  summary?: string;
+  error?: string;
+}
+interface FanoutOutput {
+  kind: 'fanout';
+  itemsFrom: string;
+  children: FanoutChildState[];
+}
+
+function asFanoutOutput(value: unknown): FanoutOutput | null {
+  if (!value || typeof value !== 'object' || (value as { kind?: string }).kind !== 'fanout') return null;
+  const children = (value as { children?: unknown }).children;
+  return Array.isArray(children) ? value as FanoutOutput : null;
+}
+
+async function persistFanout(runId: string, nodeId: string, output: FanoutOutput, status: 'running' | 'done' | 'failed' = 'running') {
+  await getDb()
+    .update(schema.nodeStates)
+    .set({ status, output, updatedAt: new Date() })
+    .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, nodeId)));
+}
+
+async function abortFanoutSiblings(runId: string, failedIndex: number, children: FanoutChildState[]): Promise<void> {
+  const db = getDb();
+  for (const child of children) {
+    if (child.index === failedIndex || child.status === 'done' || child.status === 'failed') continue;
+    if (child.queuedTaskId) {
+      await db
+        .update(schema.taskQueue)
+        .set({ status: 'cancelled' })
+        .where(and(eq(schema.taskQueue.id, child.queuedTaskId), inArray(schema.taskQueue.status, ['pending', 'scheduled'])));
+    }
+    child.status = 'cancelled';
+    child.error = `cancelled after fanout child ${failedIndex} failed`;
+    if (!child.sessionId) continue;
+    const [session] = await db
+      .select({ machineId: schema.sessions.machineId })
+      .from(schema.sessions)
+      .where(eq(schema.sessions.id, child.sessionId))
+      .limit(1);
+    if (session) {
+      await callRunner(session.machineId, 'session.kill', { sessionId: child.sessionId }).catch(() => {});
+      await db.update(schema.sessions).set({ state: 'dead' }).where(eq(schema.sessions.id, child.sessionId));
+    }
+    sessionNodes.delete(child.sessionId);
+  }
+  await publish({ type: 'run.fanout.aborted', runId, payload: { failedIndex, siblings: children.length - 1 } });
+}
+
+async function execFanout(runId: string, node: FanoutNode, context: RunContext): Promise<void> {
+  let items: unknown[];
+  try {
+    items = resolveFanoutItems(node.itemsFrom, context, node.maxItems);
+  } catch (err) {
+    await failNode(runId, node.id, err instanceof Error ? err.message : String(err));
+    return;
+  }
+
+  const output: FanoutOutput = {
+    kind: 'fanout',
+    itemsFrom: node.itemsFrom,
+    children: items.map((item, index) => ({ index, item, status: 'pending' })),
+  };
+  await persistFanout(runId, node.id, output);
+  await publishNodeState(runId, node.id, 'running', { children: items.length });
+
+  if (items.length === 0) {
+    context.outputs[node.id] = '[]';
+    await getDb().update(schema.workflowRuns).set({ context }).where(eq(schema.workflowRuns.id, runId));
+    await persistFanout(runId, node.id, output, 'done');
+    await publishNodeState(runId, node.id, 'done', { children: 0 });
+    scheduleTick(runId);
+    return;
+  }
+
+  for (const child of output.children) {
+    const executionNodeId = `${node.id}[${child.index}]`;
+    try {
+      const spawned = await spawnWorkflowAgent(
+        runId,
+        executionNodeId,
+        node.template,
+        context,
+        { item: child.item, index: child.index },
+        { runId, nodeId: node.id, fanoutIndex: child.index, executionNodeId },
+        async (stableSessionId) => {
+          child.sessionId = stableSessionId;
+          child.status = 'running';
+          await persistFanout(runId, node.id, output);
+        },
+      );
+      child.sessionId = spawned.sessionId;
+      child.queuedTaskId = spawned.queuedTaskId;
+      child.status = spawned.queuedTaskId ? 'queued' : 'running';
+      await persistFanout(runId, node.id, output);
+      await publish({
+        type: 'run.fanout.child',
+        runId,
+        sessionId: spawned.sessionId,
+        payload: { nodeId: node.id, child: child.index, status: child.status, queuedTaskId: child.queuedTaskId },
+      });
+    } catch (err) {
+      child.status = 'failed';
+      child.error = err instanceof Error ? err.message : String(err);
+      await abortFanoutSiblings(runId, child.index, output.children);
+      await persistFanout(runId, node.id, output, 'failed');
+      await publishNodeState(runId, node.id, 'failed', { child: child.index, error: child.error });
+      scheduleTick(runId);
+      return;
+    }
   }
 }
 
@@ -393,8 +745,22 @@ interface MeetingState {
   /** 已做 {{vars}}/{{outputs}} 替换的标题（仲裁审批用，concludeMeeting 时已无 context） */
   title: string;
   cwd: string;
-  pendingSessions: Map<string, number>;
+  pendingSessions: Map<string, { idx: number | 'arbiter'; status: 'queued' | 'running'; queuedTaskId?: string }>;
   opinions: Array<MeetingOpinion | null>;
+}
+
+interface MeetingOutput {
+  kind: 'meeting';
+  phase: 'review' | 'arbitrate';
+  title: string;
+  cwd: string;
+  opinions: Array<MeetingOpinion | null>;
+  sessions: Array<{
+    sessionId: string;
+    idx: number | 'arbiter';
+    status: 'queued' | 'running';
+    queuedTaskId?: string;
+  }>;
 }
 
 const meetings = new Map<string, MeetingState>();
@@ -402,6 +768,30 @@ const meetings = new Map<string, MeetingState>();
 const meetingSessions = new Map<string, { key: string; idx: number | 'arbiter' }>();
 
 const meetingKey = (runId: string, nodeId: string) => `${runId}:${nodeId}`;
+
+function asMeetingOutput(value: unknown): MeetingOutput | null {
+  if (!value || typeof value !== 'object' || (value as { kind?: string }).kind !== 'meeting') return null;
+  const output = value as MeetingOutput;
+  return Array.isArray(output.opinions) && Array.isArray(output.sessions) ? output : null;
+}
+
+function meetingOutput(state: MeetingState, phase: MeetingOutput['phase']): MeetingOutput {
+  return {
+    kind: 'meeting',
+    phase,
+    title: state.title,
+    cwd: state.cwd,
+    opinions: state.opinions,
+    sessions: [...state.pendingSessions].map(([sessionId, pending]) => ({ sessionId, ...pending })),
+  };
+}
+
+async function persistMeetingState(state: MeetingState, phase: MeetingOutput['phase']): Promise<void> {
+  await getDb()
+    .update(schema.nodeStates)
+    .set({ status: 'running', output: meetingOutput(state, phase), updatedAt: new Date() })
+    .where(and(eq(schema.nodeStates.runId, state.runId), eq(schema.nodeStates.nodeId, state.nodeId)));
+}
 
 /** 从会话最终文本尾部解析 JSON 结论块 */
 function parseVerdictJson(text: string): { verdict?: string; score?: number; reasons?: string[]; summary?: string } | null {
@@ -432,7 +822,7 @@ ${subject}
 async function execMeeting(runId: string, node: MeetingNode, context: RunContext): Promise<void> {
   const db = getDb();
   const machineId = await machineForRun(runId);
-  const cwd = context.vars.cwd ?? '/root';
+  const cwd = context.vars.cwd ?? '';
 
   const fail = async (error: string) => {
     await db
@@ -442,11 +832,6 @@ async function execMeeting(runId: string, node: MeetingNode, context: RunContext
     await publishNodeState(runId, node.id, 'failed', { error });
     scheduleTick(runId);
   };
-
-  if (!machineId) {
-    await fail('无法定位该 run 的在线会话机器（会议参与者）');
-    return;
-  }
 
   const key = meetingKey(runId, node.id);
   const state: MeetingState = {
@@ -462,34 +847,53 @@ async function execMeeting(runId: string, node: MeetingNode, context: RunContext
 
   await db
     .update(schema.nodeStates)
-    .set({ status: 'running', updatedAt: new Date() })
+    .set({ status: 'running', output: meetingOutput(state, 'review'), updatedAt: new Date() })
     .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
   await publishNodeState(runId, node.id, 'running', { phase: 'review', participants: node.participants.length });
 
   for (let i = 0; i < node.participants.length; i++) {
     const p = node.participants[i]!;
+    let reservedSessionId: string | undefined;
     try {
-      const { sessionId } = await spawnSession({
-        machineId,
-        cwd: state.cwd,
+      const spawned = await spawnWorkflowAgent(runId, `${node.id}.participant[${i}]`, {
+        ...(machineId ? { machine: { id: machineId } } : {}),
+        ...(state.cwd ? { cwd: state.cwd } : {}),
         prompt: participantPrompt(node, context, p.role),
-        agent: p.cli,
+        cli: p.cli,
         model: p.model,
         role: p.role,
-        runId,
-        nodeId: node.id,
         // 评审姿态：只读工具免审批；禁执行/改动类工具，防止在工作目录里无限游走
-        meta: { allowedTools: ['Read', 'Glob', 'Grep'], disallowedTools: ['Bash', 'Write', 'Edit', 'NotebookEdit'] },
+      }, context, {}, { runId, nodeId: node.id, executionNodeId: `${node.id}.participant[${i}]` }, async (sessionId) => {
+        reservedSessionId = sessionId;
+        sessionNodes.delete(sessionId);
+        state.pendingSessions.set(sessionId, { idx: i, status: 'running' });
+        meetingSessions.set(sessionId, { key, idx: i });
+        await persistMeetingState(state, 'review');
+      }, { allowedTools: ['Read', 'Glob', 'Grep'], disallowedTools: ['Bash', 'Write', 'Edit', 'NotebookEdit'] });
+      sessionNodes.delete(spawned.sessionId);
+      if (reservedSessionId && reservedSessionId !== spawned.sessionId) {
+        state.pendingSessions.delete(reservedSessionId);
+        meetingSessions.delete(reservedSessionId);
+      }
+      state.pendingSessions.set(spawned.sessionId, {
+        idx: i,
+        status: spawned.queuedTaskId ? 'queued' : 'running',
+        queuedTaskId: spawned.queuedTaskId,
       });
-      state.pendingSessions.set(sessionId, i);
-      meetingSessions.set(sessionId, { key, idx: i });
+      meetingSessions.set(spawned.sessionId, { key, idx: i });
+      await persistMeetingState(state, 'review');
     } catch (err) {
+      if (reservedSessionId) {
+        state.pendingSessions.delete(reservedSessionId);
+        meetingSessions.delete(reservedSessionId);
+      }
       state.opinions[i] = {
         participant: p.role ?? `参与者${i + 1}`,
         model: p.model,
         verdict: 'abstain',
         raw: `spawn failed: ${err instanceof Error ? err.message : String(err)}`,
       };
+      await persistMeetingState(state, 'review');
     }
   }
   if (state.pendingSessions.size === 0) {
@@ -497,17 +901,37 @@ async function execMeeting(runId: string, node: MeetingNode, context: RunContext
   }
 }
 
-async function onMeetingSessionDone(sessionId: string, ref: { key: string; idx: number | 'arbiter' }): Promise<void> {
+async function onMeetingSessionDone(
+  sessionId: string,
+  ref: { key: string; idx: number | 'arbiter' },
+  turnStatus = 'completed',
+): Promise<void> {
   meetingSessions.delete(sessionId);
   const state = meetings.get(ref.key);
   if (!state) {
     return;
   }
+  const [run] = await getDb()
+    .select({ status: schema.workflowRuns.status })
+    .from(schema.workflowRuns)
+    .where(eq(schema.workflowRuns.id, state.runId))
+    .limit(1);
+  if (!run || ['done', 'failed', 'cancelled'].includes(run.status)) {
+    state.pendingSessions.delete(sessionId);
+    if (state.pendingSessions.size === 0) meetings.delete(ref.key);
+    return;
+  }
+  const pending = state.pendingSessions.get(sessionId);
+  state.pendingSessions.delete(sessionId);
+  if (pending?.queuedTaskId) {
+    await getDb().update(schema.taskQueue).set({ status: turnStatus === 'completed' ? 'done' : 'failed' }).where(eq(schema.taskQueue.id, pending.queuedTaskId));
+  }
   const text = await lastAgentText(sessionId);
   const parsed = parseVerdictJson(text);
 
   if (ref.idx === 'arbiter') {
-    const verdict = parsed?.verdict === 'approve' ? 'approve' : parsed?.verdict === 'reject' ? 'reject' : 'reject';
+    await persistMeetingState(state, 'arbitrate');
+    const verdict = turnStatus === 'completed' && parsed?.verdict === 'approve' ? 'approve' : 'reject';
     await finishMeeting(state, verdict, `仲裁模型结论：${parsed?.summary ?? text.slice(0, 300)}`);
     return;
   }
@@ -516,12 +940,12 @@ async function onMeetingSessionDone(sessionId: string, ref: { key: string; idx: 
   state.opinions[ref.idx] = {
     participant: p.role ?? `参与者${ref.idx + 1}`,
     model: p.model,
-    verdict: parsed?.verdict === 'approve' ? 'approve' : parsed?.verdict === 'reject' ? 'reject' : 'abstain',
+    verdict: turnStatus === 'completed' && parsed?.verdict === 'approve' ? 'approve' : turnStatus === 'completed' && parsed?.verdict === 'reject' ? 'reject' : 'abstain',
     score: typeof parsed?.score === 'number' ? parsed.score : undefined,
     reasons: Array.isArray(parsed?.reasons) ? parsed.reasons.map(String) : undefined,
     raw: text.slice(0, 1000),
   };
-  state.pendingSessions.delete(sessionId);
+  await persistMeetingState(state, 'review');
   if (state.pendingSessions.size === 0) {
     await concludeMeeting(state);
   }
@@ -579,26 +1003,49 @@ async function concludeMeeting(state: MeetingState): Promise<void> {
 
   // 模型仲裁
   const machineId = await machineForRun(state.runId);
-  if (!machineId) {
-    await finishMeeting(state, 'reject', '仲裁失败：无法定位该 run 的在线会话机器');
-    return;
-  }
   const opinionsText = state.opinions
     .map((o, i) => `### ${o?.participant ?? `参与者${i + 1}`}（${o?.model ?? '-'}）：${o?.verdict ?? 'abstain'}\n${o?.raw ?? '无响应'}`)
     .join('\n\n');
+  const [run] = await getDb().select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, state.runId)).limit(1);
+  if (!run) {
+    await finishMeeting(state, 'reject', '仲裁失败：run 不存在');
+    return;
+  }
+  const context = run.context as RunContext;
+  let reservedSessionId: string | undefined;
   try {
-    const { sessionId } = await spawnSession({
-      machineId,
-      cwd: state.cwd,
+    const spawned = await spawnWorkflowAgent(state.runId, `${state.nodeId}.arbiter`, {
+      ...(machineId ? { machine: { id: machineId } } : {}),
+      ...(state.cwd ? { cwd: state.cwd } : {}),
       prompt: `你是评审会议的仲裁人。以下是各参与者的独立意见：\n\n${opinionsText}\n\n请综合判断并给出最终结论。回复最后必须是 JSON：{"verdict":"approve" 或 "reject","summary":"一句话裁决理由"}`,
+      cli: 'claude',
       model: arbiter.model,
-      runId: state.runId,
-      nodeId: state.nodeId,
-      meta: { allowedTools: ['Read', 'Glob', 'Grep'], disallowedTools: ['Bash', 'Write', 'Edit', 'NotebookEdit'] },
+      role: 'arbiter',
+    }, context, {}, { runId: state.runId, nodeId: state.nodeId, executionNodeId: `${state.nodeId}.arbiter` }, async (sessionId) => {
+      reservedSessionId = sessionId;
+      sessionNodes.delete(sessionId);
+      state.pendingSessions.set(sessionId, { idx: 'arbiter', status: 'running' });
+      meetingSessions.set(sessionId, { key: meetingKey(state.runId, state.nodeId), idx: 'arbiter' });
+      await persistMeetingState(state, 'arbitrate');
+    }, { allowedTools: ['Read', 'Glob', 'Grep'], disallowedTools: ['Bash', 'Write', 'Edit', 'NotebookEdit'] });
+    sessionNodes.delete(spawned.sessionId);
+    if (reservedSessionId && reservedSessionId !== spawned.sessionId) {
+      state.pendingSessions.delete(reservedSessionId);
+      meetingSessions.delete(reservedSessionId);
+    }
+    state.pendingSessions.set(spawned.sessionId, {
+      idx: 'arbiter',
+      status: spawned.queuedTaskId ? 'queued' : 'running',
+      queuedTaskId: spawned.queuedTaskId,
     });
-    meetingSessions.set(sessionId, { key: meetingKey(state.runId, state.nodeId), idx: 'arbiter' });
+    meetingSessions.set(spawned.sessionId, { key: meetingKey(state.runId, state.nodeId), idx: 'arbiter' });
+    await persistMeetingState(state, 'arbitrate');
     await publishNodeState(state.runId, state.nodeId, 'running', { phase: 'arbitrate', arbiter: arbiter.model });
   } catch (err) {
+    if (reservedSessionId) {
+      state.pendingSessions.delete(reservedSessionId);
+      meetingSessions.delete(reservedSessionId);
+    }
     await finishMeeting(state, 'reject', `仲裁会话创建失败: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
@@ -725,14 +1172,102 @@ async function autoRegisterForgeRefs(summary: string, ref: { runId: string; node
   }
 }
 
+async function completeFanoutChild(
+  sessionId: string,
+  ref: SessionNodeRef & { fanoutIndex: number },
+  turnStatus: string,
+): Promise<void> {
+  const db = getDb();
+  const attemptKey = `${ref.runId}:${ref.nodeId}:${ref.fanoutIndex}`;
+  const summary = await lastAgentText(sessionId);
+  const errored = turnStatus !== 'completed' || TRANSIENT_ERROR_RE.test(summary);
+  if (errored) {
+    const attempts = agentAttempts.get(attemptKey) ?? 0;
+    if (attempts < MAX_AGENT_RETRIES && (await retryAgentNode(sessionId, ref, turnStatus, summary, attempts))) return;
+  }
+
+  const [state] = await db
+    .select({ output: schema.nodeStates.output, status: schema.nodeStates.status })
+    .from(schema.nodeStates)
+    .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)))
+    .limit(1);
+  const output = asFanoutOutput(state?.output);
+  const child = output?.children.find((candidate) => candidate.index === ref.fanoutIndex);
+  if (!output || !child || state?.status !== 'running') {
+    sessionNodes.delete(sessionId);
+    agentAttempts.delete(attemptKey);
+    return;
+  }
+
+  sessionNodes.delete(sessionId);
+  agentAttempts.delete(attemptKey);
+  if (errored) {
+    if (child.queuedTaskId) {
+      await db.update(schema.taskQueue).set({ status: 'failed' }).where(eq(schema.taskQueue.id, child.queuedTaskId));
+    }
+    child.status = 'failed';
+    child.error = `agent turn ${turnStatus}${summary ? `: ${summary.slice(0, 300)}` : ''}`;
+    child.summary = summary;
+    await abortFanoutSiblings(ref.runId, ref.fanoutIndex, output.children);
+    await persistFanout(ref.runId, ref.nodeId, output, 'failed');
+    await publishNodeState(ref.runId, ref.nodeId, 'failed', { child: ref.fanoutIndex, error: child.error });
+    scheduleTick(ref.runId);
+    return;
+  }
+
+  child.status = 'done';
+  child.summary = summary;
+  if (child.queuedTaskId) {
+    await db.update(schema.taskQueue).set({ status: 'done' }).where(eq(schema.taskQueue.id, child.queuedTaskId));
+  }
+  await autoRegisterForgeRefs(summary, { runId: ref.runId, nodeId: ref.executionNodeId ?? ref.nodeId }, sessionId);
+  const allDone = output.children.every((candidate) => candidate.status === 'done');
+  await persistFanout(ref.runId, ref.nodeId, output, allDone ? 'done' : 'running');
+  await publish({
+    type: 'run.fanout.child',
+    runId: ref.runId,
+    sessionId,
+    payload: { nodeId: ref.nodeId, child: ref.fanoutIndex, status: 'done' },
+  });
+  if (!allDone) return;
+
+  const [run] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, ref.runId)).limit(1);
+  if (run) {
+    const context = run.context as RunContext;
+    context.outputs[ref.nodeId] = JSON.stringify(output.children.map(({ index, item, summary: text }) => ({ index, item, summary: text ?? '' })));
+    await db.update(schema.workflowRuns).set({ context }).where(eq(schema.workflowRuns.id, ref.runId));
+  }
+  await publishNodeState(ref.runId, ref.nodeId, 'done', { children: output.children.length });
+  scheduleTick(ref.runId);
+}
+
 async function completeAgentNode(sessionId: string, turnStatus: string): Promise<void> {
   const ref = sessionNodes.get(sessionId);
   if (!ref) {
     return;
   }
   const db = getDb();
+  const [run] = await db
+    .select({ status: schema.workflowRuns.status })
+    .from(schema.workflowRuns)
+    .where(eq(schema.workflowRuns.id, ref.runId))
+    .limit(1);
+  if (!run || ['done', 'failed', 'cancelled'].includes(run.status)) {
+    sessionNodes.delete(sessionId);
+    return;
+  }
+  if (ref.fanoutIndex !== undefined) {
+    await completeFanoutChild(sessionId, ref as SessionNodeRef & { fanoutIndex: number }, turnStatus);
+    return;
+  }
   const key = `${ref.runId}:${ref.nodeId}`;
   const summary = await lastAgentText(sessionId);
+  const [currentState] = await db
+    .select({ output: schema.nodeStates.output })
+    .from(schema.nodeStates)
+    .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)))
+    .limit(1);
+  const queuedTaskId = (currentState?.output as { queuedTaskId?: string } | null)?.queuedTaskId;
   // turn 失败，或名义完成但产出是传输层/限流错误 → 判为出错（否则会把"没干活"当成功放行）
   const errored = turnStatus !== 'completed' || TRANSIENT_ERROR_RE.test(summary);
 
@@ -743,6 +1278,9 @@ async function completeAgentNode(sessionId: string, turnStatus: string): Promise
     }
     agentAttempts.delete(key);
     sessionNodes.delete(sessionId);
+    if (queuedTaskId) {
+      await db.update(schema.taskQueue).set({ status: 'failed' }).where(eq(schema.taskQueue.id, queuedTaskId));
+    }
     const error = `agent turn ${turnStatus}${summary ? `: ${summary.slice(0, 300)}` : ''}`;
     await db
       .update(schema.nodeStates)
@@ -755,6 +1293,9 @@ async function completeAgentNode(sessionId: string, turnStatus: string): Promise
 
   agentAttempts.delete(key);
   sessionNodes.delete(sessionId);
+  if (queuedTaskId) {
+    await db.update(schema.taskQueue).set({ status: 'done' }).where(eq(schema.taskQueue.id, queuedTaskId));
+  }
   await autoRegisterForgeRefs(summary, ref, sessionId);
 
   // 评审→返工闭环：本节点（评审）判「需改进」→ 把意见回灌 target 会话修改、重跑本节点
@@ -785,7 +1326,7 @@ async function completeAgentNode(sessionId: string, turnStatus: string): Promise
 /** 瞬时错误自愈：复用仍存活的会话重发原任务。成功发出返回 true（保留 sessionNodes 映射）。 */
 async function retryAgentNode(
   sessionId: string,
-  ref: { runId: string; nodeId: string },
+  ref: SessionNodeRef,
   turnStatus: string,
   summary: string,
   attempts: number,
@@ -803,26 +1344,44 @@ async function retryAgentNode(
   if (!runRows[0] || !defRows[0]) {
     return false;
   }
-  const node = parseDef(defRows[0].graph).nodes.find((n) => n.id === ref.nodeId);
-  if (!node || node.type !== 'agent') {
+  const def = parseDef(defRows[0].graph);
+  const staticNode = def.nodes.find((n) => n.id === ref.nodeId);
+  let node: AgentNode | undefined;
+  let locals: Record<string, unknown> = {};
+  if (ref.fanoutIndex !== undefined && staticNode?.type === 'fanout') {
+    const [state] = await db
+      .select({ output: schema.nodeStates.output })
+      .from(schema.nodeStates)
+      .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)))
+      .limit(1);
+    const child = asFanoutOutput(state?.output)?.children.find((candidate) => candidate.index === ref.fanoutIndex);
+    if (child) {
+      node = { id: ref.executionNodeId ?? `${ref.nodeId}[${ref.fanoutIndex}]`, type: 'agent', ...staticNode.template };
+      locals = { item: child.item, index: ref.fanoutIndex };
+    }
+  } else if (staticNode?.type === 'agent') {
+    node = staticNode;
+  }
+  if (!node) {
     return false;
   }
   try {
     await callRunner(session.machineId, 'session.send', {
       sessionId,
-      text: substitute((node as AgentNode).prompt, runRows[0].context as RunContext),
+      text: substitute(node.prompt, runRows[0].context as RunContext, locals),
     });
   } catch {
     return false;
   }
-  agentAttempts.set(`${ref.runId}:${ref.nodeId}`, attempts + 1);
+  const attemptKey = `${ref.runId}:${ref.nodeId}${ref.fanoutIndex === undefined ? '' : `:${ref.fanoutIndex}`}`;
+  agentAttempts.set(attemptKey, attempts + 1);
   await publish({
     type: 'run.node.retry',
     runId: ref.runId,
     sessionId,
-    payload: { nodeId: ref.nodeId, attempt: attempts + 1, max: MAX_AGENT_RETRIES, reason: turnStatus !== 'completed' ? `turn ${turnStatus}` : 'transient error', detail: summary.slice(0, 200) },
+    payload: { nodeId: ref.executionNodeId ?? ref.nodeId, parentNodeId: ref.nodeId, attempt: attempts + 1, max: MAX_AGENT_RETRIES, reason: turnStatus !== 'completed' ? `turn ${turnStatus}` : 'transient error', detail: summary.slice(0, 200) },
   });
-  console.log(`[engine] retry agent node ${ref.nodeId} (attempt ${attempts + 1}/${MAX_AGENT_RETRIES}) run ${ref.runId}`);
+  console.log(`[engine] retry agent node ${ref.executionNodeId ?? ref.nodeId} (attempt ${attempts + 1}/${MAX_AGENT_RETRIES}) run ${ref.runId}`);
   return true;
 }
 
@@ -896,6 +1455,7 @@ async function triggerRevision(
     : undefined;
   let sessionId: string;
   let respawned = false;
+  let queuedTaskId: string | undefined;
   if (existing && existing.state !== 'dead') {
     try {
       await callRunner(existing.machineId, 'session.send', { sessionId: existing.id, text: feedback });
@@ -904,24 +1464,13 @@ async function triggerRevision(
     }
     sessionId = existing.id;
   } else {
-    const cwd = context.vars.cwd;
-    const machineId = await machineForRun(runId);
-    if (!machineId || !cwd || !existsSync(cwd)) {
-      return false; // 无处重开（worktree 不在/无机器）→ 交人工
-    }
     try {
-      const spawned = await spawnSession({
-        machineId,
-        cwd,
-        prompt: `${substitute(implNode.prompt, context)}\n\n===== SE 评审要求返工（在当前分支同一 PR 上改） =====\n${reviewSummary.slice(0, 4000)}`,
-        agent: implNode.cli,
-        model: implNode.model,
-        role: implNode.role,
-        runId,
-        nodeId: targetNodeId,
-        meta: { permissionMode: implNode.permissionMode, effort: implNode.effort },
-      });
+      const spawned = await spawnWorkflowAgent(runId, targetNodeId, {
+        ...implNode,
+        prompt: `${implNode.prompt}\n\n===== SE 评审要求返工（在当前分支同一 PR 上改） =====\n${reviewSummary.slice(0, 4000)}`,
+      }, context);
       sessionId = spawned.sessionId;
+      queuedTaskId = spawned.queuedTaskId;
       respawned = true;
     } catch {
       return false;
@@ -935,7 +1484,7 @@ async function triggerRevision(
   sessionNodes.set(sessionId, { runId, nodeId: targetNodeId });
   await db
     .update(schema.nodeStates)
-    .set({ status: 'running', sessionId, updatedAt: new Date() })
+    .set({ status: 'running', sessionId, output: queuedTaskId ? { phase: 'queued', queuedTaskId, revise: round + 1 } : null, updatedAt: new Date() })
     .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, targetNodeId)));
   await db
     .update(schema.nodeStates)
@@ -1026,8 +1575,28 @@ async function reconcileRevisions(): Promise<void> {
 
 // ---------- 事件订阅与恢复 ----------
 
-export function startEngine(): void {
-  bus.on('event', (evt: { type: string; sessionId?: string; payload: unknown }) => {
+function scheduleSessionCompletion(sessionId: string, status: string): void {
+  const ref = sessionNodes.get(sessionId);
+  if (!ref) return;
+  void serializeRunProgression(ref.runId, () => completeAgentNode(sessionId, status)).catch((err) =>
+    console.error('[engine] session completion failed:', err),
+  );
+}
+
+function scheduleMeetingCompletion(
+  sessionId: string,
+  ref: { key: string; idx: number | 'arbiter' },
+  status: string,
+): void {
+  const state = meetings.get(ref.key);
+  if (!state) return;
+  void serializeRunProgression(state.runId, () => onMeetingSessionDone(sessionId, ref, status)).catch((err) =>
+    console.error('[engine] meeting session handling failed:', err),
+  );
+}
+
+export function startEngine(): () => void {
+  const onEvent = (evt: { type: string; sessionId?: string; payload: unknown }) => {
     if (!evt.sessionId) {
       return;
     }
@@ -1036,13 +1605,11 @@ export function startEngine(): void {
     if (evt.type === 'session.state' && (evt.payload as { state?: string })?.state === 'dead') {
       const meetingRef = meetingSessions.get(evt.sessionId);
       if (meetingRef) {
-        void onMeetingSessionDone(evt.sessionId, meetingRef).catch((err) =>
-          console.error('[engine] meeting dead-session handling failed:', err),
-        );
+        scheduleMeetingCompletion(evt.sessionId, meetingRef, 'failed');
         return;
       }
       if (sessionNodes.has(evt.sessionId)) {
-        void completeAgentNode(evt.sessionId, 'failed');
+        scheduleSessionCompletion(evt.sessionId, 'failed');
       }
       return;
     }
@@ -1056,18 +1623,17 @@ export function startEngine(): void {
     }
     const meetingRef = meetingSessions.get(evt.sessionId);
     if (meetingRef) {
-      void onMeetingSessionDone(evt.sessionId, meetingRef).catch((err) =>
-        console.error('[engine] meeting session handling failed:', err),
-      );
+      scheduleMeetingCompletion(evt.sessionId, meetingRef, envelope.ev.status);
       return;
     }
     if (sessionNodes.has(evt.sessionId)) {
-      void completeAgentNode(evt.sessionId, envelope.ev.status);
+      scheduleSessionCompletion(evt.sessionId, envelope.ev.status);
     }
-  });
+  };
+  bus.on('event', onEvent);
 
   // 安全网：周期性 re-tick 活跃 run（防漏事件）
-  setInterval(() => {
+  const retickTimer = setInterval(() => {
     void (async () => {
       const db = getDb();
       const active = await db
@@ -1078,12 +1644,20 @@ export function startEngine(): void {
         scheduleTick(run.id);
       }
     })().catch(() => {});
-  }, 30_000).unref();
+  }, 30_000);
+  retickTimer.unref();
 
   // 自动返工补偿：周期性把「停在人工门却带未处理 CHANGES_REQUESTED 评审」的 run 自动打回返工
-  setInterval(() => {
+  const revisionTimer = setInterval(() => {
     void reconcileRevisions().catch((err) => console.error('[engine] reconcile revisions failed:', err));
-  }, 60_000).unref();
+  }, 60_000);
+  revisionTimer.unref();
+
+  return () => {
+    bus.off('event', onEvent);
+    clearInterval(retickTimer);
+    clearInterval(revisionTimer);
+  };
 }
 
 /** boot 恢复：重建索引，补查引擎宕机期间已完成的会话 */
@@ -1101,12 +1675,83 @@ export async function resumeActiveRuns(): Promise<void> {
       .from(schema.nodeStates)
       .where(and(eq(schema.nodeStates.runId, run.id), eq(schema.nodeStates.status, 'running')));
     for (const st of states) {
-      // 会议状态只在内存：重启即失败（明确标注，M3 已知限制）
-      if (def?.nodes.find((n) => n.id === st.nodeId)?.type === 'meeting') {
-        await db
-          .update(schema.nodeStates)
-          .set({ status: 'failed', output: { error: '引擎重启导致会议中断（会议状态暂不持久化）' }, updatedAt: new Date() })
-          .where(and(eq(schema.nodeStates.runId, run.id), eq(schema.nodeStates.nodeId, st.nodeId)));
+      const node = def?.nodes.find((candidate) => candidate.id === st.nodeId);
+      if (node?.type === 'meeting') {
+        const output = asMeetingOutput(st.output);
+        if (!output) {
+          await db
+            .update(schema.nodeStates)
+            .set({ status: 'failed', output: { error: '旧版会议缺少可恢复状态，请重试该 run' }, updatedAt: new Date() })
+            .where(and(eq(schema.nodeStates.runId, run.id), eq(schema.nodeStates.nodeId, st.nodeId)));
+          continue;
+        }
+        const key = meetingKey(run.id, st.nodeId);
+        const state: MeetingState = {
+          runId: run.id,
+          nodeId: st.nodeId,
+          node,
+          title: output.title,
+          cwd: output.cwd,
+          opinions: output.opinions,
+          pendingSessions: new Map(output.sessions.map((session) => [session.sessionId, {
+            idx: session.idx,
+            status: session.status,
+            queuedTaskId: session.queuedTaskId,
+          }])),
+        };
+        meetings.set(key, state);
+        for (const session of output.sessions) {
+          const ref = { key, idx: session.idx };
+          meetingSessions.set(session.sessionId, ref);
+          const rows = await db
+            .select()
+            .from(schema.events)
+            .where(and(eq(schema.events.sessionId, session.sessionId), eq(schema.events.type, 'session.message')))
+            .orderBy(desc(schema.events.seq))
+            .limit(20);
+          const turnEnd = rows.find((row) => {
+            const envelope = row.payload as SessionEnvelope;
+            return envelope?.ev?.t === 'turn-end';
+          });
+          if (turnEnd) {
+            const envelope = turnEnd.payload as SessionEnvelope;
+            if (envelope.ev.t === 'turn-end') scheduleMeetingCompletion(session.sessionId, ref, envelope.ev.status);
+          }
+        }
+        if (output.sessions.length === 0) {
+          if (output.phase === 'review') {
+            void serializeRunProgression(run.id, () => concludeMeeting(state));
+          } else {
+            void serializeRunProgression(run.id, () => finishMeeting(state, 'reject', '仲裁状态不完整，请重新运行评审'));
+          }
+        }
+        continue;
+      }
+      if (node?.type === 'fanout') {
+        const output = asFanoutOutput(st.output);
+        for (const child of output?.children ?? []) {
+          if (!child.sessionId || !['queued', 'running'].includes(child.status)) continue;
+          sessionNodes.set(child.sessionId, {
+            runId: run.id,
+            nodeId: st.nodeId,
+            fanoutIndex: child.index,
+            executionNodeId: `${st.nodeId}[${child.index}]`,
+          });
+          const rows = await db
+            .select()
+            .from(schema.events)
+            .where(and(eq(schema.events.sessionId, child.sessionId), eq(schema.events.type, 'session.message')))
+            .orderBy(desc(schema.events.seq))
+            .limit(20);
+          const turnEnd = rows.find((row) => {
+            const envelope = row.payload as SessionEnvelope;
+            return envelope?.ev?.t === 'turn-end';
+          });
+          if (turnEnd) {
+            const envelope = turnEnd.payload as SessionEnvelope;
+            if (envelope.ev.t === 'turn-end') scheduleSessionCompletion(child.sessionId, envelope.ev.status);
+          }
+        }
         continue;
       }
       if (!st.sessionId) {
@@ -1123,7 +1768,7 @@ export async function resumeActiveRuns(): Promise<void> {
       for (const row of rows) {
         const envelope = row.payload as SessionEnvelope;
         if (envelope?.ev?.t === 'turn-end') {
-          void completeAgentNode(st.sessionId, envelope.ev.status);
+          scheduleSessionCompletion(st.sessionId, envelope.ev.status);
           break;
         }
       }

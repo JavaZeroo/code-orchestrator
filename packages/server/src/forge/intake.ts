@@ -41,7 +41,7 @@ export interface RecordedIntakeContext {
     | 'runId'
     | 'status'
   >;
-  trigger: Pick<TriggerRow, 'id' | 'defId' | 'forge' | 'repo' | 'vars'>;
+  trigger: Pick<TriggerRow, 'id' | 'defId' | 'forge' | 'repo' | 'vars'> & { createdBy?: string | null };
   project?: Pick<ProjectRow, 'id' | 'name' | 'vars'>;
 }
 
@@ -183,6 +183,7 @@ async function launchIssueIntake(
         );
       }
     },
+    context.trigger.createdBy ?? undefined,
   );
   await publish({
     type: 'requirement.triggered',
@@ -331,7 +332,7 @@ async function pollScheduleTrigger(trigger: TriggerRow): Promise<void> {
       vars.cwd = ws.cwd;
       vars.branch = ws.branch;
     }
-    const runId = await startRun(trigger.defId, vars, trigger.projectId ?? undefined);
+    const runId = await startRun(trigger.defId, vars, trigger.projectId ?? undefined, undefined, trigger.createdBy ?? undefined);
     await publish({
       type: 'requirement.triggered',
       runId,

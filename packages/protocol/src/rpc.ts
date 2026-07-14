@@ -49,6 +49,9 @@ export const runnerMethods = {
       cwd: z.string(),
       /** 首条用户消息；缺省则空会话等待 session.send */
       prompt: z.string().optional(),
+      /** 工作流血缘，仅用于 runner 日志/诊断；持久化事实仍在 server。 */
+      runId: z.string().optional(),
+      nodeId: z.string().optional(),
       meta: MessageMetaSchema.optional(),
       /** 模型端点注入（ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN 等），CLI×模型解耦的落点 */
       env: z.record(z.string(), z.string()).optional(),

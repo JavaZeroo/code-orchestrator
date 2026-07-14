@@ -22,6 +22,7 @@ const TYPE_ICON: Record<string, string> = {
   meeting: '🗳',
   fanout: '⑃',
   condition: '?',
+  check: '✓',
 };
 
 interface Props {
@@ -68,13 +69,23 @@ export function FlowGraph({ def, statuses, onNodeClick }: Props) {
         },
       };
     });
-    const edges: Edge[] = def.edges.map(([from, to]) => ({
-      id: `${from}->${to}`,
-      source: from,
-      target: to,
-      animated: (statuses?.[to] ?? '') === 'running',
-      style: { stroke: 'var(--color-line-2)', strokeWidth: 1.5 },
-    }));
+    const edges: Edge[] = def.edges.map(([from, to]) => {
+      const source = def.nodes.find((node) => node.id === from);
+      const branch = source?.type === 'condition'
+        ? source.onTrue.includes(to) ? '是' : source.onFalse.includes(to) ? '否' : undefined
+        : undefined;
+      return {
+        id: `${from}->${to}`,
+        source: from,
+        target: to,
+        label: branch,
+        labelStyle: branch ? { fill: 'var(--color-dim)', fontSize: 11, fontWeight: 600 } : undefined,
+        labelBgStyle: branch ? { fill: 'var(--color-panel)', fillOpacity: 0.9 } : undefined,
+        labelBgPadding: branch ? [4, 2] : undefined,
+        animated: (statuses?.[to] ?? '') === 'running',
+        style: { stroke: 'var(--color-line-2)', strokeWidth: 1.5 },
+      };
+    });
     return { nodes, edges };
   }, [def, statuses]);
 

@@ -719,6 +719,51 @@ export function RunView({
                   </pre>
                 </div>
               )}
+              {selNode.type === 'condition' && typeof selState?.output?.result === 'boolean' && (
+                <div className="rounded-lg border border-line bg-panel-2 p-3 text-sm">
+                  条件结果：<Badge tone={selState.output.result ? 'ok' : 'warn'}>{selState.output.result ? '是' : '否'}</Badge>
+                  <div className="mt-2 text-xs text-dim">
+                    进入 {(selState.output.selected ?? []).join(', ') || '空分支'}
+                    {(selState.output.skipped?.length ?? 0) > 0 && `；跳过 ${selState.output.skipped!.join(', ')}`}
+                  </div>
+                </div>
+              )}
+              {selNode.type === 'fanout' && selState?.output?.children && (
+                <div>
+                  <div className="mb-1 text-[11px] font-medium tracking-wide text-dim uppercase">
+                    并行子任务 · {selState.output.children.filter((child) => child.status === 'done').length}/{selState.output.children.length}
+                  </div>
+                  <div className="space-y-2">
+                    {selState.output.children.map((child) => (
+                      <div key={child.index} className="rounded-lg border border-line bg-panel-2 p-2 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">#{child.index + 1}</span>
+                          <Badge tone={NODE_TONE[child.status] ?? 'neutral'}>{child.status}</Badge>
+                          {child.sessionId && (
+                            <button className="ml-auto text-accent hover:underline" onClick={() => onOpenSession(child.sessionId!)}>打开会话</button>
+                          )}
+                        </div>
+                        <div className="mt-1 truncate text-dim">{typeof child.item === 'string' ? child.item : JSON.stringify(child.item)}</div>
+                        {child.error && <div className="mt-1 text-danger">{child.error}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {selNode.type === 'meeting' && selState?.output?.sessions && selState.output.sessions.length > 0 && (
+                <div>
+                  <div className="mb-1 text-[11px] font-medium tracking-wide text-dim uppercase">评审会话</div>
+                  <div className="space-y-2">
+                    {selState.output.sessions.map((session) => (
+                      <div key={session.sessionId} className="flex items-center gap-2 rounded-lg border border-line bg-panel-2 p-2 text-xs">
+                        <span>{session.idx === 'arbiter' ? '仲裁人' : `参与者 ${session.idx + 1}`}</span>
+                        <Badge tone={NODE_TONE[session.status] ?? 'neutral'}>{session.status}</Badge>
+                        <button className="ml-auto text-accent hover:underline" onClick={() => onOpenSession(session.sessionId)}>打开会话</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {selState?.output?.verdict && (
                 <Badge tone={selState.output.verdict === 'approve' ? 'ok' : 'danger'}>裁决：{selState.output.verdict}</Badge>
               )}

@@ -10,7 +10,7 @@ import WebSocket from 'ws';
 import { createApp } from './app';
 import { closeDb, getDb, schema } from './db/index';
 import { and, eq } from 'drizzle-orm';
-import { resumeActiveRuns, scheduleTick, serializeRunProgression } from './engine/engine';
+import { resumeActiveRuns, scheduleTick, serializeRunProgression, startEngine } from './engine/engine';
 import { bus } from './events';
 import { encryptSecret } from './services/crypto';
 import { markTaskDone, reconcileQueueOnce, type QueuedTask } from './services/taskQueue';
@@ -224,6 +224,203 @@ describeSt('server ST: API + runner websocket', () => {
     await app?.close();
     app = null;
     await closeDb();
+  });
+
+  it('executes a condition branch and skips only the rejected path', async () => {
+    const defId = 'workflow-condition-kernel-st';
+    const graph = {
+      name: 'Condition kernel ST',
+      nodes: [
+        { id: 'choose', type: 'condition', expr: 'vars.release == "yes"', onTrue: ['approve'], onFalse: ['reject'] },
+        { id: 'approve', type: 'gate', title: 'Approve path' },
+        { id: 'reject', type: 'gate', title: 'Reject path' },
+      ],
+      edges: [['choose', 'approve'], ['choose', 'reject']],
+    };
+    await getDb().insert(schema.workflowDefs).values({ id: defId, name: graph.name, graph });
+
+    const started = await app!.inject({
+      method: 'POST',
+      url: `/api/workflows/${defId}/runs`,
+      payload: { vars: { release: 'yes' } },
+    });
+    expect(started.statusCode).toBe(201);
+    const { runId } = started.json<{ runId: string }>();
+
+    await vi.waitFor(async () => {
+      const states = await getDb().select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, runId));
+      expect(Object.fromEntries(states.map((state) => [state.nodeId, state.status]))).toMatchObject({
+        choose: 'done',
+        approve: 'waiting_human',
+        reject: 'skipped',
+      });
+    });
+  });
+
+  it('fans out structured items into parallel agents and aggregates their outputs', async () => {
+    const runner = await FakeRunner.connect(baseUrl, {
+      'session.spawn': () => ({ ok: true }),
+    });
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: { id: 'm-fanout-kernel', name: 'Fanout Kernel Runner', labels: ['fanout-kernel'], resources: [], startedAt: Date.now() },
+    });
+    const defId = 'workflow-fanout-kernel-st';
+    const graph = {
+      name: 'Fanout kernel ST',
+      nodes: [{
+        id: 'work',
+        type: 'fanout',
+        itemsFrom: 'vars.items',
+        maxItems: 4,
+        template: {
+          prompt: 'Handle {{item.name}} at index {{index}}',
+          machine: { labels: ['fanout-kernel'] },
+          cwd: '/tmp/fanout-kernel',
+        },
+      }],
+      edges: [],
+    };
+    await getDb().insert(schema.workflowDefs).values({ id: defId, name: graph.name, graph });
+    const started = await app!.inject({
+      method: 'POST',
+      url: `/api/workflows/${defId}/runs`,
+      payload: { vars: { items: JSON.stringify([{ name: 'alpha' }, { name: 'beta' }]) } },
+    });
+    const { runId } = started.json<{ runId: string }>();
+    await vi.waitFor(() => {
+      expect(runner.calls.filter((call) => call.method === 'session.spawn')).toHaveLength(2);
+    });
+    const spawns = runner.calls.filter((call) => call.method === 'session.spawn');
+    expect(spawns.map((call) => (call.params as { prompt: string }).prompt).sort()).toEqual([
+      'Handle alpha at index 0',
+      'Handle beta at index 1',
+    ]);
+    const stopEngine = startEngine();
+    try {
+      for (const [index, call] of spawns.entries()) {
+        const sessionId = (call.params as { sessionId: string }).sessionId;
+        await runner.callServer('session.event', {
+          sessionId,
+          envelope: { id: `fanout-text-${index}`, time: Date.now(), role: 'agent', ev: { t: 'text', text: `result-${index}` } },
+        });
+        await runner.callServer('session.event', {
+          sessionId,
+          envelope: { id: `fanout-end-${index}`, time: Date.now(), role: 'agent', ev: { t: 'turn-end', status: 'completed' } },
+        });
+      }
+      await vi.waitFor(async () => {
+        const [state] = await getDb().select().from(schema.nodeStates).where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, 'work')));
+        expect(state?.status, JSON.stringify(state?.output)).toBe('done');
+        expect((state?.output as { children: Array<{ status: string }> }).children.every((child) => child.status === 'done')).toBe(true);
+        const [run] = await getDb().select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+        expect(run?.status).toBe('done');
+        expect(JSON.parse((run?.context as { outputs: Record<string, string> }).outputs.work!)).toHaveLength(2);
+      });
+    } finally {
+      stopEngine();
+    }
+  });
+
+  it('recovers a persisted multi-agent meeting and concludes after restart', async () => {
+    const runner = await FakeRunner.connect(baseUrl);
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: { id: 'm-meeting-recovery', name: 'Meeting Recovery Runner', labels: [], resources: [], startedAt: Date.now() },
+    });
+    const defId = 'workflow-meeting-recovery-st';
+    const runId = 'run-meeting-recovery-st';
+    const graph = {
+      name: 'Meeting recovery ST',
+      nodes: [{
+        id: 'review',
+        type: 'meeting',
+        participants: [{ model: 'model-a', role: 'reviewer-a' }, { model: 'model-b', role: 'reviewer-b' }],
+        arbiter: 'vote',
+        subject: 'Review release',
+      }],
+      edges: [],
+    };
+    await getDb().insert(schema.workflowDefs).values({ id: defId, name: graph.name, graph });
+    await getDb().insert(schema.workflowRuns).values({ id: runId, defId, status: 'running', context: { vars: {}, outputs: {} } });
+    const sessionIds = ['meeting-recovery-a', 'meeting-recovery-b'];
+    await getDb().insert(schema.sessions).values(sessionIds.map((id) => ({
+      id,
+      machineId: 'm-meeting-recovery',
+      agent: 'claude',
+      cwd: '/tmp/meeting-recovery',
+      state: 'idle',
+      runId,
+      nodeId: 'review',
+    })));
+    await getDb().insert(schema.nodeStates).values({
+      runId,
+      nodeId: 'review',
+      status: 'running',
+      output: {
+        kind: 'meeting',
+        phase: 'review',
+        title: 'Release review',
+        cwd: '/tmp/meeting-recovery',
+        opinions: [null, null],
+        sessions: sessionIds.map((sessionId, idx) => ({ sessionId, idx, status: 'running' })),
+      },
+    });
+
+    const stopEngine = startEngine();
+    try {
+      await resumeActiveRuns();
+      for (const [index, sessionId] of sessionIds.entries()) {
+        await runner.callServer('session.event', {
+          sessionId,
+          envelope: {
+            id: `meeting-verdict-${index}`,
+            time: Date.now(),
+            role: 'agent',
+            ev: { t: 'text', text: `Looks good\n\n{"verdict":"approve","score":9,"reasons":["ready"]}` },
+          },
+        });
+        await runner.callServer('session.event', {
+          sessionId,
+          envelope: { id: `meeting-end-${index}`, time: Date.now(), role: 'agent', ev: { t: 'turn-end', status: 'completed' } },
+        });
+      }
+      await vi.waitFor(async () => {
+        const [state] = await getDb().select().from(schema.nodeStates).where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, 'review')));
+        expect(state?.status).toBe('done');
+        expect(state?.output).toMatchObject({ verdict: 'approve' });
+        const [run] = await getDb().select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+        expect(run?.status).toBe('done');
+      });
+    } finally {
+      stopEngine();
+    }
+  });
+
+  it('cancels queued agent work atomically with its workflow run', async () => {
+    const defId = 'workflow-cancel-queue-st';
+    const runId = 'run-cancel-queue-st';
+    const graph = { name: 'Cancel queue ST', nodes: [{ id: 'gate', type: 'gate' }], edges: [] };
+    await getDb().insert(schema.workflowDefs).values({ id: defId, name: graph.name, graph });
+    await getDb().insert(schema.workflowRuns).values({ id: runId, defId, status: 'running', context: { vars: {}, outputs: {} } });
+    await getDb().insert(schema.nodeStates).values({ runId, nodeId: 'gate', status: 'pending' });
+    await getDb().insert(schema.taskQueue).values([
+      { id: 'queued-for-run', status: 'pending', payload: { runId, sessionId: 'queued-session-a' } },
+      { id: 'scheduled-for-run', status: 'scheduled', payload: { runId, sessionId: 'queued-session-b' } },
+      { id: 'other-run-task', status: 'pending', payload: { runId: 'other-run' } },
+    ]);
+
+    const cancelled = await app!.inject({ method: 'POST', url: `/api/runs/${runId}/cancel` });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json()).toMatchObject({ ok: true, cancelledQueuedTasks: 2 });
+    const [run] = await getDb().select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+    expect(run?.status).toBe('cancelled');
+    const tasks = await getDb().select().from(schema.taskQueue);
+    expect(Object.fromEntries(tasks.map((task) => [task.id, task.status]))).toMatchObject({
+      'queued-for-run': 'cancelled',
+      'scheduled-for-run': 'cancelled',
+      'other-run-task': 'pending',
+    });
   });
 
   it('publishes a workflow revision and atomically moves future references without changing existing runs', async () => {
