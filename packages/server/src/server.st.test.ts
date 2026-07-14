@@ -1700,6 +1700,84 @@ describeSt('server ST: API + runner websocket', () => {
     expect(emptyArchive.json()).toEqual({ runs: [] });
   });
 
+  it('starts a separate run from a terminal run with the same definition, project, and inputs', async () => {
+    const db = getDb();
+    const defId = 'workflow-rerun-def';
+    const projectId = 'workflow-rerun-project';
+    const sourceRunId = 'workflow-rerun-source';
+    const activeRunId = 'workflow-rerun-active';
+    const graph = {
+      name: 'Repeatable release approval',
+      vars: { release: 'default', environment: 'test' },
+      nodes: [{ id: 'approve', type: 'gate', approvers: ['release-owner'] }],
+      edges: [],
+    };
+    await db.insert(schema.workflowDefs).values({ id: defId, name: graph.name, graph, projectId });
+    await db.insert(schema.workflowRuns).values([
+      {
+        id: sourceRunId,
+        defId,
+        projectId,
+        status: 'done',
+        context: {
+          vars: { release: '2.4.0', environment: 'production' },
+          outputs: { approve: 'approved in the source run' },
+        },
+        endedAt: new Date('2026-07-14T08:00:00Z'),
+      },
+      {
+        id: activeRunId,
+        defId,
+        projectId,
+        status: 'paused',
+        context: { vars: { release: 'next', environment: 'staging' }, outputs: {} },
+      },
+    ]);
+    await db.insert(schema.nodeStates).values([
+      { runId: sourceRunId, nodeId: 'approve', status: 'done', output: { summary: 'source evidence' } },
+      { runId: activeRunId, nodeId: 'approve', status: 'pending' },
+    ]);
+    const [sourceBefore] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, sourceRunId));
+    const sourceNodesBefore = await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, sourceRunId));
+
+    const response = await app!.inject({ method: 'POST', url: `/api/runs/${sourceRunId}/rerun` });
+    expect(response.statusCode).toBe(201);
+    const { runId: newRunId } = response.json<{ runId: string }>();
+    expect(newRunId).not.toBe(sourceRunId);
+
+    await vi.waitFor(async () => {
+      const [newRun] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, newRunId));
+      expect(newRun).toMatchObject({
+        id: newRunId,
+        defId,
+        projectId,
+        status: 'waiting_human',
+        context: {
+          vars: { release: '2.4.0', environment: 'production' },
+          outputs: {},
+        },
+      });
+      const newNodes = await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, newRunId));
+      expect(newNodes).toEqual([
+        expect.objectContaining({ runId: newRunId, nodeId: 'approve', status: 'waiting_human' }),
+      ]);
+    });
+
+    const [sourceAfter] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, sourceRunId));
+    const sourceNodesAfter = await db.select().from(schema.nodeStates).where(eq(schema.nodeStates.runId, sourceRunId));
+    expect(sourceAfter).toEqual(sourceBefore);
+    expect(sourceNodesAfter).toEqual(sourceNodesBefore);
+
+    const active = await app!.inject({ method: 'POST', url: `/api/runs/${activeRunId}/rerun` });
+    expect(active.statusCode).toBe(409);
+    expect(active.json()).toEqual({ error: 'run is still active: paused' });
+    const missing = await app!.inject({ method: 'POST', url: '/api/runs/missing/rerun' });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toEqual({ error: 'run not found: missing' });
+    const allRuns = await db.select().from(schema.workflowRuns);
+    expect(allRuns).toHaveLength(3);
+  });
+
   it('atomically retries failed workflow nodes in place and reschedules the engine once', async () => {
     const runner = await FakeRunner.connect(baseUrl, {
       'session.spawn': () => ({ ok: true, nativeSessionId: 'native-retry-1' }),

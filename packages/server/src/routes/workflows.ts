@@ -10,6 +10,7 @@ import { EngineError, startRun } from '../engine/engine';
 import { archiveWorkflowRun, restoreWorkflowRun, WorkflowRunArchiveError } from '../services/workflowRunArchive';
 import { pauseWorkflowRun, resumeWorkflowRun, WorkflowRunProgressionError } from '../services/workflowRunProgression';
 import { retryWorkflowRun, WorkflowRunRetryError } from '../services/workflowRunRetry';
+import { rerunWorkflowRun, WorkflowRunRerunError } from '../services/workflowRunRerun';
 import { appendWorkflowRunNote, deleteWorkflowRunNote, reviseWorkflowRunNote, WorkflowRunNoteError } from '../services/workflowRunNote';
 import { reviseWorkflowDefinition, WorkflowRevisionError } from '../services/workflowRevision';
 
@@ -235,6 +236,20 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       };
     } catch (err) {
       if (err instanceof WorkflowRunRetryError) {
+        void reply.code(err.statusCode);
+        return { error: err.message };
+      }
+      throw err;
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/api/runs/:id/rerun', async (req, reply) => {
+    try {
+      const result = await rerunWorkflowRun(req.params.id);
+      void reply.code(201);
+      return result;
+    } catch (err) {
+      if (err instanceof WorkflowRunRerunError || err instanceof EngineError) {
         void reply.code(err.statusCode);
         return { error: err.message };
       }

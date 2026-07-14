@@ -87,7 +87,7 @@ type RunTransaction = Parameters<Parameters<ReturnType<typeof getDb>['transactio
 export async function startRun(
   defId: string,
   vars: Record<string, string>,
-  projectId?: string,
+  projectId?: string | null,
   onCreate?: (tx: RunTransaction, runId: string) => Promise<void>,
 ): Promise<string> {
   const db = getDb();
@@ -104,7 +104,7 @@ export async function startRun(
 
   const runId = createId();
   const context: RunContext = { vars: { ...(def.vars ?? {}), ...vars }, outputs: {} };
-  const effectiveProjectId = projectId ?? defRow.projectId ?? undefined;
+  const effectiveProjectId = projectId === undefined ? defRow.projectId ?? undefined : projectId ?? undefined;
   await db.transaction(async (tx) => {
     await tx.insert(schema.workflowRuns).values({ id: runId, defId, projectId: effectiveProjectId, status: 'running', context });
     await tx

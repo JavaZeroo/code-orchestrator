@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  isRunRerunEligible,
   isRunRetryEligible,
   runArchiveMode,
   runForgeCommentAction,
@@ -9,11 +10,14 @@ import {
   runNoteAction,
   RunArchiveAction,
   RunProgressionAction,
+  runRerunAction,
+  RunRerunAction,
   runRetryAction,
   RunRetryAction,
   runRetestAction,
   RunTitleEditor,
   RunTranscriptExportAction,
+  type RunRerunActionDependencies,
   type RunRetryActionDependencies,
   type RunForgeCommentActionDependencies,
   type RunNoteActionDependencies,
@@ -43,6 +47,16 @@ function retryDependencies(overrides: Partial<RunRetryActionDependencies> = {}) 
     refresh: vi.fn(),
     ...overrides,
   } satisfies RunRetryActionDependencies;
+}
+
+function rerunDependencies(overrides: Partial<RunRerunActionDependencies> = {}) {
+  return {
+    request: vi.fn().mockResolvedValue({ runId: 'run-new' }),
+    success: vi.fn(),
+    error: vi.fn(),
+    open: vi.fn(),
+    ...overrides,
+  } satisfies RunRerunActionDependencies;
 }
 
 function noteDependencies(overrides: Partial<RunNoteActionDependencies> = {}) {
@@ -275,6 +289,60 @@ describe('RunView retry action', () => {
     expect(deps.success).toHaveBeenCalledWith('运行已重新开始');
     expect(deps.refresh).toHaveBeenCalledWith(result);
     expect(deps.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('RunView rerun action', () => {
+  it('offers Run again for every terminal run and hides it for active runs', () => {
+    expect(isRunRerunEligible({ status: 'done' })).toBe(true);
+    expect(isRunRerunEligible({ status: 'failed' })).toBe(true);
+    expect(isRunRerunEligible({ status: 'cancelled' })).toBe(true);
+    expect(isRunRerunEligible({ status: 'running' })).toBe(false);
+    expect(isRunRerunEligible({ status: 'waiting_human' })).toBe(false);
+    expect(isRunRerunEligible({ status: 'paused' })).toBe(false);
+
+    const visible = renderToStaticMarkup(createElement(RunRerunAction, {
+      eligible: true,
+      rerunning: false,
+      onRerun: vi.fn(),
+    }));
+    const hidden = renderToStaticMarkup(createElement(RunRerunAction, {
+      eligible: false,
+      rerunning: false,
+      onRerun: vi.fn(),
+    }));
+    expect(visible).toContain('再次运行');
+    expect(hidden).toBe('');
+  });
+
+  it('opens the distinct run returned by a successful rerun', async () => {
+    const deps = rerunDependencies();
+
+    await expect(runRerunAction('run-source', deps)).resolves.toEqual({ runId: 'run-new' });
+    expect(deps.request).toHaveBeenCalledWith('run-source');
+    expect(deps.success).toHaveBeenCalledWith('已启动新的工作流运行');
+    expect(deps.open).toHaveBeenCalledWith('run-new');
+    expect(deps.error).not.toHaveBeenCalled();
+  });
+
+  it('reports a rejected rerun without navigating away from the source', async () => {
+    const failure = new Error('409: run is still active: running');
+    const deps = rerunDependencies({ request: vi.fn().mockRejectedValue(failure) });
+
+    await expect(runRerunAction('run-source', deps)).rejects.toBe(failure);
+    expect(deps.error).toHaveBeenCalledWith('再次运行失败：409: run is still active: running');
+    expect(deps.success).not.toHaveBeenCalled();
+    expect(deps.open).not.toHaveBeenCalled();
+  });
+
+  it('disables repeated reruns while the new run is starting', () => {
+    const markup = renderToStaticMarkup(createElement(RunRerunAction, {
+      eligible: true,
+      rerunning: true,
+      onRerun: vi.fn(),
+    }));
+    expect(markup).toContain('disabled=""');
+    expect(markup).toContain('启动中…');
   });
 });
 

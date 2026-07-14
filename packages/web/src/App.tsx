@@ -562,7 +562,13 @@ function HomeScreen({
       return <SessionView key={s.id} session={s} onForked={(id) => setSelected({ session: id })} />;
     }
     if (typeof selected === 'object' && 'run' in selected) {
-      return <RunView runId={selected.run} onOpenSession={(id) => setSelected({ session: id })} onBack={() => setSelected('new')} />;
+      return <RunView
+        key={selected.run}
+        runId={selected.run}
+        onOpenSession={(id) => setSelected({ session: id })}
+        onOpenRun={(id) => setSelected({ run: id })}
+        onBack={() => setSelected('new')}
+      />;
     }
     return null;
   };

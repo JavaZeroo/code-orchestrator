@@ -288,6 +288,10 @@ export interface RunRetryResult {
   retriedNodeIds: string[];
 }
 
+export interface RunRerunResult {
+  runId: string;
+}
+
 export interface RunProgressionResult {
   ok: true;
   run: Pick<RunRow, 'id' | 'status'>;
@@ -579,6 +583,8 @@ export const api = {
   pauseRun: (runId: string) => post(`/api/runs/${runId}/pause`, {}).then((r) => j<RunProgressionResult>(r)),
   resumeRun: (runId: string) => post(`/api/runs/${runId}/resume`, {}).then((r) => j<RunProgressionResult>(r)),
   retryRun: (runId: string) => post(`/api/runs/${runId}/retry`, {}).then((r) => j<RunRetryResult>(r)),
+  rerunRun: (runId: string) =>
+    post(`/api/runs/${encodeURIComponent(runId)}/rerun`, {}).then((r) => j<RunRerunResult>(r)),
   archiveRun: (runId: string) =>
     post(`/api/runs/${runId}/archive`, {}).then((r) =>
       j<{ ok: true; run: Pick<RunRow, 'id' | 'archivedAt'> }>(r)),
