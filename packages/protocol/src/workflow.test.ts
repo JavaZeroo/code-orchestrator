@@ -43,12 +43,29 @@ describe('workflowDefSchema', () => {
       name: 'branch-and-fanout',
       nodes: [
         { id: 'choose', type: 'condition', expr: 'outputs.plan.enabled', onTrue: ['split'], onFalse: ['stop'] },
-        { id: 'split', type: 'fanout', itemsFrom: 'plan.items', maxItems: 8, template: { prompt: 'work {{item}}' } },
+        {
+          id: 'split', type: 'fanout', itemsFrom: 'plan.items', maxItems: 8, maxConcurrency: 2, failFast: true,
+          template: { prompt: 'work {{item}}' },
+        },
         { id: 'stop', type: 'gate' },
       ],
       edges: [['choose', 'split'], ['choose', 'stop']],
     });
     expect(r.success).toBe(true);
+  });
+
+  it('为 fanout 提供安全的并发和失败策略默认值', () => {
+    const parsed = workflowDefSchema.parse({
+      name: 'fanout-defaults',
+      nodes: [{ id: 'split', type: 'fanout', itemsFrom: 'vars.items', template: { prompt: 'work {{item}}' } }],
+      edges: [],
+    });
+    expect(parsed.nodes[0]).toMatchObject({ maxItems: 32, maxConcurrency: 4, failFast: false });
+    expect(workflowDefSchema.safeParse({
+      name: 'fanout-unbounded',
+      nodes: [{ id: 'split', type: 'fanout', itemsFrom: 'vars.items', maxConcurrency: 33, template: { prompt: 'work' } }],
+      edges: [],
+    }).success).toBe(false);
   });
 
   it('拒绝 condition 未标注的后继和有环图', () => {

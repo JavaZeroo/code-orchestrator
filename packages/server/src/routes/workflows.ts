@@ -6,7 +6,14 @@ import { runNoteMarkdownSchema, workflowDefSchema } from '@co/protocol';
 import { getDb, schema } from '../db/index';
 import { publish } from '../events';
 import { callRunner } from '../ws/runnerHub';
-import { EngineError, forgetRunExecution, serializeRunProgression, startRun } from '../engine/engine';
+import {
+  cancelFanoutChild,
+  EngineError,
+  forgetRunExecution,
+  retryFanoutChild,
+  serializeRunProgression,
+  startRun,
+} from '../engine/engine';
 import { archiveWorkflowRun, restoreWorkflowRun, WorkflowRunArchiveError } from '../services/workflowRunArchive';
 import { pauseWorkflowRun, resumeWorkflowRun, WorkflowRunProgressionError } from '../services/workflowRunProgression';
 import { retryWorkflowRun, WorkflowRunRetryError } from '../services/workflowRunRetry';
@@ -46,6 +53,7 @@ const reviseBodySchema = z.object({
 });
 
 const listRunsQuerySchema = z.object({ archived: z.enum(['true', 'false']).default('false') });
+const fanoutChildIndexSchema = z.coerce.number().int().nonnegative();
 const RUN_THREAD_PAGE_SIZE = 2000;
 
 export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void> {
@@ -283,6 +291,52 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       throw err;
     }
   });
+
+  app.post<{ Params: { id: string; nodeId: string; index: string } }>(
+    '/api/runs/:id/nodes/:nodeId/fanout/:index/retry',
+    async (req, reply) => serializeRunProgression(req.params.id, async () => {
+      try {
+        return {
+          ok: true,
+          ...await retryFanoutChild(
+            req.params.id,
+            req.params.nodeId,
+            fanoutChildIndexSchema.parse(req.params.index),
+            req.user?.email ?? 'ui',
+          ),
+        };
+      } catch (err) {
+        if (err instanceof EngineError) {
+          void reply.code(err.statusCode);
+          return { error: err.message };
+        }
+        throw err;
+      }
+    }),
+  );
+
+  app.post<{ Params: { id: string; nodeId: string; index: string } }>(
+    '/api/runs/:id/nodes/:nodeId/fanout/:index/cancel',
+    async (req, reply) => serializeRunProgression(req.params.id, async () => {
+      try {
+        return {
+          ok: true,
+          ...await cancelFanoutChild(
+            req.params.id,
+            req.params.nodeId,
+            fanoutChildIndexSchema.parse(req.params.index),
+            req.user?.email ?? 'ui',
+          ),
+        };
+      } catch (err) {
+        if (err instanceof EngineError) {
+          void reply.code(err.statusCode);
+          return { error: err.message };
+        }
+        throw err;
+      }
+    }),
+  );
 
   /** 取消 run：终止活跃节点会话（尽力）、pending 审批过期、状态置 cancelled——此前 run 只能跑完/失败 */
   app.post<{ Params: { id: string } }>('/api/runs/:id/cancel', async (req, reply) =>

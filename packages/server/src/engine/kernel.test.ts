@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { workflowDefSchema } from '@co/protocol';
 import {
   evaluateConditionExpression,
+  fanoutSettlement,
+  nextFanoutIndexes,
   resolveContextValue,
   resolveFanoutItems,
   skippedBranchNodeIds,
@@ -40,6 +42,23 @@ describe('agent execution kernel context', () => {
     expect(resolveFanoutItems('split.items', context, 2)).toHaveLength(2);
     expect(() => resolveFanoutItems('split.items', context, 1)).toThrow(/exceeding maxItems/);
     expect(() => resolveFanoutItems('review.score', context, 10)).toThrow(/must resolve to an array/);
+  });
+});
+
+describe('fanout concurrency planning', () => {
+  it('counts queued work as active and fills only available slots', () => {
+    expect(nextFanoutIndexes([
+      { index: 0, status: 'running' },
+      { index: 1, status: 'queued' },
+      { index: 2, status: 'pending' },
+      { index: 3, status: 'pending' },
+    ], 3)).toEqual([2]);
+  });
+
+  it('settles only after every child is terminal', () => {
+    expect(fanoutSettlement([{ status: 'done' }, { status: 'pending' }])).toBe('running');
+    expect(fanoutSettlement([{ status: 'done' }, { status: 'done' }])).toBe('done');
+    expect(fanoutSettlement([{ status: 'done' }, { status: 'failed' }])).toBe('failed');
   });
 });
 

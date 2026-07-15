@@ -325,6 +325,7 @@ export function RunView({
 }) {
   const [mode, setMode] = useState<'thread' | 'graph'>('thread');
   const [retrying, setRetrying] = useState(false);
+  const [fanoutAction, setFanoutAction] = useState<string | null>(null);
   const [rerunning, setRerunning] = useState(false);
   const [updatingProgression, setUpdatingProgression] = useState(false);
   const [updatingArchive, setUpdatingArchive] = useState(false);
@@ -535,6 +536,27 @@ export function RunView({
       .finally(() => setRetrying(false));
   }, [refreshGraph, refreshThread, retryEligible, retrying, runId]);
 
+  const handleFanoutAction = useCallback(async (
+    nodeId: string,
+    index: number,
+    action: 'retry' | 'cancel',
+  ) => {
+    const key = `${nodeId}:${index}:${action}`;
+    if (fanoutAction) return;
+    setFanoutAction(key);
+    try {
+      if (action === 'retry') await api.retryFanoutChild(runId, nodeId, index);
+      else await api.cancelFanoutChild(runId, nodeId, index);
+      toast.success(action === 'retry' ? `子任务 #${index + 1} 已重新排队` : `子任务 #${index + 1} 已取消`);
+      refreshGraph();
+      refreshThread();
+    } catch (error) {
+      toast.error(`${action === 'retry' ? '重试' : '取消'}子任务失败：${error}`);
+    } finally {
+      setFanoutAction(null);
+    }
+  }, [fanoutAction, refreshGraph, refreshThread, runId]);
+
   const handleRerun = useCallback(() => {
     if (!rerunEligible || rerunning) return;
     setRerunning(true);
@@ -733,18 +755,64 @@ export function RunView({
                   <div className="mb-1 text-[11px] font-medium tracking-wide text-dim uppercase">
                     并行子任务 · {selState.output.children.filter((child) => child.status === 'done').length}/{selState.output.children.length}
                   </div>
+                  <div className="mb-2 text-[11px] text-dim">
+                    活跃 {selState.output.children.filter((child) => child.status === 'queued' || child.status === 'running').length}
+                    /{selState.output.maxConcurrency ?? 4} · {selState.output.failFast ? '失败即停止' : '失败后继续其余任务'}
+                  </div>
                   <div className="space-y-2">
                     {selState.output.children.map((child) => (
                       <div key={child.index} className="rounded-lg border border-line bg-panel-2 p-2 text-xs">
                         <div className="flex items-center gap-2">
                           <span className="font-medium">#{child.index + 1}</span>
                           <Badge tone={NODE_TONE[child.status] ?? 'neutral'}>{child.status}</Badge>
+                          {(child.attempt ?? 1) > 1 && <span className="text-faint">第 {child.attempt} 次</span>}
                           {child.sessionId && (
                             <button className="ml-auto text-accent hover:underline" onClick={() => onOpenSession(child.sessionId!)}>打开会话</button>
                           )}
                         </div>
                         <div className="mt-1 truncate text-dim">{typeof child.item === 'string' ? child.item : JSON.stringify(child.item)}</div>
                         {child.error && <div className="mt-1 text-danger">{child.error}</div>}
+                        {(child.history?.length ?? 0) > 0 && (
+                          <details className="mt-2 text-faint">
+                            <summary className="cursor-pointer">历史尝试 {child.history!.length} 次</summary>
+                            <div className="mt-1 space-y-1 border-l border-line pl-2">
+                              {child.history!.map((attempt) => (
+                                <div key={attempt.attempt}>
+                                  <span>第 {attempt.attempt} 次 · {attempt.status}</span>
+                                  {attempt.sessionId && (
+                                    <button className="ml-2 text-accent hover:underline" onClick={() => onOpenSession(attempt.sessionId!)}>
+                                      打开会话
+                                    </button>
+                                  )}
+                                  {attempt.error && <div className="truncate text-danger">{attempt.error}</div>}
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )}
+                        <div className="mt-2 flex gap-1">
+                          {(child.status === 'failed' || child.status === 'cancelled') && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              disabled={fanoutAction !== null}
+                              onClick={() => void handleFanoutAction(selNode.id, child.index, 'retry')}
+                            >
+                              <RefreshCw size={11} className={fanoutAction === `${selNode.id}:${child.index}:retry` ? 'animate-spin' : undefined} />
+                              重试
+                            </Button>
+                          )}
+                          {(child.status === 'pending' || child.status === 'queued' || child.status === 'running') && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={fanoutAction !== null}
+                              onClick={() => void handleFanoutAction(selNode.id, child.index, 'cancel')}
+                            >
+                              <X size={11} /> 取消
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
