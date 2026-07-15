@@ -1,7 +1,12 @@
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk';
 import type { ApprovalRequest } from '@co/protocol';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ClaudeSession, forkClaudeNativeSession, type DriverEmit } from './driver';
+import {
+  ClaudeSession,
+  forkClaudeNativeSession,
+  mapClaudePermissionMode,
+  type DriverEmit,
+} from './driver';
 
 const queryMock = vi.hoisted(() => vi.fn());
 const forkSessionMock = vi.hoisted(() => vi.fn());
@@ -41,6 +46,18 @@ describe('forkClaudeNativeSession', () => {
     await expect(forkClaudeNativeSession('claude-native-source', '/tmp/work')).rejects.toThrow(
       'distinct forked session',
     );
+  });
+});
+
+describe('mapClaudePermissionMode', () => {
+  it('falls back to approval gating for root processes', () => {
+    expect(mapClaudePermissionMode('bypassPermissions', true)).toBe('default');
+    expect(mapClaudePermissionMode('safe-yolo', true)).toBe('default');
+    expect(mapClaudePermissionMode('yolo', true)).toBe('default');
+  });
+
+  it('keeps bypass mode for non-root processes', () => {
+    expect(mapClaudePermissionMode('bypassPermissions', false)).toBe('bypassPermissions');
   });
 });
 

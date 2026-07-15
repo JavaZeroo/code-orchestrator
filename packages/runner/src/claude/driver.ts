@@ -74,7 +74,10 @@ const DENY_DEFAULT_MESSAGE =
   '(eg. if it was a file edit, the new_string was NOT written to the file). ' +
   'STOP what you are doing and wait for the user to tell you how to proceed.';
 
-function mapPermissionMode(mode: MessageMeta['permissionMode']): Options['permissionMode'] {
+export function mapClaudePermissionMode(
+  mode: MessageMeta['permissionMode'],
+  isRoot = typeof process.getuid === 'function' && process.getuid() === 0,
+): Options['permissionMode'] {
   switch (mode) {
     case 'acceptEdits':
       return 'acceptEdits';
@@ -83,7 +86,10 @@ function mapPermissionMode(mode: MessageMeta['permissionMode']): Options['permis
     case 'bypassPermissions':
     case 'safe-yolo':
     case 'yolo':
-      return 'bypassPermissions';
+      // Claude CLI refuses --dangerously-skip-permissions under root. The
+      // shared execution container on the production runner currently runs as
+      // root, so retain approval gating instead of crashing the session.
+      return isRoot ? 'default' : 'bypassPermissions';
     default:
       return 'default';
   }
@@ -302,7 +308,7 @@ export class ClaudeSession {
       cwd: p.cwd,
       model: meta.model ?? undefined,
       fallbackModel: meta.fallbackModel ?? undefined,
-      permissionMode: mapPermissionMode(meta.permissionMode),
+      permissionMode: mapClaudePermissionMode(meta.permissionMode),
       effort: meta.effort ?? undefined,
       allowedTools: meta.allowedTools ?? undefined,
       disallowedTools: meta.disallowedTools ?? undefined,
