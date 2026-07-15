@@ -148,7 +148,7 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     } catch (e) {
       if (e instanceof ContainerSpawnQueued) {
         void reply.code(202);
-        return { queued: true, taskId: e.taskId };
+        return { queued: true, taskId: e.taskId, sessionId: e.sessionId };
       }
       throw e;
     }
@@ -179,7 +179,7 @@ export async function registerSessionRoutes(app: FastifyInstance): Promise<void>
     } catch (e) {
       if (e instanceof ContainerSpawnQueued) {
         void reply.code(202);
-        return { queued: true, taskId: e.taskId };
+        return { queued: true, taskId: e.taskId, sessionId: e.sessionId };
       }
       throw e;
     }

@@ -20,6 +20,7 @@ const TYPE_ICON: Record<string, string> = {
   meeting: '\u{1F5F3}',
   fanout: '\u{2163}',
   condition: '?',
+  check: '✓',
 };
 
 const NODE_TONE: Record<string, BadgeTone> = {
@@ -463,6 +464,15 @@ export function RunTimeline({
     const map = new Map<string, NodeStateRow>();
     for (const n of nodes) {
       if (n.sessionId) map.set(n.sessionId, n);
+      for (const child of n.output?.children ?? []) {
+        if (child.sessionId) {
+          map.set(child.sessionId, { ...n, nodeId: `${n.nodeId}[${child.index}]`, sessionId: child.sessionId, status: child.status });
+        }
+      }
+      for (const session of n.output?.sessions ?? []) {
+        const suffix = session.idx === 'arbiter' ? 'arbiter' : `participant[${session.idx}]`;
+        map.set(session.sessionId, { ...n, nodeId: `${n.nodeId}.${suffix}`, sessionId: session.sessionId, status: session.status });
+      }
     }
     return map;
   }, [nodes]);
@@ -572,7 +582,11 @@ export function RunTimeline({
       const seg = segEvents;
       const firstSeq = seg[0]!.seq;
       const node = sid ? nodeBySession.get(sid) : undefined;
-      const nodeDef = node ? nodeDefById.get(node.nodeId) : undefined;
+      const parentNodeId = node?.nodeId.replace(/(?:\[\d+\]|\.(?:participant\[\d+\]|arbiter))$/, '');
+      const baseNodeDef = parentNodeId ? nodeDefById.get(parentNodeId) : undefined;
+      const nodeDef = baseNodeDef && node && parentNodeId && parentNodeId !== node.nodeId
+        ? { ...baseNodeDef, title: `${baseNodeDef.title ?? parentNodeId} · ${node.nodeId.slice(parentNodeId.length)}` }
+        : baseNodeDef;
       const isTool = hasToolCall(seg);
       const segKey = `seg-${firstSeq}`;
 

@@ -26,7 +26,7 @@ export interface WorkflowRunRerunRecord {
 
 export interface WorkflowRunRerunDependencies {
   load: (runId: string) => Promise<WorkflowRunRerunRecord | null>;
-  start: (defId: string, vars: Record<string, string>, projectId?: string | null) => Promise<string>;
+  start: (defId: string, vars: Record<string, string>, projectId?: string | null, actorId?: string) => Promise<string>;
 }
 
 const TERMINAL_RUN_STATUSES = new Set(['done', 'failed', 'cancelled']);
@@ -62,12 +62,13 @@ const productionDependencies: WorkflowRunRerunDependencies = {
       .limit(1);
     return rows[0] ?? null;
   },
-  start: startRun,
+  start: (defId, vars, projectId, actorId) => startRun(defId, vars, projectId, undefined, actorId),
 };
 
 export async function rerunWorkflowRunWithDependencies(
   sourceRunId: string,
   deps: WorkflowRunRerunDependencies,
+  actorId?: string,
 ): Promise<{ runId: string }> {
   const source = await deps.load(sourceRunId);
   if (!source) {
@@ -79,10 +80,12 @@ export async function rerunWorkflowRunWithDependencies(
   }
 
   const vars = reusableWorkflowRunVars(source.context);
-  const runId = await deps.start(source.defId, vars, source.projectId);
+  const runId = actorId
+    ? await deps.start(source.defId, vars, source.projectId, actorId)
+    : await deps.start(source.defId, vars, source.projectId);
   return { runId };
 }
 
-export function rerunWorkflowRun(sourceRunId: string): Promise<{ runId: string }> {
-  return rerunWorkflowRunWithDependencies(sourceRunId, productionDependencies);
+export function rerunWorkflowRun(sourceRunId: string, actorId?: string): Promise<{ runId: string }> {
+  return rerunWorkflowRunWithDependencies(sourceRunId, productionDependencies, actorId);
 }

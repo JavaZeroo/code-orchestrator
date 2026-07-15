@@ -37,6 +37,39 @@ describe('workflowDefSchema', () => {
     });
     expect(r.success).toBe(true);
   });
+
+  it('接受带显式真假后继的 condition 和有界 fanout', () => {
+    const r = workflowDefSchema.safeParse({
+      name: 'branch-and-fanout',
+      nodes: [
+        { id: 'choose', type: 'condition', expr: 'outputs.plan.enabled', onTrue: ['split'], onFalse: ['stop'] },
+        { id: 'split', type: 'fanout', itemsFrom: 'plan.items', maxItems: 8, template: { prompt: 'work {{item}}' } },
+        { id: 'stop', type: 'gate' },
+      ],
+      edges: [['choose', 'split'], ['choose', 'stop']],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('拒绝 condition 未标注的后继和有环图', () => {
+    const unlabeled = workflowDefSchema.safeParse({
+      name: 'bad-branch',
+      nodes: [
+        { id: 'choose', type: 'condition', expr: 'true', onTrue: ['yes'] },
+        { id: 'yes', type: 'gate' },
+        { id: 'no', type: 'gate' },
+      ],
+      edges: [['choose', 'yes'], ['choose', 'no']],
+    });
+    expect(unlabeled.success).toBe(false);
+
+    const cyclic = workflowDefSchema.safeParse({
+      name: 'cycle',
+      nodes: [{ id: 'a', type: 'gate' }, { id: 'b', type: 'gate' }],
+      edges: [['a', 'b'], ['b', 'a']],
+    });
+    expect(cyclic.success).toBe(false);
+  });
 });
 
 describe('run note schema', () => {

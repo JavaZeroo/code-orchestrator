@@ -170,6 +170,8 @@ export async function spawnSession(req: SpawnRequest): Promise<{ sessionId: stri
     agent,
     cwd: req.cwd,
     prompt: req.prompt,
+    runId: req.runId,
+    nodeId: req.nodeId,
     meta,
     env: { ...(resolved.env ?? {}), ...(req.env ?? {}) },
     designer: req.designer,

@@ -6,7 +6,7 @@ import { runNoteMarkdownSchema, workflowDefSchema } from '@co/protocol';
 import { getDb, schema } from '../db/index';
 import { publish } from '../events';
 import { callRunner } from '../ws/runnerHub';
-import { EngineError, startRun } from '../engine/engine';
+import { EngineError, forgetRunExecution, serializeRunProgression, startRun } from '../engine/engine';
 import { archiveWorkflowRun, restoreWorkflowRun, WorkflowRunArchiveError } from '../services/workflowRunArchive';
 import { pauseWorkflowRun, resumeWorkflowRun, WorkflowRunProgressionError } from '../services/workflowRunProgression';
 import { retryWorkflowRun, WorkflowRunRetryError } from '../services/workflowRunRetry';
@@ -59,6 +59,7 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
       graph,
       createdVia: body.createdVia,
       projectId: body.projectId ?? null,
+      createdBy: req.user?.id,
     });
     void reply.code(201);
     return { id, name: graph.name };
@@ -129,7 +130,7 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
   app.post<{ Params: { id: string } }>('/api/workflows/:id/runs', async (req, reply) => {
     const body = startBodySchema.parse(req.body ?? {});
     try {
-      const runId = await startRun(req.params.id, body.vars, body.projectId ?? undefined);
+      const runId = await startRun(req.params.id, body.vars, body.projectId ?? undefined, undefined, req.user?.id);
       void reply.code(201);
       return { runId };
     } catch (err) {
@@ -245,7 +246,7 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
 
   app.post<{ Params: { id: string } }>('/api/runs/:id/rerun', async (req, reply) => {
     try {
-      const result = await rerunWorkflowRun(req.params.id);
+      const result = await rerunWorkflowRun(req.params.id, req.user?.id);
       void reply.code(201);
       return result;
     } catch (err) {
@@ -284,33 +285,47 @@ export async function registerWorkflowRoutes(app: FastifyInstance): Promise<void
   });
 
   /** 取消 run：终止活跃节点会话（尽力）、pending 审批过期、状态置 cancelled——此前 run 只能跑完/失败 */
-  app.post<{ Params: { id: string } }>('/api/runs/:id/cancel', async (req, reply) => {
-    const db = getDb();
-    const [run] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, req.params.id)).limit(1);
-    if (!run) {
-      void reply.code(404);
-      return { error: 'run not found' };
-    }
-    if (run.status === 'done' || run.status === 'failed' || run.status === 'cancelled') {
-      void reply.code(409);
-      return { error: `run 已终态: ${run.status}` };
-    }
-    const alive = await db
-      .select({ id: schema.sessions.id, machineId: schema.sessions.machineId })
-      .from(schema.sessions)
-      .where(and(eq(schema.sessions.runId, run.id), ne(schema.sessions.state, 'dead')));
-    for (const s of alive) {
-      await callRunner(s.machineId, 'session.kill', { sessionId: s.id }).catch(() => {});
-      await db.update(schema.sessions).set({ state: 'dead' }).where(eq(schema.sessions.id, s.id));
-    }
-    await db
-      .update(schema.approvals)
-      .set({ status: 'expired', decidedBy: req.user?.email ?? 'cancel', decidedAt: new Date() })
-      .where(and(eq(schema.approvals.runId, run.id), eq(schema.approvals.status, 'pending')));
-    await db.update(schema.workflowRuns).set({ status: 'cancelled', endedAt: new Date() }).where(eq(schema.workflowRuns.id, run.id));
-    await publish({ type: 'run.status', runId: run.id, payload: { status: 'cancelled', by: req.user?.email ?? 'ui' } });
-    return { ok: true, killedSessions: alive.length };
-  });
+  app.post<{ Params: { id: string } }>('/api/runs/:id/cancel', async (req, reply) =>
+    serializeRunProgression(req.params.id, async () => {
+      const db = getDb();
+      const [run] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, req.params.id)).limit(1);
+      if (!run) {
+        void reply.code(404);
+        return { error: 'run not found' };
+      }
+      if (run.status === 'done' || run.status === 'failed' || run.status === 'cancelled') {
+        void reply.code(409);
+        return { error: `run 已终态: ${run.status}` };
+      }
+      // 先关 run 的调度闸门，再终止外部执行，避免 kill/dequeue 事件把已取消节点误推进。
+      await db.update(schema.workflowRuns).set({ status: 'cancelled', endedAt: new Date() }).where(eq(schema.workflowRuns.id, run.id));
+      const queued = await db
+        .select({ id: schema.taskQueue.id, payload: schema.taskQueue.payload })
+        .from(schema.taskQueue)
+        .where(inArray(schema.taskQueue.status, ['pending', 'scheduled']));
+      const queuedIds = queued
+        .filter((task) => (task.payload as { runId?: string }).runId === run.id)
+        .map((task) => task.id);
+      for (const id of queuedIds) {
+        await db.update(schema.taskQueue).set({ status: 'cancelled' }).where(eq(schema.taskQueue.id, id));
+      }
+      const alive = await db
+        .select({ id: schema.sessions.id, machineId: schema.sessions.machineId })
+        .from(schema.sessions)
+        .where(and(eq(schema.sessions.runId, run.id), ne(schema.sessions.state, 'dead')));
+      for (const s of alive) {
+        await callRunner(s.machineId, 'session.kill', { sessionId: s.id }).catch(() => {});
+        await db.update(schema.sessions).set({ state: 'dead' }).where(eq(schema.sessions.id, s.id));
+      }
+      await db
+        .update(schema.approvals)
+        .set({ status: 'expired', decidedBy: req.user?.email ?? 'cancel', decidedAt: new Date() })
+        .where(and(eq(schema.approvals.runId, run.id), eq(schema.approvals.status, 'pending')));
+      forgetRunExecution(run.id);
+      await publish({ type: 'run.status', runId: run.id, payload: { status: 'cancelled', by: req.user?.email ?? 'ui' } });
+      return { ok: true, killedSessions: alive.length, cancelledQueuedTasks: queuedIds.length };
+    }),
+  );
 
   app.post<{ Params: { id: string } }>('/api/runs/:id/archive', async (req, reply) => {
     try {

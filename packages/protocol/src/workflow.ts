@@ -91,14 +91,19 @@ export const fanoutNodeSchema = nodeBase.extend({
   type: z.literal('fanout'),
   /** 上游节点输出中的数组来源，如 "split.items" */
   itemsFrom: z.string().min(1),
+  /** 防止异常模型输出造成无限任务膨胀。 */
+  maxItems: z.number().int().positive().max(100).default(32),
   template: agentNodeSchema.omit({ id: true, type: true }),
 });
 export type FanoutNode = z.infer<typeof fanoutNodeSchema>;
 
 export const conditionNodeSchema = nodeBase.extend({
   type: z.literal('condition'),
-  /** 求值语义 M2 定义；先占位保 schema 稳定 */
+  /** 受限表达式：支持 vars/outputs 路径、真假值、比较以及 && / || / !。 */
   expr: z.string().min(1),
+  /** 两个数组是该 condition 的直接后继；共同可达的节点视为分支汇合点。 */
+  onTrue: z.array(z.string().min(1)).default([]),
+  onFalse: z.array(z.string().min(1)).default([]),
 });
 export type ConditionNode = z.infer<typeof conditionNodeSchema>;
 
@@ -162,5 +167,68 @@ export const workflowDefSchema = z
         });
       }
     });
+    for (const [index, node] of def.nodes.entries()) {
+      if (node.type === 'condition') {
+        const labelled = [...node.onTrue, ...node.onFalse];
+        const labelledSet = new Set(labelled);
+        if (labelledSet.size !== labelled.length) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `condition ${node.id} has duplicate branch targets`,
+            path: ['nodes', index],
+          });
+        }
+        for (const target of labelled) {
+          if (!ids.has(target)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `condition ${node.id} references unknown branch target: ${target}`,
+              path: ['nodes', index],
+            });
+          } else if (!def.edges.some(([from, to]) => from === node.id && to === target)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `condition ${node.id} branch target is not a direct successor: ${target}`,
+              path: ['nodes', index],
+            });
+          }
+        }
+        const outgoing = def.edges.filter(([from]) => from === node.id).map(([, to]) => to);
+        for (const target of outgoing) {
+          if (!labelledSet.has(target)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              message: `condition ${node.id} has unlabeled outgoing edge: ${target}`,
+              path: ['nodes', index],
+            });
+          }
+        }
+      }
+    }
+
+    // 执行内核只接受 DAG；提前拒绝环，避免 run 永久卡在 pending。
+    const outgoing = new Map<string, string[]>();
+    for (const id of ids) outgoing.set(id, []);
+    for (const [from, to] of def.edges) outgoing.get(from)?.push(to);
+    const visiting = new Set<string>();
+    const visited = new Set<string>();
+    const hasCycle = (id: string): boolean => {
+      if (visiting.has(id)) return true;
+      if (visited.has(id)) return false;
+      visiting.add(id);
+      for (const next of outgoing.get(id) ?? []) {
+        if (hasCycle(next)) return true;
+      }
+      visiting.delete(id);
+      visited.add(id);
+      return false;
+    };
+    if ([...ids].some(hasCycle)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'workflow graph must be acyclic',
+        path: ['edges'],
+      });
+    }
   });
 export type WorkflowDef = z.infer<typeof workflowDefSchema>;

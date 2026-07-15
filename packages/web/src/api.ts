@@ -302,7 +302,25 @@ export interface NodeStateRow {
   nodeId: string;
   status: string;
   sessionId: string | null;
-  output: { summary?: string; error?: string; verdict?: string; minutes?: string } | null;
+  output: {
+    kind?: string;
+    summary?: string;
+    error?: string;
+    verdict?: string;
+    minutes?: string;
+    result?: boolean;
+    selected?: string[];
+    skipped?: string[];
+    children?: Array<{
+      index: number;
+      item: unknown;
+      status: string;
+      sessionId?: string;
+      summary?: string;
+      error?: string;
+    }>;
+    sessions?: Array<{ sessionId: string; idx: number | 'arbiter'; status: string }>;
+  } | null;
   /** 该节点执行时使用的模型（来自 sessions 表） */
   model?: string | null;
   updatedAt: string;

@@ -125,11 +125,16 @@ export async function resolveAndSpawn(req: AutoSpawnRequest): Promise<{
     }
     const r = await spawnContainerSession({
       projectId: project.id,
+      sessionId: req.sessionId,
+      key: req.runId ?? req.sessionId,
       prompt: req.prompt,
       agent: req.agent,
       model: req.model,
+      role: req.role,
       meta: req.effort ? { ...req.meta, effort: req.effort } : req.meta,
       createdBy: req.createdBy,
+      runId: req.runId,
+      nodeId: req.nodeId,
       machineId: req.machineId,
     });
     return { sessionId: r.sessionId, resolved: { machineId: r.machineId, cwd: r.cwd } };
@@ -151,11 +156,16 @@ export async function resolveAndSpawn(req: AutoSpawnRequest): Promise<{
   if (wantContainer) {
     const r = await spawnContainerSession({
       projectId: project.id,
+      sessionId: req.sessionId,
+      key: req.runId ?? req.sessionId,
       prompt: req.prompt,
       agent: req.agent,
       model: req.model,
+      role: req.role,
       meta: req.effort ? { ...req.meta, effort: req.effort } : req.meta,
       createdBy: req.createdBy,
+      runId: req.runId,
+      nodeId: req.nodeId,
       machineId,
     });
     return { sessionId: r.sessionId, resolved: { machineId: r.machineId, cwd: r.cwd } };
@@ -173,7 +183,7 @@ export async function resolveAndSpawn(req: AutoSpawnRequest): Promise<{
   const token =
     (req.createdBy ? await userForgeToken(req.createdBy, forge) : undefined) ??
     (await anyForgeToken(forge));
-  const sessionId = createId();
+  const sessionId = req.sessionId ?? createId();
   const ws = await materializeWorkspace({
     machineId,
     forge,

@@ -33,6 +33,8 @@ const RUNTIME_MOUNT = '/opt/co';
 
 export interface ContainerSpawnRequest {
   projectId: string;
+  /** 排队前即确定的稳定会话 id；派发时复用，使工作流能持久追踪 queued→running。 */
+  sessionId?: string;
   /** 唯一稳定键（issue number / runId / 自生成） */
   key?: string;
   prompt?: string;
@@ -59,6 +61,8 @@ export interface ContainerAgentContext {
   agent: SessionAgent;
   prompt?: string;
   model?: string;
+  runId?: string;
+  nodeId?: string;
   meta?: MessageMeta;
 }
 export type StartAgentInContainer = (ctx: ContainerAgentContext) => Promise<void>;
@@ -70,6 +74,8 @@ const defaultStartAgent: StartAgentInContainer = async (ctx) => {
     agent: ctx.agent,
     cwd: ctx.workdir,
     prompt: ctx.prompt,
+    runId: ctx.runId,
+    nodeId: ctx.nodeId,
     meta: { ...(ctx.meta ?? {}), ...(ctx.model ? { model: ctx.model } : {}) },
     container: { containerId: ctx.containerId, nodePath: `${RUNTIME_MOUNT}/node`, agentMjs: `${RUNTIME_MOUNT}/agent.mjs` },
   });
@@ -123,7 +129,10 @@ async function loadProject(projectId: string) {
 }
 
 export class ContainerSpawnQueued extends Error {
-  constructor(readonly taskId: string) {
+  constructor(
+    readonly taskId: string,
+    readonly sessionId: string,
+  ) {
     super('no capacity — queued');
   }
 }
@@ -145,7 +154,7 @@ export async function spawnContainerSession(
     throw new Error(`project ${project.name} 未配 baseImage——非容器化项目应走 spawn.ts`);
   }
   const forge = project.forge as ForgeKind;
-  const sessionId = createId();
+  const sessionId = req.sessionId ?? createId();
   const key = req.key ?? sessionId;
   const accelKind = project.accel?.kind ?? null;
   const agent = req.agent ?? 'claude';
@@ -154,14 +163,14 @@ export async function spawnContainerSession(
   const placed = await schedule({ accelKind, projectId: req.projectId, sessionId, id: req.machineId });
   if (!placed) {
     if (opts.alreadyQueued) {
-      throw new ContainerSpawnQueued('');
+      throw new ContainerSpawnQueued('', sessionId);
     }
     const taskId = await enqueueTask({
       projectId: req.projectId,
       kind: accelKind ?? undefined,
-      payload: { ...req, key } as unknown as Record<string, unknown>,
+      payload: { ...req, sessionId, key } as unknown as Record<string, unknown>,
     });
-    throw new ContainerSpawnQueued(taskId);
+    throw new ContainerSpawnQueued(taskId, sessionId);
   }
   const { machineId, reservationId, bindFlags } = placed;
 
@@ -271,6 +280,8 @@ export async function spawnContainerSession(
       agent,
       prompt: req.prompt,
       model: resolved.model ?? req.model,
+      runId: req.runId,
+      nodeId: req.nodeId,
       meta: agentMeta,
     });
 
@@ -291,6 +302,16 @@ export function makeContainerDispatch(startAgent?: StartAgentInContainer) {
   return async function dispatch(task: QueuedTask): Promise<DispatchResult> {
     const req = task.payload as unknown as ContainerSpawnRequest;
     try {
+      if (req.runId && hasDb()) {
+        const [run] = await getDb()
+          .select({ status: schema.workflowRuns.status })
+          .from(schema.workflowRuns)
+          .where(eq(schema.workflowRuns.id, req.runId))
+          .limit(1);
+        if (!run || ['done', 'failed', 'cancelled'].includes(run.status)) {
+          return 'failed';
+        }
+      }
       await spawnContainerSession(req, startAgent, { alreadyQueued: true });
       return 'started';
     } catch (err) {
