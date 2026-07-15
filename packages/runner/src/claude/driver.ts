@@ -26,11 +26,13 @@ import {
   type ApprovalRequest,
   type MessageMeta,
   type RunnerParams,
-  type SessionEnvelope,
   type SessionState,
 } from '@co/protocol';
 import { Pushable } from '../utils/pushable';
+import type { DriverEmit, SessionUsage } from '../driverTypes';
 import { mapSdkMessage } from './mapper';
+
+export type { DriverEmit, SessionUsage } from '../driverTypes';
 
 /** 复制 Claude 持久化 transcript，返回可由 query({ resume }) 接入的新原生会话 ID。 */
 export async function forkClaudeNativeSession(nativeSessionId: string, cwd: string): Promise<string> {
@@ -39,24 +41,6 @@ export async function forkClaudeNativeSession(nativeSessionId: string, cwd: stri
     throw new Error('Claude SDK did not create a distinct forked session');
   }
   return forked.sessionId;
-}
-
-export interface SessionUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  costUsd: number;
-  turns: number;
-}
-
-export interface DriverEmit {
-  event: (envelope: SessionEnvelope) => void;
-  state: (state: SessionState, nativeSessionId?: string, usage?: SessionUsage) => void;
-  approval: (request: ApprovalRequest) => void;
-  /** designer 会话：草图上报，返回 server 校验结果（失败信息回给模型自动重试） */
-  draft: (graph: unknown) => Promise<{ ok: boolean; error?: string }>;
-  /** taskIntake 会话：任务计划上报，返回 server 校验结果 */
-  taskPlan: (plan: { defId: string; vars: Record<string, string>; summary: string }) => Promise<{ ok: boolean; error?: string }>;
 }
 
 const TASK_INTAKE_SYSTEM_PROMPT = `你是任务受理助手。用户描述要做什么，你负责从可用模板清单中选出合适的一个并填写变量。
@@ -378,7 +362,7 @@ export class ClaudeSession {
         this.usage.inputTokens += m.usage?.input_tokens ?? 0;
         this.usage.outputTokens += m.usage?.output_tokens ?? 0;
         this.usage.cacheReadTokens += m.usage?.cache_read_input_tokens ?? 0;
-        this.usage.costUsd += m.total_cost_usd ?? 0;
+        this.usage.costUsd = (this.usage.costUsd ?? 0) + (m.total_cost_usd ?? 0);
         this.setState('idle', undefined, { ...this.usage });
       }
     }

@@ -1,7 +1,7 @@
 import { exec } from 'node:child_process';
 import { runnerMethods, type RunnerMethodName, type RunnerParams } from '@co/protocol';
-import { ClaudeSession, forkClaudeNativeSession, type DriverEmit } from './claude/driver';
-import { CodexSession } from './codex/driver';
+import { backendCapabilityError, getRunnerBackendAdapter } from './backendAdapters';
+import type { DriverEmit } from './driverTypes';
 import type { ServerConnection } from './connection';
 import { addSession, getSession, listSessionStates, removeSession, type RunnerSession } from './sessions';
 import { provisionWorkspace } from './workspace';
@@ -55,20 +55,19 @@ export { listSessionStates };
 
 export function createRunnerMethodHandler(ctx: RunnerContext) {
   const sessionsBeingForked = new Set<string>();
+  const deliveredSendKeys = new Map<string, Set<string>>();
 
   function createHostSession(
     p: RunnerParams<'session.spawn'>,
     emit: DriverEmit,
     resumeNativeSessionId?: string,
   ): RunnerSession {
-    switch (p.agent) {
-      case 'claude':
-        return new ClaudeSession(p, emit, resumeNativeSessionId);
-      case 'codex':
-        return new CodexSession(p, emit, resumeNativeSessionId);
-      default:
-        throw new Error(`agent "${p.agent}" not supported yet`);
+    const backend = getRunnerBackendAdapter(p.agent);
+    if (!backend) throw new Error(`agent "${p.agent}" not supported yet`);
+    if (!backend.descriptor.capabilities.hostSession) {
+      throw new Error(`agent "${p.agent}" does not support hostSession`);
     }
+    return backend.createSession(p, emit, resumeNativeSessionId);
   }
 
   function makeEmit(sessionId: string): DriverEmit {
@@ -177,12 +176,12 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
       }
       case 'session.spawn': {
         const p = runnerMethods['session.spawn'].params.parse(params);
-        if (p.agent === 'opencode') {
-          return { ok: false, error: 'agent "opencode" not supported yet' };
+        const backend = getRunnerBackendAdapter(p.agent);
+        if (!backend) {
+          return { ok: false, error: `agent "${p.agent}" not supported yet` };
         }
-        if (p.agent !== 'claude' && (p.designer || p.taskIntake)) {
-          return { ok: false, error: `agent "${p.agent}" does not support designer/taskIntake MCP tools yet` };
-        }
+        const capabilityError = backend.validateSpawn(p);
+        if (capabilityError) return { ok: false, error: capabilityError };
         if (getSession(p.sessionId)) {
           return { ok: false, error: `session already exists: ${p.sessionId}` };
         }
@@ -214,6 +213,11 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
           removeSession(p.sessionId);
         }
         const emit = makeEmit(p.sessionId);
+        const backend = getRunnerBackendAdapter(p.agent);
+        const capabilityError = backend
+          ? backendCapabilityError(backend.descriptor, 'resume')
+          : `agent "${p.agent}" not supported yet`;
+        if (capabilityError) return { ok: false, error: capabilityError };
         const spawnParams: RunnerParams<'session.spawn'> = {
           sessionId: p.sessionId,
           agent: p.agent,
@@ -248,26 +252,14 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
         let forkedSession: RunnerSession | undefined;
         try {
           const emit = makeEmit(p.sessionId);
-          const spawnParams: RunnerParams<'session.spawn'> = {
-            sessionId: p.sessionId,
-            agent: p.agent,
-            cwd: p.cwd,
-            meta: p.meta,
-            env: p.env,
-          };
-          let nativeSessionId: string;
-          if (p.agent === 'claude') {
-            nativeSessionId = await forkClaudeNativeSession(p.nativeSessionId, p.cwd);
-            forkedSession = createHostSession(spawnParams, emit, nativeSessionId);
-            addSession(forkedSession);
-            forkedSession.start();
-          } else {
-            const codex = new CodexSession(spawnParams, emit, undefined, p.nativeSessionId);
-            forkedSession = codex;
-            codex.start();
-            nativeSessionId = await codex.waitUntilReady();
-            addSession(codex);
+          const backend = getRunnerBackendAdapter(p.agent);
+          if (!backend || !backend.descriptor.capabilities.fork) {
+            throw new Error(`agent "${p.agent}" does not support fork`);
           }
+          const forked = await backend.forkSession(p, emit);
+          forkedSession = forked.session;
+          const nativeSessionId = forked.nativeSessionId;
+          addSession(forkedSession);
           if (nativeSessionId === p.nativeSessionId) {
             throw new Error('native fork did not create a distinct session ID');
           }
@@ -289,6 +281,14 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
         if (!session || session.state === 'dead') {
           return { ok: false, error: `session not running: ${p.sessionId}` };
         }
+        if (p.idempotencyKey) {
+          const delivered = deliveredSendKeys.get(p.sessionId);
+          if (delivered?.has(p.idempotencyKey)) return { ok: true };
+          session.send(p.text, p.meta);
+          if (delivered) delivered.add(p.idempotencyKey);
+          else deliveredSendKeys.set(p.sessionId, new Set([p.idempotencyKey]));
+          return { ok: true };
+        }
         session.send(p.text, p.meta);
         return { ok: true };
       }
@@ -299,6 +299,7 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
           session.kill();
           removeSession(p.sessionId);
         }
+        deliveredSendKeys.delete(p.sessionId);
         return { ok: true };
       }
       case 'session.interrupt': {

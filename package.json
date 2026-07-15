@@ -12,6 +12,7 @@
     "test": "pnpm test:unit",
     "test:unit": "pnpm -r run test:unit",
     "test:coverage": "pnpm -r run test:coverage",
+    "benchmark:agent": "pnpm --filter @co/server benchmark:agent",
     "test:st": "pnpm --filter @co/server test:st"
   },
   "devDependencies": {

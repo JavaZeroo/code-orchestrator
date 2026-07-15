@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "evidence-backed-loop",
+  "title": "Implement a bounded evidence-backed Agent loop",
+  "category": "feature",
+  "repository": {
+    "path": ".",
+    "baseRef": "95cbe39adfc886dbc7c7393907f9196e81612965"
+  },
+  "prompt": "Implement a recoverable Agent task loop. A configured Agent contract must run command evaluators after turn-end, persist each Attempt and Evaluation as auditable state/events, return structured feedback on failure, retry within budget, and mark the node done only after all criteria pass. Workflows without a contract must retain their old behavior.",
+  "contract": {
+    "acceptanceCriteria": [
+      {
+        "id": "loop-tests",
+        "description": "Capability loop behavior tests and existing engine tests pass",
+        "evaluator": {
+          "kind": "command",
+          "run": "pnpm --filter @co/server exec vitest run src/engine/capabilityLoop.test.ts src/engine/kernel.test.ts",
+          "timeoutMs": 300000
+        }
+      },
+      {
+        "id": "server-types",
+        "description": "Server typecheck passes",
+        "evaluator": {
+          "kind": "command",
+          "run": "pnpm --filter @co/server typecheck",
+          "timeoutMs": 300000
+        }
+      }
+    ],
+    "requiredEvidence": ["evaluation", "agent_summary"],
+    "constraints": [
+      "Keep the workflow graph acyclic",
+      "Use append-only events and node_states.output before adding dedicated tables",
+      "Distinguish acceptance failure from evaluator infrastructure failure"
+    ],
+    "budget": { "maxAttempts": 3 }
+  },
+  "expectations": {
+    "status": "achieved",
+    "maxAttempts": 3,
+    "maxHumanInterventions": 0
+  },
+  "tags": ["loop", "evaluation", "recovery"]
+}

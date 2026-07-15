@@ -2,6 +2,8 @@ export * from './vendor/happy-wire/sessionProtocol';
 export * from './vendor/happy-wire/messageMeta';
 export * from './session';
 export * from './approval';
+export * from './capability';
+export * from './contextPack';
 export * from './machine';
 export * from './rpc';
 export * from './workflow';

@@ -38,6 +38,32 @@ describe('workflowDefSchema', () => {
     expect(r.success).toBe(true);
   });
 
+  it('agent 节点接受 evidence-backed TaskContract，旧节点保持兼容', () => {
+    const r = workflowDefSchema.safeParse({
+      name: 'capability-loop',
+      nodes: [{
+        id: 'implement',
+        type: 'agent',
+        prompt: 'implement the change',
+        contract: {
+          acceptanceCriteria: [{
+            id: 'tests',
+            description: 'unit tests pass',
+            evaluator: { kind: 'command', run: 'pnpm test' },
+          }],
+          budget: { maxAttempts: 2 },
+        },
+      }],
+    });
+
+    expect(r.success).toBe(true);
+    if (r.success) {
+      const node = r.data.nodes[0];
+      expect(node?.type === 'agent' ? node.contract?.budget.maxAttempts : undefined).toBe(2);
+    }
+    expect(workflowDefSchema.safeParse(base).success).toBe(true);
+  });
+
   it('接受带显式真假后继的 condition 和有界 fanout', () => {
     const r = workflowDefSchema.safeParse({
       name: 'branch-and-fanout',

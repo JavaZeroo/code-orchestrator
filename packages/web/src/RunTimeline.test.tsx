@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { ForgeRefRow } from './api';
-import { ForgeCard, isForgeCommentEligible, isForgeRetestEligible, RunHistoryAction, RunNoteCard, RunNoteComposer } from './RunTimeline';
+import { CapabilityEventCard, ForgeCard, isForgeCommentEligible, isForgeRetestEligible, RunHistoryAction, RunNoteCard, RunNoteComposer } from './RunTimeline';
 
 const gitcodePr: ForgeRefRow = {
   id: 'ref/1',
@@ -124,5 +124,52 @@ describe('workflow run notes', () => {
     expect(ready).not.toContain('disabled=""');
     expect(saving).toContain('disabled=""');
     expect(saving).toContain('保存中…');
+  });
+});
+
+describe('Agent capability events', () => {
+  it('renders evaluator evidence as a distinct timeline status card', () => {
+    const markup = renderToStaticMarkup(
+      <CapabilityEventCard kind="evaluation" payload={{
+        nodeId: 'implement',
+        attempt: 2,
+        criterionId: 'tests',
+        status: 'failed',
+        detail: 'command exited 1: one test failed',
+        evidence: {
+          kind: 'command', criterionId: 'tests', command: 'pnpm test', pass: false,
+          exitCode: 1, stdout: '', stderr: 'one test failed', durationMs: 10,
+        },
+      }} />,
+    );
+
+    expect(markup).toContain('aria-label="Agent 验收事件"');
+    expect(markup).toContain('Attempt 2');
+    expect(markup).toContain('tests');
+    expect(markup).toContain('one test failed');
+  });
+
+  it('renders the number of persisted Attempts from an outcome payload', () => {
+    const markup = renderToStaticMarkup(
+      <CapabilityEventCard kind="outcome" payload={{
+        status: 'achieved',
+        nodeId: 'implement',
+        evidence: [{
+          kind: 'command', criterionId: 'tests', command: 'pnpm test', pass: true,
+          exitCode: 0, stdout: '', stderr: '', durationMs: 10,
+        }],
+        attempts: [1, 2].map((number) => ({
+          number,
+          sessionId: 's1',
+          startedAt: `2026-07-15T00:0${number}:00.000Z`,
+          status: number === 2 ? 'passed' as const : 'failed' as const,
+          evaluations: [],
+          evidence: [],
+        })),
+        summary: 'All checks pass',
+      }} />,
+    );
+
+    expect(markup).toContain('2 Attempts');
   });
 });

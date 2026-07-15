@@ -13,6 +13,8 @@ import { startForgePoller } from './forge/poller';
 import { startIntakePoller } from './forge/intake';
 import { startLarkNotifier } from './lark/notifier';
 import { registerForgeRoutes } from './routes/forge';
+import { registerAgentBackendRoutes } from './routes/agentBackends';
+import { registerCapabilityRoutes } from './routes/capability';
 import { registerLarkRoutes } from './routes/lark';
 import { registerLlmRoutes } from './routes/llm';
 import { registerMeRoutes } from './routes/me';
@@ -207,6 +209,8 @@ export async function createApp(options: CreateAppOptions = {}): Promise<Fastify
 
   await registerMachineRoutes(app);
   await registerResourceRoutes(app);
+  await registerAgentBackendRoutes(app);
+  await registerCapabilityRoutes(app);
   await registerRunnerHub(app);
   registerClientHub(app, authEnabled);
   await registerSessionRoutes(app);

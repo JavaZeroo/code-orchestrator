@@ -8,7 +8,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { createEnvelope } from '@co/protocol';
 import type { ApprovalDecision, ApprovalRequest, MessageMeta, SessionAgent, SessionEnvelope, SessionState } from '@co/protocol';
-import type { DriverEmit, SessionUsage } from '../claude/driver';
+import type { DriverEmit, SessionUsage } from '../driverTypes';
 import type { RunnerSession } from '../sessions';
 
 export interface ContainerSpawnParams {

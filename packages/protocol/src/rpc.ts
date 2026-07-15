@@ -115,6 +115,7 @@ export const runnerMethods = {
       sessionId: z.string(),
       text: z.string(),
       meta: MessageMetaSchema.optional(),
+      idempotencyKey: z.string().trim().min(1).optional(),
     }),
     result: z.object({ ok: z.boolean(), error: z.string().optional() }),
   },
@@ -468,7 +469,7 @@ export const serverMethods = {
           inputTokens: z.number(),
           outputTokens: z.number(),
           cacheReadTokens: z.number(),
-          costUsd: z.number(),
+          costUsd: z.number().optional(),
           turns: z.number(),
         })
         .optional(),

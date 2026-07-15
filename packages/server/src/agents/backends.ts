@@ -4,8 +4,9 @@
  * 跨机一致（git 中心仓）留 v2。可插拔——opencode 等以后加一个 backend，co 同步机制不变。
  */
 
-export interface AgentBackend {
-  name: string;
+import { builtinAgentBackendDescriptors, type AgentBackendDescriptor } from '@co/protocol';
+
+export interface AgentBackend extends AgentBackendDescriptor {
   /**
    * 容器内该后端的记忆目录（会话 cwd=/workspace 下）。
    * Claude Code：`~/.claude/projects/<cwd-slug>/memory`，cwd=/workspace → slug `-workspace`。
@@ -15,12 +16,12 @@ export interface AgentBackend {
 }
 
 const claudeCode: AgentBackend = {
-  name: 'claude',
+  ...builtinAgentBackendDescriptors.claude,
   memoryContainerPath: '/root/.claude/projects/-workspace/memory',
 };
 
 const codex: AgentBackend = {
-  name: 'codex',
+  ...builtinAgentBackendDescriptors.codex,
   memoryContainerPath: '/root/.codex/memories',
 };
 
@@ -31,4 +32,8 @@ const registry: Record<string, AgentBackend> = {
 
 export function getAgentBackend(name: string): AgentBackend | null {
   return registry[name] ?? null;
+}
+
+export function listAgentBackends(): AgentBackend[] {
+  return Object.values(registry);
 }

@@ -12,6 +12,7 @@
     "test": "pnpm test:unit",
     "test:unit": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "benchmark:agent": "tsx src/benchmarks/reportAgentCapability.ts",
     "test:st": "vitest run --config vitest.st.config.ts"
   },
   "dependencies": {

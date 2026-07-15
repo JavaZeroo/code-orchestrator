@@ -1,4 +1,4 @@
-import type { ApprovalRequest, RunNoteDeletionPayload, RunNotePayload, RunNoteRevisionPayload, SessionAgent, SessionEnvelope, SessionNoteDeletionPayload, SessionNotePayload, SessionNoteRevisionPayload, SessionState, WorkflowDef } from '@co/protocol';
+import type { ApprovalRequest, CapabilityLoopState, RunNoteDeletionPayload, RunNotePayload, RunNoteRevisionPayload, SessionAgent, SessionEnvelope, SessionNoteDeletionPayload, SessionNotePayload, SessionNoteRevisionPayload, SessionState, WorkflowDef } from '@co/protocol';
 
 export interface EventRow {
   seq: number;
@@ -302,8 +302,7 @@ export interface NodeStateRow {
   nodeId: string;
   status: string;
   sessionId: string | null;
-  output: {
-    kind?: string;
+  output: (Partial<CapabilityLoopState> & {
     summary?: string;
     error?: string;
     verdict?: string;
@@ -330,7 +329,7 @@ export interface NodeStateRow {
       }>;
     }>;
     sessions?: Array<{ sessionId: string; idx: number | 'arbiter'; status: string }>;
-  } | null;
+  }) | null;
   /** 该节点执行时使用的模型（来自 sessions 表） */
   model?: string | null;
   updatedAt: string;

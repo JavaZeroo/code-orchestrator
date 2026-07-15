@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "protocol-task-contract",
+  "title": "Add an evidence-backed task contract",
+  "category": "feature",
+  "repository": {
+    "path": ".",
+    "baseRef": "95cbe39adfc886dbc7c7393907f9196e81612965"
+  },
+  "prompt": "Add a versioned TaskContract protocol schema with command acceptance criteria, required evidence, constraints and bounded attempts. Agent workflow nodes must accept an optional contract while all existing workflow definitions remain valid. Add behavior-focused protocol tests.",
+  "contract": {
+    "acceptanceCriteria": [
+      {
+        "id": "protocol-tests",
+        "description": "Protocol contract and workflow compatibility tests pass",
+        "evaluator": {
+          "kind": "command",
+          "run": "pnpm --filter @co/protocol test:unit && pnpm --filter @co/protocol typecheck",
+          "timeoutMs": 300000
+        }
+      }
+    ],
+    "requiredEvidence": ["evaluation"],
+    "constraints": [
+      "Keep existing workflow JSON backward compatible",
+      "Do not add a database migration"
+    ],
+    "budget": { "maxAttempts": 3 }
+  },
+  "expectations": {
+    "status": "achieved",
+    "maxAttempts": 3,
+    "maxHumanInterventions": 0
+  },
+  "tags": ["protocol", "contract", "compatibility"]
+}

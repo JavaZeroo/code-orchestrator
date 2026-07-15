@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "id": "backend-adapter-seam",
+  "title": "Deepen the Claude/Codex Backend seam",
+  "category": "refactor",
+  "repository": {
+    "path": ".",
+    "baseRef": "95cbe39adfc886dbc7c7393907f9196e81612965"
+  },
+  "prompt": "Replace scattered Claude/Codex lifecycle switches with a RunnerBackendAdapter registry and a shared protocol capability descriptor. Preserve spawn, resume, fork, container and approval behavior. Unsupported feature combinations must fail through capability negotiation with a useful reason.",
+  "contract": {
+    "acceptanceCriteria": [
+      {
+        "id": "runner-tests",
+        "description": "Backend adapter, resume, fork and driver tests pass",
+        "evaluator": {
+          "kind": "command",
+          "run": "pnpm --filter @co/runner exec vitest run src/backendAdapters.test.ts src/methods.resume.test.ts src/methods.fork.test.ts src/claude/driver.test.ts src/codex/driver.test.ts",
+          "timeoutMs": 300000
+        }
+      },
+      {
+        "id": "runner-types",
+        "description": "Runner typecheck passes",
+        "evaluator": {
+          "kind": "command",
+          "run": "pnpm --filter @co/runner typecheck",
+          "timeoutMs": 300000
+        }
+      }
+    ],
+    "requiredEvidence": ["evaluation", "agent_summary"],
+    "constraints": [
+      "Claude and Codex must be two real Adapter implementations",
+      "Do not couple the common DriverEmit interface to one backend",
+      "Keep opencode explicitly unsupported until it has a real Adapter"
+    ],
+    "budget": { "maxAttempts": 3 }
+  },
+  "expectations": {
+    "status": "achieved",
+    "maxAttempts": 3,
+    "maxHumanInterventions": 0
+  },
+  "tags": ["backend", "adapter", "capabilities"]
+}

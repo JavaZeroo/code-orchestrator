@@ -29,6 +29,35 @@ describe('createApp', () => {
     expect(res.json()).toEqual({ machines: [] });
   });
 
+  it('exposes Agent Backend capabilities for feature negotiation', async () => {
+    const res = await (await testApp()).inject({ method: 'GET', url: '/api/agent-backends' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      backends: [
+        expect.objectContaining({
+          name: 'claude',
+          capabilities: expect.objectContaining({ designerTools: true }),
+          constraints: expect.arrayContaining([
+            expect.objectContaining({ reason: expect.stringContaining('host session') }),
+          ]),
+        }),
+        expect.objectContaining({
+          name: 'codex',
+          capabilities: expect.objectContaining({ designerTools: false }),
+          rejectionReasons: expect.objectContaining({ designerTools: expect.stringContaining('does not support') }),
+        }),
+      ],
+    });
+  });
+
+  it('registers capability metrics as a database-backed projection', async () => {
+    const res = await (await testApp()).inject({ method: 'GET', url: '/api/capability/metrics' });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: 'database not available' });
+  });
+
   it('returns 503 for DB-backed machine mutations when DATABASE_URL is absent', async () => {
     const res = await (await testApp()).inject({
       method: 'POST',

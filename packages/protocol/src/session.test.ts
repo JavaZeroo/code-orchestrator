@@ -1,5 +1,49 @@
 import { describe, expect, it } from 'vitest';
-import { sessionNoteDeletionPayloadSchema, sessionNoteMarkdownSchema, sessionNotePayloadSchema, sessionNoteRevisionPayloadSchema } from './session';
+import {
+  agentBackendDescriptorSchema,
+  sessionNoteDeletionPayloadSchema,
+  sessionNoteMarkdownSchema,
+  sessionNotePayloadSchema,
+  sessionNoteRevisionPayloadSchema,
+  supportsAgentBackendCapability,
+} from './session';
+
+describe('AgentBackend capability contract', () => {
+  it('lets callers negotiate features without branching on backend names', () => {
+    const descriptor = agentBackendDescriptorSchema.parse({
+      name: 'claude',
+      capabilities: {
+        hostSession: true,
+        containerSession: true,
+        resume: true,
+        fork: true,
+        interrupt: true,
+        designerTools: true,
+        taskIntakeTools: true,
+      },
+    });
+
+    expect(supportsAgentBackendCapability(descriptor, 'designerTools')).toBe(true);
+    expect(supportsAgentBackendCapability(descriptor, 'resume')).toBe(true);
+    expect(descriptor.constraints).toEqual([]);
+  });
+
+  it('publishes combination constraints with a user-visible rejection reason', () => {
+    const descriptor = agentBackendDescriptorSchema.parse({
+      name: 'claude',
+      capabilities: {
+        hostSession: true, containerSession: true, resume: true, fork: true,
+        interrupt: true, designerTools: true, taskIntakeTools: true,
+      },
+      constraints: [{
+        allOf: ['containerSession', 'designerTools'],
+        reason: 'designer tools require a host session',
+      }],
+    });
+
+    expect(descriptor.constraints[0]?.reason).toContain('host session');
+  });
+});
 
 describe('session note schema', () => {
   it('normalizes Markdown notes and rejects blank content', () => {

@@ -179,6 +179,26 @@ describe('workflow run transcript collection', () => {
 });
 
 describe('workflow run transcript Markdown', () => {
+  it('exports capability attempts, evaluator evidence, and outcomes with stable labels', () => {
+    const markdown = formatRunTranscript({
+      run, def, nodes, forgeRefs: [],
+      events: [
+        { seq: 1, type: 'run.capability.attempt', payload: { nodeId: 'build', attempt: 1, status: 'evaluating' } },
+        { seq: 2, type: 'run.capability.evaluation', payload: { nodeId: 'build', attempt: 1, criterionId: 'tests', status: 'failed', detail: 'command exited 1' } },
+        { seq: 3, type: 'run.capability.evidence', payload: { nodeId: 'build', attempt: 1, evidence: { kind: 'agent_summary', text: 'partial fix' } } },
+        { seq: 4, type: 'run.capability.context_pack', payload: { nodeId: 'build', version: 1, attempt: { number: 2 } } },
+        { seq: 5, type: 'run.capability.outcome', payload: { nodeId: 'build', status: 'exhausted', attempts: 1, summary: 'not verified' } },
+      ],
+    });
+
+    expect(markdown).toContain('Agent capability attempt');
+    expect(markdown).toContain('Agent capability evaluation');
+    expect(markdown).toContain('Agent capability evidence');
+    expect(markdown).toContain('Agent context pack');
+    expect(markdown).toContain('Agent capability outcome');
+    expect(markdown).toContain('command exited 1');
+  });
+
   it('omits deleted note content but retains its audit tombstone', () => {
     const markdown = formatRunTranscript({
       run, def, nodes, forgeRefs: [],

@@ -1,10 +1,12 @@
 import { Archive, ArchiveRestore, ArrowLeft, Check, Download, ExternalLink, Pause, Pencil, Play, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { capabilityLoopStateSchema } from '@co/protocol';
 import { api, type ApprovalRow, type ForgeRefRow, type NodeStateRow, type RunNoteEventRow, type RunRerunResult, type RunRetryResult, type RunRow, type WorkflowDefRow } from './api';
 import { FlowGraph } from './FlowGraph';
 import { RunTimeline } from './RunTimeline';
 import { Markdown } from './components/Markdown';
+import { CapabilityOutcomePanel } from './components/CapabilityOutcomePanel';
 import { RejectionFeedback, type ApprovalDecisionHandler } from './components/RejectionFeedback';
 import { Button } from './components/ui/button';
 import { Badge, StatusDot, type BadgeTone } from './components/ui/primitives';
@@ -428,6 +430,8 @@ export function RunView({
   // graph 模式派生
   const statuses = useMemo(() => Object.fromEntries(nodes.map((n) => [n.nodeId, n.status])), [nodes]);
   const selState = nodes.find((n) => n.nodeId === selected);
+  const capabilityStateResult = capabilityLoopStateSchema.safeParse(selState?.output);
+  const capabilityState = capabilityStateResult.success ? capabilityStateResult.data : null;
   const selNode = def?.graph.nodes.find((n) => n.id === selected);
   // def 标题里的 {{vars.x}} 模板用本 run 变量插值（thread 视图在 RunTimeline 内处理）
   const interpTitle = useCallback((t?: string) => {
@@ -741,6 +745,7 @@ export function RunView({
                   </pre>
                 </div>
               )}
+              {capabilityState && <CapabilityOutcomePanel state={capabilityState} />}
               {selNode.type === 'condition' && typeof selState?.output?.result === 'boolean' && (
                 <div className="rounded-lg border border-line bg-panel-2 p-3 text-sm">
                   条件结果：<Badge tone={selState.output.result ? 'ok' : 'warn'}>{selState.output.result ? '是' : '否'}</Badge>

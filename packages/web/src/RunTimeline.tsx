@@ -1,7 +1,15 @@
 import { ArrowDown, ArrowUp, Check, ChevronRight, ExternalLink, GitBranch, NotebookPen, Pencil, RefreshCw, Send, Trash2, Wrench, X } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { RUN_NOTE_MAX_LENGTH } from '@co/protocol';
+import {
+  RUN_NOTE_MAX_LENGTH,
+  capabilityAttemptEventPayloadSchema,
+  capabilityEvaluationEventPayloadSchema,
+  capabilityOutcomeEventPayloadSchema,
+  type CapabilityAttemptEventPayload,
+  type CapabilityEvaluationEventPayload,
+  type CapabilityOutcomeEventPayload,
+} from '@co/protocol';
 import type { ApprovalRequest, EventRow, ForgeRefRow, NodeStateRow, RunNotePayload, RunRow, SessionEnvelope, WorkflowDefRow, WorkflowDef } from './api';
 import { api } from './api';
 import { foldSessionEvents, type ApprovalItem } from './Timeline';
@@ -167,6 +175,36 @@ function StatusCard({ nodeId, status, title, type, model }: {
         </span>
       </div>
     </div>
+  );
+}
+
+export function CapabilityEventCard({ kind, payload }: {
+  kind: 'attempt' | 'evaluation' | 'outcome';
+  payload: CapabilityAttemptEventPayload | CapabilityEvaluationEventPayload | CapabilityOutcomeEventPayload;
+}) {
+  const status = payload.status;
+  const tone: BadgeTone = ['achieved', 'passed'].includes(status)
+    ? 'ok'
+    : ['failed', 'blocked', 'exhausted'].includes(status)
+      ? 'danger'
+      : status === 'error' ? 'warn' : 'run';
+  const title = kind === 'attempt' ? 'Agent Attempt' : kind === 'evaluation' ? '验收结果' : '能力结果';
+  return (
+    <section aria-label="Agent 验收事件" className="self-stretch rounded-lg border border-line bg-panel/60 px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-ink">{title}</span>
+        {'attempt' in payload && <span className="mono-nums text-dim">Attempt {payload.attempt}</span>}
+        {'attempts' in payload && (
+          <span className="mono-nums text-dim">
+            {payload.attempts.length} Attempts
+          </span>
+        )}
+        {'criterionId' in payload && <code className="font-mono text-[11px] text-ink-2">{payload.criterionId}</code>}
+        <Badge tone={tone}>{status}</Badge>
+      </div>
+      {'detail' in payload && <p className="mt-1 whitespace-pre-wrap text-dim">{payload.detail}</p>}
+      {'summary' in payload && <p className="mt-1 whitespace-pre-wrap text-ink-2">{payload.summary}</p>}
+    </section>
   );
 }
 
@@ -661,6 +699,25 @@ export function RunTimeline({
             key: `ns-${row.seq}`,
             seq: row.seq,
             el: <StatusCard nodeId={p.nodeId} status={p.status} title={nd?.title} type={nd?.type} model={ns?.model} />,
+          });
+        } else if (
+          row.type === 'run.capability.attempt'
+          || row.type === 'run.capability.evaluation'
+          || row.type === 'run.capability.outcome'
+        ) {
+          const kind = row.type === 'run.capability.attempt'
+            ? 'attempt'
+            : row.type === 'run.capability.evaluation' ? 'evaluation' : 'outcome';
+          const parsed = row.type === 'run.capability.attempt'
+            ? capabilityAttemptEventPayloadSchema.safeParse(row.payload)
+            : row.type === 'run.capability.evaluation'
+              ? capabilityEvaluationEventPayloadSchema.safeParse(row.payload)
+              : capabilityOutcomeEventPayloadSchema.safeParse(row.payload);
+          if (!parsed.success) continue;
+          out.push({
+            key: `cap-${row.seq}`,
+            seq: row.seq,
+            el: <CapabilityEventCard kind={kind} payload={parsed.data} />,
           });
         } else if (row.type === 'forge.ref_registered') {
           const p = row.payload as { forge: string; repo: string; number: number; nodeId?: string };

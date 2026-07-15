@@ -6,8 +6,8 @@
  * 打包成自包含 agent.mjs（esbuild，SDK external），挂进容器用挂载的 node 执行。
  */
 
-import { ClaudeSession, type DriverEmit } from '../claude/driver';
-import { CodexSession } from '../codex/driver';
+import { getRunnerBackendAdapter } from '../backendAdapters';
+import type { DriverEmit } from '../driverTypes';
 import type { ApprovalDecision, RunnerParams } from '@co/protocol';
 import type { RunnerSession } from '../sessions';
 
@@ -40,14 +40,11 @@ const emit: DriverEmit = {
 };
 
 function createSession(p: RunnerParams<'session.spawn'>): RunnerSession {
-  switch (p.agent) {
-    case 'claude':
-      return new ClaudeSession(p, emit);
-    case 'codex':
-      return new CodexSession(p, emit);
-    default:
-      fail(`agent "${p.agent}" not supported in container agent`);
+  const backend = getRunnerBackendAdapter(p.agent);
+  if (!backend || !backend.descriptor.capabilities.containerSession) {
+    fail(`agent "${p.agent}" not supported in container agent`);
   }
+  return backend.createSession(p, emit);
 }
 
 const session = createSession(params);

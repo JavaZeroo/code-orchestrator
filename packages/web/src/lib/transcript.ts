@@ -605,6 +605,34 @@ function appendRunTimelineEvent(
     case 'run.node.revise':
       label = 'Node revision';
       break;
+    case 'run.capability.attempt':
+      label = 'Agent capability attempt';
+      if (typeof payload.attempt === 'number') details.push(`- **Attempt:** ${inlineCode(payload.attempt)}`);
+      if (typeof payload.status === 'string') details.push(`- **Status:** ${inlineCode(payload.status)}`);
+      break;
+    case 'run.capability.evaluation':
+      label = 'Agent capability evaluation';
+      if (typeof payload.attempt === 'number') details.push(`- **Attempt:** ${inlineCode(payload.attempt)}`);
+      if (typeof payload.criterionId === 'string') details.push(`- **Criterion:** ${inlineCode(payload.criterionId)}`);
+      if (typeof payload.status === 'string') details.push(`- **Status:** ${inlineCode(payload.status)}`);
+      break;
+    case 'run.capability.evidence': {
+      label = 'Agent capability evidence';
+      if (typeof payload.attempt === 'number') details.push(`- **Attempt:** ${inlineCode(payload.attempt)}`);
+      const evidence = record(payload.evidence);
+      if (typeof evidence.kind === 'string') {
+        details.push(`- **Evidence:** ${inlineCode(evidence.kind)}`);
+      }
+      break;
+    }
+    case 'run.capability.context_pack':
+      label = 'Agent context pack';
+      if (typeof payload.version === 'number') details.push(`- **Version:** ${inlineCode(payload.version)}`);
+      break;
+    case 'run.capability.outcome':
+      label = 'Agent capability outcome';
+      if (typeof payload.status === 'string') details.push(`- **Status:** ${inlineCode(payload.status)}`);
+      break;
     case 'run.check':
       label = 'Node check';
       break;

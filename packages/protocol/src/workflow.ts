@@ -4,6 +4,7 @@
  */
 
 import * as z from 'zod';
+import { taskContractSchema } from './capability';
 import { sessionAgentSchema } from './session';
 
 export const RUN_NOTE_MAX_LENGTH = 20_000;
@@ -57,6 +58,9 @@ export const agentNodeSchema = nodeBase.extend({
     .optional(),
   /** 预期产物路径，供下游节点与 UI 展示 */
   outputs: z.array(z.string()).optional(),
+  /** Agent 任务级成功契约。配置后，回合结束仅代表一次 Attempt 结束；
+   *  所有 acceptance criteria 通过后节点才完成。 */
+  contract: taskContractSchema.optional(),
 });
 export type AgentNode = z.infer<typeof agentNodeSchema>;
 

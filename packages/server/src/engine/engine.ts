@@ -8,14 +8,23 @@
  * - 崩溃恢复：boot 时重建普通、fanout、meeting 会话索引，补查漏掉的 turn-end
  */
 
+import { createHash } from 'node:crypto';
 import { createId } from '@paralleldrive/cuid2';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import {
+  capabilityAttemptEventPayloadSchema,
+  capabilityContextPackEventPayloadSchema,
+  capabilityEvaluationEventPayloadSchema,
+  capabilityEvidenceEventPayloadSchema,
+  capabilityLoopStateSchema,
+  capabilityOutcomeEventPayloadSchema,
+  taskContractSchema,
   workflowDefSchema,
   type AgentNode,
   type ApprovalDecision,
   type CheckNode,
   type ConditionNode,
+  type Evidence,
   type FanoutNode,
   type GateNode,
   type MeetingNode,
@@ -38,6 +47,26 @@ import {
   skippedBranchNodeIds,
   substituteTemplate,
 } from './kernel';
+import {
+  beginNextCapabilityAttempt,
+  blockCapabilityLoop,
+  evaluateTaskContract,
+  eventBelongsToCurrentAttempt,
+  markCapabilityEvaluating,
+  recordCapabilityEvaluation,
+  recordCapabilityFailure,
+  startCapabilityLoop,
+  taskContractInstruction,
+  usageEvidenceForAttempt,
+  type CapabilityLoopState,
+} from './capabilityLoop';
+import {
+  buildContextPack,
+  renderContextPack,
+  type RepositoryInstructionRef,
+} from './contextPack';
+import { evaluatorRunnerCall, repositoryInstructionRunnerCall } from './capabilityWorkspace';
+import { deliverCapabilityFeedback } from './capabilityRuntime';
 
 type RunContext = {
   vars: Record<string, string>;
@@ -78,6 +107,11 @@ const MAX_AGENT_RETRIES = Number(process.env.AGENT_MAX_RETRIES ?? 2);
 // 返工轮次已改为持久化在 run.context.reviseRounds（重启后仍守上限），不再用内存 Map
 /** turn 名义 completed 但实际是传输层/限流错误（SDK 有时把 API 错误也标 success）——判为可重试失败 */
 const TRANSIENT_ERROR_RE = /^\s*(API Error|Unable to connect to API|ECONNRESET|ETIMEDOUT|overloaded_error|rate_limit|Internal server error|502 |503 |529 )/i;
+
+function asCapabilityLoopState(value: unknown): CapabilityLoopState | null {
+  const parsed = capabilityLoopStateSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
 
 function parseDef(graph: unknown): WorkflowDef {
   return workflowDefSchema.parse(graph);
@@ -250,6 +284,7 @@ async function reconcileQueuedExecutions(
       continue;
     }
 
+    const capabilityOutput = asCapabilityLoopState(state.output);
     const queuedOutput = state.output as { queuedTaskId?: string; phase?: string } | null;
     const queuedTaskId = queuedOutput?.queuedTaskId;
     if (!queuedTaskId) continue;
@@ -258,10 +293,18 @@ async function reconcileQueuedExecutions(
       .from(schema.taskQueue)
       .where(eq(schema.taskQueue.id, queuedTaskId))
       .limit(1);
-    if (task?.status === 'running' && queuedOutput?.phase !== 'running') {
+    const executionIsRunning = capabilityOutput
+      ? capabilityOutput.execution === 'running'
+      : queuedOutput?.phase === 'running';
+    if (task?.status === 'running' && !executionIsRunning) {
       await db
         .update(schema.nodeStates)
-        .set({ output: { phase: 'running', queuedTaskId }, updatedAt: new Date() })
+        .set({
+          output: capabilityOutput
+            ? { ...capabilityOutput, execution: 'running' }
+            : { phase: 'running', queuedTaskId },
+          updatedAt: new Date(),
+        })
         .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, state.nodeId)));
       changed = true;
     } else if (task?.status === 'failed' || task?.status === 'cancelled') {
@@ -370,8 +413,15 @@ function pickMachine(selector: AgentNode['machine']): string | null {
 
 function agentMeta(node: Omit<AgentNode, 'id' | 'type'>): NonNullable<Parameters<typeof spawnSession>[0]['meta']> | undefined {
   const meta: NonNullable<Parameters<typeof spawnSession>[0]['meta']> = {};
+  const systemPrompt: string[] = [];
   if (node.role) {
-    meta.appendSystemPrompt = `你在工作流中承担「${node.role}」角色。`;
+    systemPrompt.push(`你在工作流中承担「${node.role}」角色。`);
+  }
+  if (node.contract) {
+    systemPrompt.push(taskContractInstruction(node.contract));
+  }
+  if (systemPrompt.length > 0) {
+    meta.appendSystemPrompt = systemPrompt.join('\n\n');
   }
   if (node.permissionMode) {
     meta.permissionMode = node.permissionMode;
@@ -463,6 +513,7 @@ async function failNode(runId: string, nodeId: string, error: string): Promise<v
 
 async function execAgent(runId: string, node: AgentNode, context: RunContext): Promise<void> {
   const db = getDb();
+  let capabilityState: CapabilityLoopState | undefined;
   try {
     const { sessionId, queuedTaskId } = await spawnWorkflowAgent(
       runId,
@@ -472,18 +523,32 @@ async function execAgent(runId: string, node: AgentNode, context: RunContext): P
       {},
       { runId, nodeId: node.id },
       async (stableSessionId) => {
+        capabilityState = node.contract
+          ? startCapabilityLoop(node.contract, stableSessionId, new Date().toISOString())
+          : undefined;
         await db
           .update(schema.nodeStates)
-          .set({ status: 'running', sessionId: stableSessionId, output: null, updatedAt: new Date() })
+          .set({ status: 'running', sessionId: stableSessionId, output: capabilityState ?? null, updatedAt: new Date() })
           .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
       },
     );
+    if (capabilityState) {
+      const current = capabilityState.attempts.at(-1);
+      capabilityState = {
+        ...capabilityState,
+        attempts: current && current.sessionId !== sessionId
+          ? [...capabilityState.attempts.slice(0, -1), { ...current, sessionId }]
+          : capabilityState.attempts,
+        queuedTaskId,
+        execution: queuedTaskId ? 'queued' : 'running',
+      };
+    }
     await db
       .update(schema.nodeStates)
       .set({
         status: 'running',
         sessionId,
-        output: queuedTaskId ? { phase: 'queued', queuedTaskId } : null,
+        output: capabilityState ?? (queuedTaskId ? { phase: 'queued', queuedTaskId } : null),
         updatedAt: new Date(),
       })
       .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
@@ -491,6 +556,18 @@ async function execAgent(runId: string, node: AgentNode, context: RunContext): P
       sessionId,
       ...(queuedTaskId ? { phase: 'queued', queuedTaskId } : {}),
     });
+    if (capabilityState) {
+      await publish({
+        type: 'run.capability.attempt',
+        runId,
+        sessionId,
+        payload: capabilityAttemptEventPayloadSchema.parse({
+          nodeId: node.id,
+          attempt: 1,
+          status: queuedTaskId ? 'queued' : 'running',
+        }),
+      });
+    }
   } catch (err) {
     await failNode(runId, node.id, err instanceof Error ? err.message : String(err));
   }
@@ -894,10 +971,10 @@ async function execGate(runId: string, node: GateNode, context: RunContext): Pro
  *  失败且配了 reviseLoop → 回灌 target 返工、重跑本 check(复用 triggerRevision)。这是 TDD 红绿内环 / typecheck 门的机制。 */
 async function execCheck(runId: string, node: CheckNode, context: RunContext): Promise<void> {
   const db = getDb();
-  const setDone = async (pass: boolean, detail: string, exitCode: number) => {
+  const setDone = async (pass: boolean, detail: string, exitCode: number, evidence?: Evidence) => {
     await db
       .update(schema.nodeStates)
-      .set({ status: 'done', output: { kind: 'check', pass, detail, exitCode }, updatedAt: new Date() })
+      .set({ status: 'done', output: { kind: 'check', pass, detail, exitCode, evidence }, updatedAt: new Date() })
       .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
     const runRows = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId)).limit(1);
     if (runRows[0]) {
@@ -905,7 +982,7 @@ async function execCheck(runId: string, node: CheckNode, context: RunContext): P
       ctx.outputs[node.id] = pass ? 'PASS' : `FAIL(exit ${exitCode}): ${detail.slice(0, 800)}`;
       await db.update(schema.workflowRuns).set({ context: ctx }).where(eq(schema.workflowRuns.id, runId));
     }
-    await publish({ type: 'run.check', runId, payload: { nodeId: node.id, pass, exitCode } });
+    await publish({ type: 'run.check', runId, payload: { nodeId: node.id, pass, exitCode, evidence } });
     await publishNodeState(runId, node.id, 'done', { pass, exitCode });
     scheduleTick(runId);
   };
@@ -933,29 +1010,39 @@ async function execCheck(runId: string, node: CheckNode, context: RunContext): P
     .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
   await publishNodeState(runId, node.id, 'running');
 
-  let result: { exitCode: number; stdout: string; stderr: string };
-  try {
-    result = await callRunner(machineId, 'machine.exec', {
-      cmd: substitute(critic.run, context),
-      cwd: substitute(cwd, context),
-      timeoutMs: critic.timeoutMs,
-    });
-  } catch (err) {
-    return fail(`command-critic 执行失败: ${err instanceof Error ? err.message : String(err)}`);
+  const contract = taskContractSchema.parse({
+    acceptanceCriteria: [{
+      id: node.id,
+      description: node.title ?? `check ${node.id}`,
+      evaluator: { kind: 'command', run: substitute(critic.run, context), timeoutMs: critic.timeoutMs },
+    }],
+  });
+  const [evaluation] = await evaluateTaskContract(
+    contract,
+    substitute(cwd, context),
+    ({ command, cwd: commandCwd, timeoutMs }) => callRunner(machineId, 'machine.exec', {
+      cmd: command,
+      cwd: commandCwd,
+      timeoutMs,
+    }, timeoutMs + 5_000),
+  );
+  if (!evaluation || evaluation.status === 'error') {
+    return fail(evaluation?.detail ?? 'command-critic 没有返回验证结果');
   }
 
-  const pass = result.exitCode === 0;
-  const detail = pass ? 'ok' : (result.stderr || result.stdout).slice(-3000);
-  console.log(`[engine] check ${node.id} → ${pass ? 'PASS' : `FAIL(exit ${result.exitCode})`} (run ${runId})`);
+  const pass = evaluation.status === 'passed';
+  const detail = pass ? 'ok' : (evaluation.evidence.stderr || evaluation.evidence.stdout).slice(-3000);
+  const exitCode = evaluation.evidence.exitCode;
+  console.log(`[engine] check ${node.id} → ${pass ? 'PASS' : `FAIL(exit ${exitCode})`} (run ${runId})`);
 
   // 失败 + 有返工闭环 → 回灌 target 修，重跑本 check
   if (!pass && node.reviseLoop) {
-    const feedback = `command-critic「${node.title ?? node.id}」未通过（命令 \`${critic.run}\`，exit ${result.exitCode}）：\n${detail}\n请修复使其通过，然后 commit + push（同分支同 PR）。`;
+    const feedback = `command-critic「${node.title ?? node.id}」未通过（命令 \`${critic.run}\`，exit ${exitCode}）：\n${detail}\n请修复使其通过，然后 commit + push（同分支同 PR）。`;
     if (await triggerRevision(runId, node.id, node.reviseLoop.target, feedback, node.reviseLoop.maxRounds)) {
       return; // 已返工：本 check→pending，target 改完 tick 重跑
     }
   }
-  await setDone(pass, detail, result.exitCode);
+  await setDone(pass, detail, exitCode, evaluation.evidence);
 }
 
 // ---------- meeting 节点 ----------
@@ -1473,6 +1560,353 @@ async function completeFanoutChild(
   await advancePersistedFanout(ref.runId, ref.nodeId, output);
 }
 
+const ROOT_INSTRUCTION_PATHS = ['AGENTS.md', 'CLAUDE.md', '.co/AGENTS.md'] as const;
+
+async function collectRepositoryInstructionRefs(
+  machineId: string,
+  workspace: { cwd: string; containerId?: string | null },
+): Promise<RepositoryInstructionRef[]> {
+  const refs: RepositoryInstructionRef[] = [];
+  for (const path of ROOT_INSTRUCTION_PATHS) {
+    try {
+      const call = repositoryInstructionRunnerCall(workspace, path);
+      let encoded: string | undefined;
+      if (call.method === 'container.exec') {
+        const result = await callRunner(machineId, call.method, call.params, 15_000);
+        if (result.exitCode !== 0 || !result.stdout.startsWith('FOUND\n')) continue;
+        encoded = result.stdout.slice('FOUND\n'.length);
+      } else {
+        const result = await callRunner(machineId, call.method, call.params);
+        if (!result.ok) continue;
+        encoded = result.data;
+      }
+      if (encoded === undefined) continue;
+      const bytes = Buffer.from(encoded, 'base64');
+      refs.push({
+        path,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        size: bytes.length,
+      });
+    } catch {
+      // 指令发现是 Context Pack 增强信息；单个文件不可读不应掩盖已有 evaluator feedback。
+    }
+  }
+  return refs;
+}
+
+async function collectRepositoryCheckpoint(
+  machineId: string,
+  workspace: { cwd: string; containerId?: string | null },
+): Promise<{ gitHead?: string; dirty: boolean }> {
+  try {
+    const call = evaluatorRunnerCall(workspace, {
+      command: 'git rev-parse HEAD && git status --porcelain',
+      cwd: workspace.cwd,
+      timeoutMs: 10_000,
+    });
+    const result = call.method === 'container.exec'
+      ? await callRunner(machineId, call.method, call.params, 15_000)
+      : await callRunner(machineId, call.method, call.params, 15_000);
+    if (result.exitCode !== 0) return { dirty: true };
+    const [head = '', ...status] = result.stdout.split(/\r?\n/);
+    return {
+      ...(head.trim() ? { gitHead: head.trim() } : {}),
+      dirty: status.some((line) => line.trim().length > 0),
+    };
+  } catch {
+    return { dirty: true };
+  }
+}
+
+async function continueContractAgentRetry(args: {
+  sessionId: string;
+  machineId: string;
+  cwd: string;
+  containerId?: string | null;
+  ref: SessionNodeRef;
+  node: AgentNode & { contract: NonNullable<AgentNode['contract']> };
+  context: RunContext;
+  state: CapabilityLoopState;
+}): Promise<void> {
+  const { sessionId, machineId, cwd, containerId, ref, node, context } = args;
+  const db = getDb();
+  let prepared = args.state;
+  if (prepared.phase !== 'feedback_ready' || !prepared.pendingFeedback) {
+    throw new Error(`capability retry is not prepared (phase=${prepared.phase})`);
+  }
+  if (!prepared.contextPack) {
+    const workspace = { cwd, containerId };
+    const instructionRefs = await collectRepositoryInstructionRefs(machineId, workspace);
+    const checkpoint = await collectRepositoryCheckpoint(machineId, workspace);
+    const contextPack = buildContextPack(
+      prepared,
+      cwd,
+      instructionRefs,
+      checkpoint,
+      new Date().toISOString(),
+    );
+    prepared = {
+      ...prepared,
+      contextPack,
+      pendingFeedback: `${prepared.pendingFeedback}\n\n${renderContextPack(contextPack)}`,
+    };
+    await db
+      .update(schema.nodeStates)
+      .set({ output: prepared, updatedAt: new Date() })
+      .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)));
+  }
+  await publish({
+    type: 'run.capability.context_pack',
+    runId: ref.runId,
+    sessionId,
+    payload: capabilityContextPackEventPayloadSchema.parse({ nodeId: ref.nodeId, ...prepared.contextPack }),
+  });
+
+  const retryPrompt = prepared.pendingFeedback;
+  if (!retryPrompt) throw new Error('capability retry feedback is missing');
+  const queuedTaskId = prepared.queuedTaskId;
+  const feedbackKey = `${ref.runId}:${ref.nodeId}:attempt-${prepared.attempts.at(-1)?.number ?? prepared.attempts.length}:feedback`;
+  let nextSessionId = sessionId;
+  let nextQueuedTaskId: string | undefined;
+  let respawned = false;
+  try {
+    await deliverCapabilityFeedback(
+      (params) => callRunner(machineId, 'session.send', params),
+      { sessionId, text: retryPrompt, idempotencyKey: feedbackKey },
+    );
+  } catch {
+    try {
+      const spawned = await spawnWorkflowAgent(
+        ref.runId,
+        ref.nodeId,
+        { ...node, prompt: `${node.prompt}\n\n===== Harness 验证反馈 =====\n${retryPrompt}` },
+        context,
+      );
+      nextSessionId = spawned.sessionId;
+      nextQueuedTaskId = spawned.queuedTaskId;
+      respawned = true;
+      sessionNodes.delete(sessionId);
+    } catch (spawnError) {
+      const blocked = blockCapabilityLoop(
+        prepared,
+        `Could not continue after evaluation: ${spawnError instanceof Error ? spawnError.message : String(spawnError)}`,
+        'agent_execution',
+      );
+      sessionNodes.delete(sessionId);
+      if (queuedTaskId) {
+        await db.update(schema.taskQueue).set({ status: 'failed' }).where(eq(schema.taskQueue.id, queuedTaskId));
+      }
+      await db
+        .update(schema.nodeStates)
+        .set({ status: 'failed', output: blocked, updatedAt: new Date() })
+        .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)));
+      await publish({
+        type: 'run.capability.outcome',
+        runId: ref.runId,
+        sessionId,
+        payload: capabilityOutcomeEventPayloadSchema.parse({ nodeId: ref.nodeId, ...blocked.outcome }),
+      });
+      await publishNodeState(ref.runId, ref.nodeId, 'failed', { outcome: 'blocked' });
+      scheduleTick(ref.runId);
+      return;
+    }
+  }
+  if (queuedTaskId && respawned) {
+    await db.update(schema.taskQueue).set({ status: 'done' }).where(eq(schema.taskQueue.id, queuedTaskId));
+  }
+  let next = beginNextCapabilityAttempt(
+    prepared,
+    nextSessionId,
+    new Date().toISOString(),
+    prepared.contextPack,
+  );
+  next = {
+    ...next,
+    pendingFeedback: undefined,
+    queuedTaskId: nextQueuedTaskId ?? (respawned ? undefined : queuedTaskId),
+    execution: nextQueuedTaskId ? 'queued' : 'running',
+  };
+  await db
+    .update(schema.nodeStates)
+    .set({ status: 'running', sessionId: nextSessionId, output: next, updatedAt: new Date() })
+    .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)));
+  await publish({
+    type: 'run.capability.attempt',
+    runId: ref.runId,
+    sessionId: nextSessionId,
+    payload: capabilityAttemptEventPayloadSchema.parse({
+      nodeId: ref.nodeId,
+      attempt: next.attempts.length,
+      status: nextQueuedTaskId ? 'queued' : 'running',
+      respawned,
+    }),
+  });
+  await publishNodeState(ref.runId, ref.nodeId, 'running', {
+    sessionId: nextSessionId,
+    attempt: next.attempts.length,
+    capabilityPhase: next.phase,
+  });
+}
+
+async function completeContractAgentNode(
+  sessionId: string,
+  ref: SessionNodeRef,
+  node: AgentNode & { contract: NonNullable<AgentNode['contract']> },
+  summary: string,
+  currentOutput: unknown,
+): Promise<void> {
+  const db = getDb();
+  const [session] = await db.select().from(schema.sessions).where(eq(schema.sessions.id, sessionId)).limit(1);
+  const [run] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, ref.runId)).limit(1);
+  if (!session || !run) {
+    const error = !session ? `capability loop session not found: ${sessionId}` : `run not found: ${ref.runId}`;
+    await failNode(ref.runId, ref.nodeId, error);
+    return;
+  }
+  const context = run.context as RunContext;
+  let state = asCapabilityLoopState(currentOutput)
+    ?? startCapabilityLoop(node.contract, sessionId, new Date().toISOString());
+  state = markCapabilityEvaluating(state);
+  await db
+    .update(schema.nodeStates)
+    .set({ output: state, updatedAt: new Date() })
+    .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)));
+  const attempt = state.attempts.at(-1);
+  await publish({
+    type: 'run.capability.attempt',
+    runId: ref.runId,
+    sessionId,
+    payload: capabilityAttemptEventPayloadSchema.parse({
+      nodeId: ref.nodeId,
+      attempt: attempt?.number ?? state.attempts.length,
+      status: 'evaluating',
+    }),
+  });
+
+  const resolvedContract = {
+    ...node.contract,
+    acceptanceCriteria: node.contract.acceptanceCriteria.map((criterion) => ({
+      ...criterion,
+      evaluator: {
+        ...criterion.evaluator,
+        run: substitute(criterion.evaluator.run, context),
+      },
+    })),
+  };
+  const evaluations = await evaluateTaskContract(
+    resolvedContract,
+    session.cwd,
+    ({ command, cwd, timeoutMs }) => {
+      const call = evaluatorRunnerCall(session, { command, cwd, timeoutMs });
+      return call.method === 'container.exec'
+        ? callRunner(session.machineId, call.method, call.params, timeoutMs + 5_000)
+        : callRunner(session.machineId, call.method, call.params, timeoutMs + 5_000);
+    },
+  );
+  for (const evaluation of evaluations) {
+    await publish({
+      type: 'run.capability.evaluation',
+      runId: ref.runId,
+      sessionId,
+      payload: capabilityEvaluationEventPayloadSchema.parse({
+        nodeId: ref.nodeId,
+        attempt: attempt?.number ?? state.attempts.length,
+        ...evaluation,
+      }),
+    });
+  }
+  const supplementalEvidence: Evidence[] = [
+    { kind: 'session', sessionId, backend: session.agent, ...(session.model ? { model: session.model } : {}) },
+  ];
+  if (summary.trim()) supplementalEvidence.unshift({ kind: 'agent_summary', text: summary });
+  if (session.usage && typeof session.usage === 'object') {
+    const usage = session.usage as Record<string, number>;
+    const cumulativeUsage = {
+      ...(typeof usage.inputTokens === 'number' ? { inputTokens: usage.inputTokens } : {}),
+      ...(typeof usage.outputTokens === 'number' ? { outputTokens: usage.outputTokens } : {}),
+      ...(typeof usage.cacheReadTokens === 'number' ? { cacheReadTokens: usage.cacheReadTokens } : {}),
+      ...(typeof usage.costUsd === 'number' ? { costUsd: usage.costUsd } : {}),
+      ...(typeof usage.turns === 'number' ? { turns: usage.turns } : {}),
+    };
+    if (Object.keys(cumulativeUsage).length > 0) {
+      supplementalEvidence.push(usageEvidenceForAttempt(state, cumulativeUsage));
+    }
+  }
+  for (const evidence of supplementalEvidence) {
+    await publish({
+      type: 'run.capability.evidence',
+      runId: ref.runId,
+      sessionId,
+      payload: capabilityEvidenceEventPayloadSchema.parse({
+        nodeId: ref.nodeId,
+        attempt: attempt?.number ?? state.attempts.length,
+        evidence,
+      }),
+    });
+  }
+
+  const transition = recordCapabilityEvaluation(state, {
+    summary,
+    endedAt: new Date().toISOString(),
+    evaluations,
+    evidence: supplementalEvidence,
+  });
+  const queuedTaskId = state.queuedTaskId;
+
+  if (transition.action === 'retry') {
+    const prepared: CapabilityLoopState = {
+      ...transition.state,
+      pendingFeedback: transition.feedback,
+    };
+    await db
+      .update(schema.nodeStates)
+      .set({ status: 'running', output: prepared, updatedAt: new Date() })
+      .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)));
+    await continueContractAgentRetry({
+      sessionId,
+      machineId: session.machineId,
+      cwd: session.cwd,
+      containerId: session.containerId,
+      ref,
+      node,
+      context,
+      state: prepared,
+    });
+    return;
+  }
+
+  const succeeded = transition.action === 'complete';
+  sessionNodes.delete(sessionId);
+  if (queuedTaskId) {
+    await db
+      .update(schema.taskQueue)
+      .set({ status: succeeded ? 'done' : 'failed' })
+      .where(eq(schema.taskQueue.id, queuedTaskId));
+  }
+  await db
+    .update(schema.nodeStates)
+    .set({ status: succeeded ? 'done' : 'failed', output: transition.state, updatedAt: new Date() })
+    .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)));
+
+  if (succeeded && transition.state.outcome) {
+    await autoRegisterForgeRefs(summary, ref, sessionId);
+    context.outputs[ref.nodeId] = JSON.stringify(transition.state.outcome);
+    await db.update(schema.workflowRuns).set({ context }).where(eq(schema.workflowRuns.id, ref.runId));
+  }
+  await publish({
+    type: 'run.capability.outcome',
+    runId: ref.runId,
+    sessionId,
+    payload: capabilityOutcomeEventPayloadSchema.parse({ nodeId: ref.nodeId, ...transition.state.outcome }),
+  });
+  await publishNodeState(ref.runId, ref.nodeId, succeeded ? 'done' : 'failed', {
+    sessionId,
+    outcome: transition.state.outcome?.status,
+    attempts: transition.state.attempts.length,
+  });
+  scheduleTick(ref.runId);
+}
+
 async function completeAgentNode(sessionId: string, turnStatus: string): Promise<void> {
   const ref = sessionNodes.get(sessionId);
   if (!ref) {
@@ -1514,6 +1948,31 @@ async function completeAgentNode(sessionId: string, turnStatus: string): Promise
       await db.update(schema.taskQueue).set({ status: 'failed' }).where(eq(schema.taskQueue.id, queuedTaskId));
     }
     const error = `agent turn ${turnStatus}${summary ? `: ${summary.slice(0, 300)}` : ''}`;
+    const capabilityState = asCapabilityLoopState(currentState?.output);
+    if (capabilityState) {
+      const blocked = recordCapabilityFailure(capabilityState, {
+        summary: error,
+        endedAt: new Date().toISOString(),
+        failureType: TRANSIENT_ERROR_RE.test(summary) ? 'agent_transport' : 'agent_execution',
+      });
+      await db
+        .update(schema.nodeStates)
+        .set({ status: 'failed', output: blocked, updatedAt: new Date() })
+        .where(and(eq(schema.nodeStates.runId, ref.runId), eq(schema.nodeStates.nodeId, ref.nodeId)));
+      await publish({
+        type: 'run.capability.outcome',
+        runId: ref.runId,
+        sessionId,
+        payload: capabilityOutcomeEventPayloadSchema.parse({ nodeId: ref.nodeId, ...blocked.outcome }),
+      });
+      await publishNodeState(ref.runId, ref.nodeId, 'failed', {
+        sessionId,
+        outcome: 'blocked',
+        failureType: blocked.outcome?.failureType,
+      });
+      scheduleTick(ref.runId);
+      return;
+    }
     await db
       .update(schema.nodeStates)
       .set({ status: 'failed', output: { error, summary, turnStatus, attempts }, updatedAt: new Date() })
@@ -1524,6 +1983,11 @@ async function completeAgentNode(sessionId: string, turnStatus: string): Promise
   }
 
   agentAttempts.delete(key);
+  const node = await loadAgentNode(ref.runId, ref.nodeId);
+  if (node?.contract) {
+    await completeContractAgentNode(sessionId, ref, node as AgentNode & { contract: NonNullable<AgentNode['contract']> }, summary, currentState?.output);
+    return;
+  }
   sessionNodes.delete(sessionId);
   if (queuedTaskId) {
     await db.update(schema.taskQueue).set({ status: 'done' }).where(eq(schema.taskQueue.id, queuedTaskId));
@@ -1531,7 +1995,6 @@ async function completeAgentNode(sessionId: string, turnStatus: string): Promise
   await autoRegisterForgeRefs(summary, ref, sessionId);
 
   // 评审→返工闭环：本节点（评审）判「需改进」→ 把意见回灌 target 会话修改、重跑本节点
-  const node = await loadAgentNode(ref.runId, ref.nodeId);
   if (node?.reviseLoop && verdictChangesRequested(summary)) {
     if (await triggerRevision(ref.runId, ref.nodeId, node.reviseLoop.target, summary, node.reviseLoop.maxRounds)) {
       return; // 已回灌 target 返工；其 turn-end → tick 会重跑本评审节点
@@ -1989,7 +2452,39 @@ export async function resumeActiveRuns(): Promise<void> {
       if (!st.sessionId) {
         continue;
       }
+      const capabilityState = asCapabilityLoopState(st.output);
       sessionNodes.set(st.sessionId, { runId: run.id, nodeId: st.nodeId });
+      if (
+        run.status !== 'paused'
+        && capabilityState?.phase === 'feedback_ready'
+        && node?.type === 'agent'
+        && node.contract
+      ) {
+        const [session] = await db
+          .select()
+          .from(schema.sessions)
+          .where(eq(schema.sessions.id, st.sessionId))
+          .limit(1);
+        if (!session) {
+          await failNode(run.id, st.nodeId, `capability loop session not found: ${st.sessionId}`);
+          continue;
+        }
+        try {
+          await continueContractAgentRetry({
+            sessionId: st.sessionId,
+            machineId: session.machineId,
+            cwd: session.cwd,
+            containerId: session.containerId,
+            ref: { runId: run.id, nodeId: st.nodeId },
+            node: node as AgentNode & { contract: NonNullable<AgentNode['contract']> },
+            context: run.context as RunContext,
+            state: capabilityState,
+          });
+        } catch (error) {
+          await failNode(run.id, st.nodeId, error instanceof Error ? error.message : String(error));
+        }
+        continue;
+      }
       // 宕机期间已 turn-end？
       const rows = await db
         .select()
@@ -1999,7 +2494,10 @@ export async function resumeActiveRuns(): Promise<void> {
         .limit(20);
       for (const row of rows) {
         const envelope = row.payload as SessionEnvelope;
-        if (envelope?.ev?.t === 'turn-end') {
+        if (
+          envelope?.ev?.t === 'turn-end'
+          && (!capabilityState || eventBelongsToCurrentAttempt(capabilityState, row.createdAt))
+        ) {
           scheduleSessionCompletion(st.sessionId, envelope.ev.status);
           break;
         }

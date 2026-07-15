@@ -16,7 +16,7 @@ import {
   type SessionEnvelope,
   type SessionState,
 } from '@co/protocol';
-import type { DriverEmit, SessionUsage } from '../claude/driver';
+import type { DriverEmit, SessionUsage } from '../driverTypes';
 
 type RpcId = string | number;
 
@@ -155,7 +155,7 @@ export class CodexSession {
   private readonly pendingApprovals = new Map<string, PendingApproval>();
   private readonly agentText = new Map<string, string>();
   private readonly toolOutput = new Map<string, string>();
-  private readonly usage: SessionUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, turns: 0 };
+  private readonly usage: SessionUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, turns: 0 };
 
   constructor(
     private readonly params: RunnerParams<'session.spawn'>,
