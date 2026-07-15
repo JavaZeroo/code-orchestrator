@@ -32,6 +32,8 @@ import { ContainerSpawnQueued } from '../services/spawnContainer';
 import { machineForRun, matchMachine } from './runMachine';
 import {
   evaluateConditionExpression,
+  fanoutSettlement,
+  nextFanoutIndexes,
   resolveFanoutItems,
   skippedBranchNodeIds,
   substituteTemplate,
@@ -199,10 +201,15 @@ async function reconcileQueuedExecutions(
         } else if (task?.status === 'failed' || task?.status === 'cancelled') {
           child.status = 'failed';
           child.error = `queued task ${task.status}: ${child.queuedTaskId}`;
-          await abortFanoutSiblings(runId, child.index, fanout.children);
-          await persistFanout(runId, state.nodeId, fanout, 'failed');
-          await publishNodeState(runId, state.nodeId, 'failed', { child: child.index, error: child.error });
-          return true;
+          if (child.sessionId) sessionNodes.delete(child.sessionId);
+          agentAttempts.delete(`${runId}:${state.nodeId}:${child.index}`);
+          changed = true;
+          if (fanout.failFast) await abortFanoutSiblings(runId, child.index, fanout.children);
+          await publish({
+            type: 'run.fanout.child',
+            runId,
+            payload: { nodeId: state.nodeId, child: child.index, attempt: child.attempt, status: 'failed', error: child.error },
+          });
         }
       }
       if (changed) await persistFanout(runId, state.nodeId, fanout);
@@ -289,6 +296,17 @@ async function tick(runId: string): Promise<void> {
   }
   const byId = new Map(states.map((s) => [s.nodeId, s]));
   const context = run.context as RunContext;
+
+  // fanout 是一个动态子调度器：重启恢复、子任务完成或队列状态变化后继续补足空闲槽位。
+  for (const state of states.filter((candidate) => candidate.status === 'running')) {
+    const output = asFanoutOutput(state.output);
+    const node = def.nodes.find((candidate) => candidate.id === state.nodeId);
+    if (!output || !node || node.type !== 'fanout') continue;
+    if (await advanceFanout(runId, node, context, output)) {
+      scheduleTick(runId);
+      return;
+    }
+  }
 
   // 终态判定
   if (states.some((s) => s.status === 'failed')) {
@@ -519,21 +537,37 @@ interface FanoutChildState {
   index: number;
   item: unknown;
   status: FanoutChildStatus;
+  attempt: number;
   sessionId?: string;
   queuedTaskId?: string;
   summary?: string;
   error?: string;
+  history?: Array<{
+    attempt: number;
+    status: FanoutChildStatus;
+    sessionId?: string;
+    summary?: string;
+    error?: string;
+  }>;
 }
 interface FanoutOutput {
   kind: 'fanout';
   itemsFrom: string;
+  maxConcurrency: number;
+  failFast: boolean;
   children: FanoutChildState[];
 }
 
 function asFanoutOutput(value: unknown): FanoutOutput | null {
   if (!value || typeof value !== 'object' || (value as { kind?: string }).kind !== 'fanout') return null;
   const children = (value as { children?: unknown }).children;
-  return Array.isArray(children) ? value as FanoutOutput : null;
+  if (!Array.isArray(children)) return null;
+  const output = value as FanoutOutput;
+  // 兼容本功能上线前已经在运行的 fanout 状态。
+  output.maxConcurrency = Number.isInteger(output.maxConcurrency) && output.maxConcurrency > 0 ? output.maxConcurrency : 4;
+  output.failFast = output.failFast === true;
+  for (const child of output.children) child.attempt = child.attempt ?? 1;
+  return output;
 }
 
 async function persistFanout(runId: string, nodeId: string, output: FanoutOutput, status: 'running' | 'done' | 'failed' = 'running') {
@@ -570,6 +604,242 @@ async function abortFanoutSiblings(runId: string, failedIndex: number, children:
   await publish({ type: 'run.fanout.aborted', runId, payload: { failedIndex, siblings: children.length - 1 } });
 }
 
+async function settleFanout(runId: string, nodeId: string, context: RunContext, output: FanoutOutput): Promise<boolean> {
+  const settlement = fanoutSettlement(output.children);
+  if (settlement === 'running') {
+    await persistFanout(runId, nodeId, output);
+    return false;
+  }
+  if (settlement === 'failed') {
+    const failedChildren = output.children
+      .filter((child) => child.status === 'failed' || child.status === 'cancelled')
+      .map((child) => child.index);
+    await persistFanout(runId, nodeId, output, 'failed');
+    await publishNodeState(runId, nodeId, 'failed', { failedChildren });
+    scheduleTick(runId);
+    return true;
+  }
+
+  context.outputs[nodeId] = JSON.stringify(
+    output.children.map(({ index, item, summary }) => ({ index, item, summary: summary ?? '' })),
+  );
+  await getDb().update(schema.workflowRuns).set({ context }).where(eq(schema.workflowRuns.id, runId));
+  await persistFanout(runId, nodeId, output, 'done');
+  await publishNodeState(runId, nodeId, 'done', { children: output.children.length });
+  scheduleTick(runId);
+  return true;
+}
+
+async function advanceFanout(
+  runId: string,
+  node: FanoutNode,
+  context: RunContext,
+  output: FanoutOutput,
+): Promise<boolean> {
+  let changed = false;
+  while (true) {
+    const indexes = nextFanoutIndexes(output.children, output.maxConcurrency);
+    if (indexes.length === 0) break;
+    for (const index of indexes) {
+      const child = output.children.find((candidate) => candidate.index === index);
+      if (!child || child.status !== 'pending') continue;
+      const executionNodeId = `${node.id}[${child.index}]`;
+      try {
+        const spawned = await spawnWorkflowAgent(
+          runId,
+          executionNodeId,
+          node.template,
+          context,
+          { item: child.item, index: child.index },
+          { runId, nodeId: node.id, fanoutIndex: child.index, executionNodeId },
+          async (stableSessionId) => {
+            child.sessionId = stableSessionId;
+            child.status = 'running';
+            await persistFanout(runId, node.id, output);
+          },
+        );
+        child.sessionId = spawned.sessionId;
+        child.queuedTaskId = spawned.queuedTaskId;
+        child.status = spawned.queuedTaskId ? 'queued' : 'running';
+        changed = true;
+        await persistFanout(runId, node.id, output);
+        await publish({
+          type: 'run.fanout.child',
+          runId,
+          sessionId: spawned.sessionId,
+          payload: {
+            nodeId: node.id,
+            child: child.index,
+            attempt: child.attempt,
+            status: child.status,
+            queuedTaskId: child.queuedTaskId,
+          },
+        });
+      } catch (err) {
+        child.status = 'failed';
+        child.error = err instanceof Error ? err.message : String(err);
+        if (child.sessionId) sessionNodes.delete(child.sessionId);
+        changed = true;
+        await publish({
+          type: 'run.fanout.child',
+          runId,
+          payload: { nodeId: node.id, child: child.index, attempt: child.attempt, status: 'failed', error: child.error },
+        });
+        if (output.failFast) {
+          await abortFanoutSiblings(runId, child.index, output.children);
+          await settleFanout(runId, node.id, context, output);
+          return true;
+        }
+      }
+    }
+  }
+  return (await settleFanout(runId, node.id, context, output)) || changed;
+}
+
+async function advancePersistedFanout(runId: string, nodeId: string, output: FanoutOutput): Promise<boolean> {
+  const db = getDb();
+  const [run] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId)).limit(1);
+  if (!run || !['running', 'waiting_human'].includes(run.status)) return false;
+  const [definition] = await db.select().from(schema.workflowDefs).where(eq(schema.workflowDefs.id, run.defId)).limit(1);
+  if (!definition) return false;
+  const node = parseDef(definition.graph).nodes.find((candidate) => candidate.id === nodeId);
+  if (!node || node.type !== 'fanout') return false;
+  return advanceFanout(runId, node, run.context as RunContext, output);
+}
+
+async function fanoutActionTarget(runId: string, nodeId: string, index: number) {
+  const db = getDb();
+  const [run] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId)).limit(1);
+  if (!run) throw new EngineError(404, 'run not found');
+  if (run.archivedAt) throw new EngineError(409, '归档 run 不可修改，请先移出归档');
+  const [state] = await db
+    .select()
+    .from(schema.nodeStates)
+    .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, nodeId)))
+    .limit(1);
+  const output = asFanoutOutput(state?.output);
+  if (!state || !output) throw new EngineError(404, 'fanout node not found');
+  const child = output.children.find((candidate) => candidate.index === index);
+  if (!child) throw new EngineError(404, `fanout child not found: ${index}`);
+  return { run, state, output, child };
+}
+
+export async function retryFanoutChild(runId: string, nodeId: string, index: number, by = 'ui') {
+  const db = getDb();
+  const { run, output, child } = await fanoutActionTarget(runId, nodeId, index);
+  if (run.status === 'done' || run.status === 'cancelled') {
+    throw new EngineError(409, `run 已终态: ${run.status}`);
+  }
+  if (run.status === 'paused') throw new EngineError(409, 'run 已暂停，请先恢复再重试子任务');
+  if (child.status !== 'failed' && child.status !== 'cancelled') {
+    throw new EngineError(409, `仅 failed/cancelled 子任务可重试，当前为 ${child.status}`);
+  }
+  if (run.status === 'failed') {
+    const otherFailedNodes = await db
+      .select({ nodeId: schema.nodeStates.nodeId })
+      .from(schema.nodeStates)
+      .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.status, 'failed')));
+    const blockers = otherFailedNodes.filter((candidate) => candidate.nodeId !== nodeId);
+    if (blockers.length > 0) {
+      throw new EngineError(409, `还有其他失败节点（${blockers.map((candidate) => candidate.nodeId).join(', ')}），请重试整个 run`);
+    }
+  }
+
+  if (child.sessionId) sessionNodes.delete(child.sessionId);
+  agentAttempts.delete(`${runId}:${nodeId}:${index}`);
+  child.history = [...(child.history ?? []), {
+    attempt: child.attempt,
+    status: child.status,
+    sessionId: child.sessionId,
+    summary: child.summary,
+    error: child.error,
+  }].slice(-10);
+  child.attempt += 1;
+  child.status = 'pending';
+  delete child.sessionId;
+  delete child.queuedTaskId;
+  delete child.summary;
+  delete child.error;
+  await db.transaction(async (tx) => {
+    await tx
+      .update(schema.nodeStates)
+      .set({ status: 'running', output, updatedAt: new Date() })
+      .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, nodeId)));
+    if (run.status === 'failed') {
+      await tx
+        .update(schema.workflowRuns)
+        .set({ status: 'running', endedAt: null })
+        .where(eq(schema.workflowRuns.id, runId));
+    }
+  });
+  await publish({
+    type: 'run.fanout.child',
+    runId,
+    payload: { nodeId, child: index, attempt: child.attempt, status: 'pending', action: 'retry', by },
+  });
+  if (run.status === 'failed') await publish({ type: 'run.status', runId, payload: { status: 'running', by } });
+  scheduleTick(runId);
+  return { child: index, attempt: child.attempt, status: child.status };
+}
+
+export async function cancelFanoutChild(runId: string, nodeId: string, index: number, by = 'ui') {
+  const db = getDb();
+  const { run, state, output, child } = await fanoutActionTarget(runId, nodeId, index);
+  if (!['running', 'waiting_human', 'paused'].includes(run.status)) {
+    throw new EngineError(409, `run 不可取消子任务: ${run.status}`);
+  }
+  if (state.status !== 'running' || !['pending', 'queued', 'running'].includes(child.status)) {
+    throw new EngineError(409, `仅活跃子任务可取消，当前为 ${child.status}`);
+  }
+
+  if (child.queuedTaskId) {
+    const [task] = await db
+      .select({ status: schema.taskQueue.status })
+      .from(schema.taskQueue)
+      .where(eq(schema.taskQueue.id, child.queuedTaskId))
+      .limit(1);
+    if (task?.status === 'running' && child.sessionId) {
+      const [session] = await db
+        .select({ id: schema.sessions.id })
+        .from(schema.sessions)
+        .where(eq(schema.sessions.id, child.sessionId))
+        .limit(1);
+      if (!session) throw new EngineError(409, '子任务正在分发，请稍后重试取消');
+    } else if (task && !['pending', 'scheduled', 'running'].includes(task.status)) {
+      throw new EngineError(409, `队列状态已变化为 ${task.status}，请刷新后重试`);
+    }
+    await db
+      .update(schema.taskQueue)
+      .set({ status: 'cancelled' })
+      .where(and(eq(schema.taskQueue.id, child.queuedTaskId), inArray(schema.taskQueue.status, ['pending', 'scheduled', 'running'])));
+  }
+
+  if (child.sessionId) {
+    const [session] = await db
+      .select({ machineId: schema.sessions.machineId, state: schema.sessions.state })
+      .from(schema.sessions)
+      .where(eq(schema.sessions.id, child.sessionId))
+      .limit(1);
+    if (session && session.state !== 'dead') {
+      await callRunner(session.machineId, 'session.kill', { sessionId: child.sessionId }).catch(() => {});
+      await db.update(schema.sessions).set({ state: 'dead' }).where(eq(schema.sessions.id, child.sessionId));
+    }
+    sessionNodes.delete(child.sessionId);
+  }
+  agentAttempts.delete(`${runId}:${nodeId}:${index}`);
+  child.status = 'cancelled';
+  child.error = `cancelled by ${by}`;
+  await persistFanout(runId, nodeId, output);
+  await publish({
+    type: 'run.fanout.child',
+    runId,
+    sessionId: child.sessionId,
+    payload: { nodeId, child: index, attempt: child.attempt, status: 'cancelled', action: 'cancel', by },
+  });
+  if (run.status !== 'paused') await advancePersistedFanout(runId, nodeId, output);
+  return { child: index, attempt: child.attempt, status: child.status };
+}
+
 async function execFanout(runId: string, node: FanoutNode, context: RunContext): Promise<void> {
   let items: unknown[];
   try {
@@ -582,56 +852,17 @@ async function execFanout(runId: string, node: FanoutNode, context: RunContext):
   const output: FanoutOutput = {
     kind: 'fanout',
     itemsFrom: node.itemsFrom,
-    children: items.map((item, index) => ({ index, item, status: 'pending' })),
+    maxConcurrency: node.maxConcurrency,
+    failFast: node.failFast,
+    children: items.map((item, index) => ({ index, item, status: 'pending', attempt: 1 })),
   };
   await persistFanout(runId, node.id, output);
-  await publishNodeState(runId, node.id, 'running', { children: items.length });
-
-  if (items.length === 0) {
-    context.outputs[node.id] = '[]';
-    await getDb().update(schema.workflowRuns).set({ context }).where(eq(schema.workflowRuns.id, runId));
-    await persistFanout(runId, node.id, output, 'done');
-    await publishNodeState(runId, node.id, 'done', { children: 0 });
-    scheduleTick(runId);
-    return;
-  }
-
-  for (const child of output.children) {
-    const executionNodeId = `${node.id}[${child.index}]`;
-    try {
-      const spawned = await spawnWorkflowAgent(
-        runId,
-        executionNodeId,
-        node.template,
-        context,
-        { item: child.item, index: child.index },
-        { runId, nodeId: node.id, fanoutIndex: child.index, executionNodeId },
-        async (stableSessionId) => {
-          child.sessionId = stableSessionId;
-          child.status = 'running';
-          await persistFanout(runId, node.id, output);
-        },
-      );
-      child.sessionId = spawned.sessionId;
-      child.queuedTaskId = spawned.queuedTaskId;
-      child.status = spawned.queuedTaskId ? 'queued' : 'running';
-      await persistFanout(runId, node.id, output);
-      await publish({
-        type: 'run.fanout.child',
-        runId,
-        sessionId: spawned.sessionId,
-        payload: { nodeId: node.id, child: child.index, status: child.status, queuedTaskId: child.queuedTaskId },
-      });
-    } catch (err) {
-      child.status = 'failed';
-      child.error = err instanceof Error ? err.message : String(err);
-      await abortFanoutSiblings(runId, child.index, output.children);
-      await persistFanout(runId, node.id, output, 'failed');
-      await publishNodeState(runId, node.id, 'failed', { child: child.index, error: child.error });
-      scheduleTick(runId);
-      return;
-    }
-  }
+  await publishNodeState(runId, node.id, 'running', {
+    children: items.length,
+    maxConcurrency: output.maxConcurrency,
+    failFast: output.failFast,
+  });
+  await advanceFanout(runId, node, context, output);
 }
 
 async function execGate(runId: string, node: GateNode, context: RunContext): Promise<void> {
@@ -1208,10 +1439,21 @@ async function completeFanoutChild(
     child.status = 'failed';
     child.error = `agent turn ${turnStatus}${summary ? `: ${summary.slice(0, 300)}` : ''}`;
     child.summary = summary;
-    await abortFanoutSiblings(ref.runId, ref.fanoutIndex, output.children);
-    await persistFanout(ref.runId, ref.nodeId, output, 'failed');
-    await publishNodeState(ref.runId, ref.nodeId, 'failed', { child: ref.fanoutIndex, error: child.error });
-    scheduleTick(ref.runId);
+    if (output.failFast) await abortFanoutSiblings(ref.runId, ref.fanoutIndex, output.children);
+    await persistFanout(ref.runId, ref.nodeId, output);
+    await publish({
+      type: 'run.fanout.child',
+      runId: ref.runId,
+      sessionId,
+      payload: {
+        nodeId: ref.nodeId,
+        child: ref.fanoutIndex,
+        attempt: child.attempt,
+        status: 'failed',
+        error: child.error,
+      },
+    });
+    await advancePersistedFanout(ref.runId, ref.nodeId, output);
     return;
   }
 
@@ -1221,24 +1463,14 @@ async function completeFanoutChild(
     await db.update(schema.taskQueue).set({ status: 'done' }).where(eq(schema.taskQueue.id, child.queuedTaskId));
   }
   await autoRegisterForgeRefs(summary, { runId: ref.runId, nodeId: ref.executionNodeId ?? ref.nodeId }, sessionId);
-  const allDone = output.children.every((candidate) => candidate.status === 'done');
-  await persistFanout(ref.runId, ref.nodeId, output, allDone ? 'done' : 'running');
+  await persistFanout(ref.runId, ref.nodeId, output);
   await publish({
     type: 'run.fanout.child',
     runId: ref.runId,
     sessionId,
-    payload: { nodeId: ref.nodeId, child: ref.fanoutIndex, status: 'done' },
+    payload: { nodeId: ref.nodeId, child: ref.fanoutIndex, attempt: child.attempt, status: 'done' },
   });
-  if (!allDone) return;
-
-  const [run] = await db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, ref.runId)).limit(1);
-  if (run) {
-    const context = run.context as RunContext;
-    context.outputs[ref.nodeId] = JSON.stringify(output.children.map(({ index, item, summary: text }) => ({ index, item, summary: text ?? '' })));
-    await db.update(schema.workflowRuns).set({ context }).where(eq(schema.workflowRuns.id, ref.runId));
-  }
-  await publishNodeState(ref.runId, ref.nodeId, 'done', { children: output.children.length });
-  scheduleTick(ref.runId);
+  await advancePersistedFanout(ref.runId, ref.nodeId, output);
 }
 
 async function completeAgentNode(sessionId: string, turnStatus: string): Promise<void> {

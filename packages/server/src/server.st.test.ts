@@ -322,6 +322,107 @@ describeSt('server ST: API + runner websocket', () => {
     }
   });
 
+  it('applies fanout backpressure and recovers one cancelled child without rerunning siblings', async () => {
+    const runner = await FakeRunner.connect(baseUrl, {
+      'session.spawn': () => ({ ok: true }),
+      'session.kill': () => ({ ok: true }),
+    });
+    runners.push(runner);
+    await runner.callServer('machine.register', {
+      info: { id: 'm-fanout-control', name: 'Fanout Control Runner', labels: ['fanout-control'], resources: [], startedAt: Date.now() },
+    });
+    const defId = 'workflow-fanout-control-st';
+    const graph = {
+      name: 'Fanout control ST',
+      nodes: [{
+        id: 'work',
+        type: 'fanout',
+        itemsFrom: 'vars.items',
+        maxItems: 4,
+        maxConcurrency: 1,
+        failFast: false,
+        template: {
+          prompt: 'Handle {{item}}',
+          machine: { labels: ['fanout-control'] },
+          cwd: '/tmp/fanout-control',
+        },
+      }],
+      edges: [],
+    };
+    await getDb().insert(schema.workflowDefs).values({ id: defId, name: graph.name, graph });
+    const started = await app!.inject({
+      method: 'POST',
+      url: `/api/workflows/${defId}/runs`,
+      payload: { vars: { items: JSON.stringify(['alpha', 'beta', 'gamma']) } },
+    });
+    const { runId } = started.json<{ runId: string }>();
+    const spawns = () => runner.calls.filter((call) => call.method === 'session.spawn');
+    await vi.waitFor(() => expect(spawns()).toHaveLength(1));
+    expect((spawns()[0]!.params as { prompt: string }).prompt).toBe('Handle alpha');
+
+    const stopEngine = startEngine();
+    const complete = async (sessionId: string, text: string) => {
+      await runner.callServer('session.event', {
+        sessionId,
+        envelope: { id: `${sessionId}-text`, time: Date.now(), role: 'agent', ev: { t: 'text', text } },
+      });
+      await runner.callServer('session.event', {
+        sessionId,
+        envelope: { id: `${sessionId}-end`, time: Date.now(), role: 'agent', ev: { t: 'turn-end', status: 'completed' } },
+      });
+    };
+    try {
+      await complete((spawns()[0]!.params as { sessionId: string }).sessionId, 'alpha done');
+      await vi.waitFor(() => expect(spawns()).toHaveLength(2));
+      expect((spawns()[1]!.params as { prompt: string }).prompt).toBe('Handle beta');
+
+      const cancelled = await app!.inject({
+        method: 'POST',
+        url: `/api/runs/${runId}/nodes/work/fanout/1/cancel`,
+      });
+      expect(cancelled.statusCode).toBe(200);
+      await vi.waitFor(() => expect(spawns()).toHaveLength(3));
+      expect((spawns()[2]!.params as { prompt: string }).prompt).toBe('Handle gamma');
+
+      await complete((spawns()[2]!.params as { sessionId: string }).sessionId, 'gamma done');
+      await vi.waitFor(async () => {
+        const [state] = await getDb().select().from(schema.nodeStates)
+          .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, 'work')));
+        const [run] = await getDb().select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+        expect(state?.status).toBe('failed');
+        expect(run?.status).toBe('failed');
+      });
+
+      const retried = await app!.inject({
+        method: 'POST',
+        url: `/api/runs/${runId}/nodes/work/fanout/1/retry`,
+      });
+      expect(retried.statusCode).toBe(200);
+      expect(retried.json()).toMatchObject({ child: 1, attempt: 2, status: 'pending' });
+      await vi.waitFor(() => expect(spawns()).toHaveLength(4));
+      expect((spawns()[3]!.params as { prompt: string }).prompt).toBe('Handle beta');
+      await complete((spawns()[3]!.params as { sessionId: string }).sessionId, 'beta recovered');
+
+      await vi.waitFor(async () => {
+        const [state] = await getDb().select().from(schema.nodeStates)
+          .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, 'work')));
+        expect(state?.status, JSON.stringify(state?.output)).toBe('done');
+        expect(state?.output).toMatchObject({ maxConcurrency: 1, failFast: false });
+        const children = (state?.output as {
+          children: Array<{ status: string; attempt: number; history?: Array<{ status: string }> }>;
+        }).children;
+        expect(children.map((child) => [child.status, child.attempt])).toEqual([
+          ['done', 1], ['done', 2], ['done', 1],
+        ]);
+        expect(children[1]?.history).toMatchObject([{ status: 'cancelled' }]);
+        const [run] = await getDb().select().from(schema.workflowRuns).where(eq(schema.workflowRuns.id, runId));
+        expect(run?.status).toBe('done');
+      });
+    } finally {
+      stopEngine();
+    }
+  });
+
   it('recovers a persisted multi-agent meeting and concludes after restart', async () => {
     const runner = await FakeRunner.connect(baseUrl);
     runners.push(runner);

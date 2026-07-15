@@ -311,13 +311,23 @@ export interface NodeStateRow {
     result?: boolean;
     selected?: string[];
     skipped?: string[];
+    maxConcurrency?: number;
+    failFast?: boolean;
     children?: Array<{
       index: number;
       item: unknown;
       status: string;
+      attempt?: number;
       sessionId?: string;
       summary?: string;
       error?: string;
+      history?: Array<{
+        attempt: number;
+        status: string;
+        sessionId?: string;
+        summary?: string;
+        error?: string;
+      }>;
     }>;
     sessions?: Array<{ sessionId: string; idx: number | 'arbiter'; status: string }>;
   } | null;
@@ -601,6 +611,12 @@ export const api = {
   pauseRun: (runId: string) => post(`/api/runs/${runId}/pause`, {}).then((r) => j<RunProgressionResult>(r)),
   resumeRun: (runId: string) => post(`/api/runs/${runId}/resume`, {}).then((r) => j<RunProgressionResult>(r)),
   retryRun: (runId: string) => post(`/api/runs/${runId}/retry`, {}).then((r) => j<RunRetryResult>(r)),
+  retryFanoutChild: (runId: string, nodeId: string, index: number) =>
+    post(`/api/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/fanout/${index}/retry`, {})
+      .then((r) => j<{ ok: true; child: number; attempt: number; status: string }>(r)),
+  cancelFanoutChild: (runId: string, nodeId: string, index: number) =>
+    post(`/api/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/fanout/${index}/cancel`, {})
+      .then((r) => j<{ ok: true; child: number; attempt: number; status: string }>(r)),
   rerunRun: (runId: string) =>
     post(`/api/runs/${encodeURIComponent(runId)}/rerun`, {}).then((r) => j<RunRerunResult>(r)),
   archiveRun: (runId: string) =>

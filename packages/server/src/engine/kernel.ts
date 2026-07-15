@@ -224,3 +224,27 @@ export function resolveFanoutItems(
   }
   return value;
 }
+
+export type FanoutPlanningStatus = 'pending' | 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+
+/**
+ * 返回本轮可以启动的 pending 子任务索引。queued/running 都占用并发槽位，
+ * 因而限流在资源队列前生效，不会用大量排队任务绕过背压。
+ */
+export function nextFanoutIndexes(
+  children: Array<{ index: number; status: FanoutPlanningStatus }>,
+  maxConcurrency: number,
+): number[] {
+  const active = children.filter((child) => child.status === 'queued' || child.status === 'running').length;
+  return children
+    .filter((child) => child.status === 'pending')
+    .slice(0, Math.max(0, maxConcurrency - active))
+    .map((child) => child.index);
+}
+
+export function fanoutSettlement(
+  children: Array<{ status: FanoutPlanningStatus }>,
+): 'running' | 'done' | 'failed' {
+  if (children.some((child) => ['pending', 'queued', 'running'].includes(child.status))) return 'running';
+  return children.every((child) => child.status === 'done') ? 'done' : 'failed';
+}

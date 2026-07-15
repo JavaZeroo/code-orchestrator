@@ -78,7 +78,7 @@ const DESIGNER_SYSTEM_PROMPT = `你是工作流设计助手。用户会用自然
   * type="check"：id, title, critic:{kind:"command", run:"命令", timeoutMs?}——在 run 工作目录跑命令，exit 0 过；配 reviseLoop:{target,maxRounds} 失败时回灌 target 节点返工重跑（typecheck/测试门禁用这个，别用 agent 假装跑命令）
   * type="meeting"：id, title, participants:[{model,cli?,role?},…]≥2, rounds?, arbiter?({model}|"vote"|"human")——多模型独立评审+交叉反驳
   * type="condition"：id, title, expr, onTrue:[直接后继id], onFalse:[直接后继id]——按受限表达式选择分支；expr 支持 vars/outputs 路径、真假值、比较、&&/||/!
-  * type="fanout"：id, title, itemsFrom, maxItems?, template:{agent 节点除 id/type 外的字段}——把上游 JSON 数组展开成并行 agent；template.prompt 可用 {{item.xxx}} 和 {{index}}
+ * type="fanout"：id, title, itemsFrom, maxItems?, maxConcurrency?(默认4), failFast?(默认false), template:{agent 节点除 id/type 外的字段}——把上游 JSON 数组展开成受控并行 agent；template.prompt 可用 {{item.xxx}} 和 {{index}}
 - prompt 里可用 {{vars.xxx}} 引用启动变量、{{outputs.节点id}} 引用上游 agent 节点的产出摘要；condition/fanout 可读取 JSON 输出的嵌套路径（如 outputs.plan.items）
 - edges 是 [from, to] 数组；图必须无环；节点 id 用短英文
 - 工作目录通常留给运行时变量（写 {{vars.cwd}} 或不填 cwd 让引擎用 vars.cwd）

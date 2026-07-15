@@ -93,6 +93,10 @@ export const fanoutNodeSchema = nodeBase.extend({
   itemsFrom: z.string().min(1),
   /** 防止异常模型输出造成无限任务膨胀。 */
   maxItems: z.number().int().positive().max(100).default(32),
+  /** 同时活跃（排队中或执行中）的子任务上限，避免一次展开压垮 runner。 */
+  maxConcurrency: z.number().int().positive().max(32).default(4),
+  /** 任一子任务最终失败时，是否立即取消其余子任务。默认尽量完成可独立工作的任务。 */
+  failFast: z.boolean().default(false),
   template: agentNodeSchema.omit({ id: true, type: true }),
 });
 export type FanoutNode = z.infer<typeof fanoutNodeSchema>;
