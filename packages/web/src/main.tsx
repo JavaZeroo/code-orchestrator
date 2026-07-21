@@ -8,6 +8,16 @@ import './index.css';
 createRoot(document.getElementById('root')!).render(
   <QueryClientProvider client={queryClient}>
     <App />
-    <Toaster theme="dark" position="top-right" toastOptions={{ style: { background: '#1a1d24', border: '1px solid #333', color: '#d7dce4' } }} />
+    <Toaster
+      theme="dark"
+      position="top-right"
+      toastOptions={{
+        style: {
+          background: 'var(--color-panel-2)',
+          border: '1px solid var(--color-line)',
+          color: 'var(--color-ink)',
+        },
+      }}
+    />
   </QueryClientProvider>,
 );

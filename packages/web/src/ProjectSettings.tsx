@@ -45,7 +45,7 @@ export function AutonomySwitch({ value, onChange }: { value: Autonomy; onChange:
             key={a.id}
             onClick={() => onChange(a.id)}
             className={cn(
-              'rounded-md px-3 py-1 text-[12px] font-medium transition-all',
+              'rounded-md px-3 py-1 text-[12px] font-medium transition-all active:scale-[0.97]',
               on
                 ? a.id === 'auto'
                   ? 'bg-accent text-accent-ink shadow-[0_2px_10px_-4px_var(--color-accent)]'

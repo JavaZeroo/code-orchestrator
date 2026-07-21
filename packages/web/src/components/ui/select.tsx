@@ -31,7 +31,8 @@ export function SelectContent({ className, children, ...props }: React.Component
         position="popper"
         sideOffset={4}
         className={cn(
-          'z-50 min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-line bg-panel-2 shadow-xl',
+          'z-50 min-w-[var(--radix-select-trigger-width)] origin-[var(--radix-select-content-transform-origin)] overflow-hidden rounded-md border border-line bg-panel-2 shadow-xl',
+          'data-[state=open]:animate-[pop-show_120ms_cubic-bezier(0.16,1,0.3,1)] data-[state=closed]:animate-[pop-hide_100ms_ease-in]',
           className,
         )}
         {...props}

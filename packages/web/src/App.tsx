@@ -167,7 +167,7 @@ function Sidebar({
               onClick={() => setTab(n.id)}
               title={n.hint}
               className={cn(
-                'group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-all',
+                'group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-all active:bg-panel-3',
                 active ? 'bg-panel-2 text-ink shadow-[var(--shadow-panel)]' : 'text-dim hover:bg-panel/60 hover:text-ink-2',
               )}
             >
@@ -439,7 +439,7 @@ function HomeScreen({
         className={cn('flex items-center gap-2 rounded-lg pr-1', selectedIsSession(s.id) && 'bg-panel-2 shadow-[var(--shadow-panel)]')}
       >
         <button
-          className="flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left transition-colors hover:bg-panel-2"
+          className="flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left transition-colors hover:bg-panel-2 active:bg-panel-3"
           onClick={() => setSelected({ session: s.id })}
         >
           <StatusDot tone={STATE_DOT[s.state] ?? 'neutral'} live={s.state === 'thinking' || s.state === 'starting'} />
@@ -488,7 +488,7 @@ function HomeScreen({
         className={cn('flex items-center gap-2 rounded-lg pr-1', selectedIsRun(r.id) && 'bg-panel-2 shadow-[var(--shadow-panel)]')}
       >
         <button
-          className="flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left transition-colors hover:bg-panel-2"
+          className="flex min-w-0 flex-1 items-center gap-2.5 p-2 text-left transition-colors hover:bg-panel-2 active:bg-panel-3"
           onClick={() => setSelected({ run: r.id })}
         >
           <StatusDot tone={RUN_TONE[r.status] ?? 'neutral'} live={r.status === 'running'} />
@@ -618,7 +618,7 @@ function HomeScreen({
               {filteredContentMatches.map((match) => (
                 <button
                   key={`content:${match.kind}:${match.id}`}
-                  className="rounded-lg p-2 text-left transition-colors hover:bg-panel-2"
+                  className="rounded-lg p-2 text-left transition-colors hover:bg-panel-2 active:bg-panel-3"
                   onClick={() => setSelected(match.kind === 'session' ? { session: match.id } : { run: match.id })}
                 >
                   <span className="flex items-center gap-1.5">

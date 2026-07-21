@@ -30,7 +30,7 @@ function ChipSelect({
     <SelectPrimitive.Root value={value} onValueChange={onValueChange}>
       <SelectPrimitive.Trigger
         className={cn(
-          'inline-flex items-center gap-1 rounded-full border border-line/70 bg-bg-2/60 px-2.5 py-0.5 text-[11px] font-medium text-ink-2 outline-none transition-all hover:border-accent/40 hover:bg-accent/5 cursor-pointer',
+          'inline-flex items-center gap-1 rounded-full border border-line/70 bg-bg-2/60 px-2.5 py-0.5 text-[11px] font-medium text-ink-2 outline-none transition-all hover:border-accent/40 hover:bg-accent/5 active:scale-[0.97] cursor-pointer',
           className,
         )}
       >
@@ -79,7 +79,7 @@ function ChipToggle({
       type="button"
       onClick={() => onChange(!value)}
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium outline-none transition-all cursor-pointer',
+        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium outline-none transition-all active:scale-[0.97] cursor-pointer',
         value
           ? 'border-accent/40 bg-accent/10 text-accent'
           : 'border-line/70 bg-bg-2/60 text-dim hover:border-accent/40',
@@ -379,7 +379,7 @@ export function NewSession({ onCreated, onRunStarted }: { onCreated: (sessionId:
                   type="button"
                   onClick={() => setShowAdvanced(!showAdvanced)}
                   className={cn(
-                    'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium outline-none transition-all cursor-pointer',
+                    'inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-medium outline-none transition-all active:scale-[0.97] cursor-pointer',
                     showAdvanced || advancedMachine || advancedCwd
                       ? 'border-accent/40 bg-accent/10 text-accent'
                       : 'border-line/70 bg-bg-2/60 text-dim hover:border-accent/40',

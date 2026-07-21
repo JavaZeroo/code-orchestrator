@@ -357,7 +357,7 @@ export function SettingsPage({
                     key={it.id}
                     onClick={() => onSectionChange(it.id)}
                     className={cn(
-                      'group relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-all',
+                      'group relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-all active:bg-panel-3',
                       active ? 'bg-panel-2 text-ink shadow-[var(--shadow-panel)]' : 'text-dim hover:bg-panel/60 hover:text-ink-2',
                     )}
                   >
