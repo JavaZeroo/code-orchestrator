@@ -215,7 +215,8 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
     case 'approval.request': {
       const p = serverMethods['approval.request'].params.parse(params);
       if (hasDb()) {
-        await getDb().insert(schema.approvals).values({
+        // 幂等：runner 断连补发可能撞上"超时但已落库"的重复（id 为主键），重复请求直接视为成功
+        const inserted = await getDb().insert(schema.approvals).values({
           id: p.request.id,
           kind: p.request.kind,
           sessionId: p.request.sessionId,
@@ -225,7 +226,10 @@ async function handleServerMethod(conn: RunnerConn, method: string, params: unkn
           payload: p.request.payload,
           risk: p.request.risk,
           status: 'pending',
-        });
+        }).onConflictDoNothing().returning({ id: schema.approvals.id });
+        if (inserted.length === 0) {
+          return { ok: true };
+        }
       }
       // TODO(M2): 通知出口（钉钉/企微 webhook）
       await publish({ type: 'approval.requested', sessionId: p.request.sessionId, payload: p.request });
@@ -312,11 +316,15 @@ export async function registerRunnerHub(app: FastifyInstance): Promise<void> {
       conn.pending.clear();
       if (conn.machine) {
         const machineId = conn.machine.id;
-        runners.delete(machineId);
-        if (hasDb()) {
-          void getDb().update(schema.machines).set({ status: 'offline' }).where(eq(schema.machines.id, machineId));
+        // 重连竞态：新连接可能已在 register 里覆盖了 runners[machineId]，
+        // 旧 socket 迟到的 close 只能删"自己"的注册，否则会把新连接误判离线。
+        if (runners.get(machineId) === conn) {
+          runners.delete(machineId);
+          if (hasDb()) {
+            void getDb().update(schema.machines).set({ status: 'offline' }).where(eq(schema.machines.id, machineId));
+          }
+          void publish({ type: 'machine.offline', payload: { id: machineId } });
         }
-        void publish({ type: 'machine.offline', payload: { id: machineId } });
       }
     });
   });

@@ -946,19 +946,23 @@ async function execGate(runId: string, node: GateNode, context: RunContext): Pro
   const db = getDb();
   const approvalId = createId();
   const title = node.title ? substitute(node.title, context) : undefined;
-  await db.insert(schema.approvals).values({
-    id: approvalId,
-    kind: 'gate',
-    runId,
-    nodeId: node.id,
-    title: title ?? `Gate: ${node.id}`,
-    payload: { approvers: node.approvers },
-    status: 'pending',
+  // insert approval 与 update nodeStates 必须原子：若决议落在两条语句之间，
+  // decideGate 的 done 会被这里的 waiting_human 覆盖，节点卡死且审批已 approved。
+  await db.transaction(async (tx) => {
+    await tx.insert(schema.approvals).values({
+      id: approvalId,
+      kind: 'gate',
+      runId,
+      nodeId: node.id,
+      title: title ?? `Gate: ${node.id}`,
+      payload: { approvers: node.approvers },
+      status: 'pending',
+    });
+    await tx
+      .update(schema.nodeStates)
+      .set({ status: 'waiting_human', updatedAt: new Date() })
+      .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
   });
-  await db
-    .update(schema.nodeStates)
-    .set({ status: 'waiting_human', updatedAt: new Date() })
-    .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, node.id)));
   await publish({
     type: 'approval.requested',
     runId,
@@ -1404,28 +1408,34 @@ async function finishMeeting(state: MeetingState, verdict: 'approve' | 'reject',
   scheduleTick(state.runId);
 }
 
-/** gate 决议入口（approvals decide 路由分流到这里） */
+/** gate 决议入口（approvals decide 路由分流到这里）。
+ *  必须走 run 串行链：否则与 tick 内 execGate/triggerRevision 的 nodeStates 写交错，
+ *  可能出现 done 被 waiting_human 覆盖（门卡死）等状态机损坏。 */
 export async function decideGate(approval: ApprovalRow, decision: ApprovalDecision, decidedBy?: string): Promise<void> {
   if (!approval.runId || !approval.nodeId) {
     throw new EngineError(400, 'gate approval missing runId/nodeId');
   }
-  const db = getDb();
-  const approved = decision.behavior === 'allow';
-  await db
-    .update(schema.approvals)
-    .set({ status: approved ? 'approved' : 'denied', decision, decidedBy, decidedAt: new Date() })
-    .where(eq(schema.approvals.id, approval.id));
-  await db
-    .update(schema.nodeStates)
-    .set({ status: approved ? 'done' : 'failed', output: { decidedBy, decision: decision.behavior }, updatedAt: new Date() })
-    .where(and(eq(schema.nodeStates.runId, approval.runId), eq(schema.nodeStates.nodeId, approval.nodeId)));
-  await publish({
-    type: 'approval.decided',
-    runId: approval.runId,
-    payload: { approvalId: approval.id, status: approved ? 'approved' : 'denied', decidedBy },
+  const runId = approval.runId;
+  const nodeId = approval.nodeId;
+  await serializeRunProgression(runId, async () => {
+    const db = getDb();
+    const approved = decision.behavior === 'allow';
+    await db
+      .update(schema.approvals)
+      .set({ status: approved ? 'approved' : 'denied', decision, decidedBy, decidedAt: new Date() })
+      .where(eq(schema.approvals.id, approval.id));
+    await db
+      .update(schema.nodeStates)
+      .set({ status: approved ? 'done' : 'failed', output: { decidedBy, decision: decision.behavior }, updatedAt: new Date() })
+      .where(and(eq(schema.nodeStates.runId, runId), eq(schema.nodeStates.nodeId, nodeId)));
+    await publish({
+      type: 'approval.decided',
+      runId,
+      payload: { approvalId: approval.id, status: approved ? 'approved' : 'denied', decidedBy },
+    });
+    await publishNodeState(runId, nodeId, approved ? 'done' : 'failed');
+    scheduleTick(runId);
   });
-  await publishNodeState(approval.runId, approval.nodeId, approved ? 'done' : 'failed');
-  scheduleTick(approval.runId);
 }
 
 // ---------- agent 节点完成检测 ----------
@@ -2260,7 +2270,9 @@ async function reconcileRevisions(): Promise<void> {
         continue;
       }
       const maxRounds = node.reviseLoop?.maxRounds ?? 2;
-      const fired = await triggerRevision(run.id, node.id, target, summary, maxRounds).catch(() => false);
+      // triggerRevision 直接重置 nodeStates（评审→pending、target→running），必须与
+      // 该 run 的 tick/完成处理串行，否则可能与 tick 的旧快照交错导致评审节点双跑。
+      const fired = await serializeRunProgression(run.id, () => triggerRevision(run.id, node.id, target, summary, maxRounds)).catch(() => false);
       if (fired) {
         console.log(`[engine] reconcile: auto-revise run ${run.id} node ${node.id} → ${target}`);
       }

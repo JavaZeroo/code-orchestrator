@@ -4,6 +4,7 @@
  * users 表仅存业务扩展字段。
  */
 
+import { sql } from 'drizzle-orm';
 import {
   bigserial,
   boolean,
@@ -182,7 +183,12 @@ export const resourceReservations = pgTable(
     acquiredAt: timestamp('acquired_at', { withTimezone: true }).notNull().defaultNow(),
     releasedAt: timestamp('released_at', { withTimezone: true }),
   },
-  (t) => [index('reservations_machine_idx').on(t.machineId), index('reservations_status_idx').on(t.status)],
+  (t) => [
+    index('reservations_machine_idx').on(t.machineId),
+    index('reservations_status_idx').on(t.status),
+    // 一机一任务的 DB 级兜底（0023 迁移）：并发预留竞争收敛为唯一冲突
+    uniqueIndex('reservations_active_machine_uidx').on(t.machineId).where(sql`status = 'active'`),
+  ],
 );
 
 /** 任务排队（design-v2 Q9）：需要加速器的任务在无空闲机时进 pending，机器释放后 reconciler 自动派（FIFO+priority）。 */

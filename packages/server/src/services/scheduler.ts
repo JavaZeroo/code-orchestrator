@@ -149,14 +149,24 @@ export async function schedule(opts: ScheduleOpts): Promise<Scheduled | null> {
     }
     const machine = online.find((m) => m.id === machineId)!;
     const reservationId = createId();
-    await tx.insert(schema.resourceReservations).values({
-      id: reservationId,
-      machineId,
-      sessionId: opts.sessionId,
-      kind,
-      status: 'active',
-      acquiredAt: new Date(),
-    });
+    // READ COMMITTED 下两个并发事务可能同时通过上面的空闲校验——
+    // reservations_active_machine_uidx（部分唯一索引 WHERE status='active'）把后到的 insert
+    // 转为冲突，这里 DO NOTHING + 空 returning 检测后返回 null，调用方入队等待 reconciler。
+    const inserted = await tx
+      .insert(schema.resourceReservations)
+      .values({
+        id: reservationId,
+        machineId,
+        sessionId: opts.sessionId,
+        kind,
+        status: 'active',
+        acquiredAt: new Date(),
+      })
+      .onConflictDoNothing()
+      .returning({ id: schema.resourceReservations.id });
+    if (inserted.length === 0) {
+      return null;
+    }
     const adapter = getAccelerator(kind);
     const bindFlags = adapter ? adapter.bindFlags(cardIndices(machine, kind)) : undefined;
     return { machineId, reservationId, bindFlags };
