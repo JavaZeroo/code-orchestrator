@@ -17,6 +17,7 @@ import {
   type SessionState,
 } from '@co/protocol';
 import type { DriverEmit, SessionUsage } from '../driverTypes';
+import { baseChildEnv } from '../safeEnv';
 
 type RpcId = string | number;
 
@@ -44,6 +45,8 @@ interface PendingApproval {
 }
 
 const OUTPUT_MAX = 4096;
+/** app-server RPC 超时：防止 initialize/thread-start 等在进程卡死时永远悬挂 */
+const RPC_TIMEOUT_MS = 30_000;
 const CODEX_CLIENT_INFO = { name: 'code_orchestrator', title: 'code-orchestrator', version: '0.1.0' };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -151,7 +154,7 @@ export class CodexSession {
   private started = false;
   private dead = false;
   private ready: Promise<void> | null = null;
-  private readonly pendingRpc = new Map<RpcId, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  private readonly pendingRpc = new Map<RpcId, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   private readonly pendingApprovals = new Map<string, PendingApproval>();
   private readonly agentText = new Map<string, string>();
   private readonly toolOutput = new Map<string, string>();
@@ -242,10 +245,7 @@ export class CodexSession {
 
   private async run(): Promise<void> {
     const p = this.params;
-    const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(process.env)) {
-      if (typeof value === 'string') env[key] = value;
-    }
+    const env = baseChildEnv();
     Object.assign(env, p.env ?? {});
 
     const codexBin = p.env?.CODEX_BIN ?? process.env.CODEX_BIN ?? 'codex';
@@ -261,12 +261,14 @@ export class CodexSession {
       if (s.trim()) process.stderr.write(`[codex-cli] ${s}`);
     });
     child.on('exit', (code) => {
+      this.failPendingRpc(`codex app-server exited (code=${code})`);
       if (this.state !== 'dead') {
         this.emit.event(createEnvelope('agent', { t: 'service', text: `Codex app-server exited (code=${code})` }));
         this.setState('dead');
       }
     });
     child.on('error', (err) => {
+      this.failPendingRpc(`codex app-server error: ${err.message}`);
       this.emit.event(createEnvelope('agent', { t: 'service', text: `Codex app-server 启动失败: ${err.message}` }));
       this.setState('dead');
     });
@@ -396,8 +398,24 @@ export class CodexSession {
     const id = this.nextRpcId++;
     this.sendRaw({ id, method, ...(params !== undefined ? { params } : {}) });
     return new Promise((resolve, reject) => {
-      this.pendingRpc.set(id, { resolve, reject });
+      // 超时兜底：app-server 卡死时调用方（initialize/thread-start 等）不能永远悬挂
+      const timer = setTimeout(() => {
+        if (this.pendingRpc.delete(id)) {
+          reject(new Error(`codex rpc timeout: ${method}`));
+        }
+      }, RPC_TIMEOUT_MS);
+      timer.unref();
+      this.pendingRpc.set(id, { resolve, reject, timer });
     });
+  }
+
+  /** app-server 退出/崩溃时统一 reject 所有在途 RPC——否则 await 方永远悬挂、闭包常驻内存 */
+  private failPendingRpc(reason: string): void {
+    for (const p of this.pendingRpc.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error(reason));
+    }
+    this.pendingRpc.clear();
   }
 
   private sendResponse(id: RpcId, result: unknown): void {
@@ -436,6 +454,7 @@ export class CodexSession {
     const pending = this.pendingRpc.get(msg.id);
     if (!pending) return;
     this.pendingRpc.delete(msg.id);
+    clearTimeout(pending.timer);
     if (msg.error) {
       pending.reject(new Error(msg.error.message));
     } else {

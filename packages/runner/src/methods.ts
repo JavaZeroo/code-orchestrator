@@ -25,6 +25,9 @@ import { searchWorkspaceContent } from './workspaceContentSearch';
 
 const EXEC_DEFAULT_TIMEOUT_MS = 60_000;
 const EXEC_MAX_BUFFER = 10 * 1024 * 1024;
+/** 关键 uplink（approval/state）补发队列：容量上限防断连期间内存无界增长 */
+const UPLINK_QUEUE_MAX = 200;
+const UPLINK_RETRY_MS = 5_000;
 
 function execCmd(p: RunnerParams<'machine.exec'>) {
   return new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
@@ -57,6 +60,54 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
   const sessionsBeingForked = new Set<string>();
   const deliveredSendKeys = new Map<string, Set<string>>();
 
+  // 断连窗口内的关键 uplink 补发队列：approval.request 若被丢弃，server 永远不知道
+  // 这个审批存在，会话会永久停在 waiting_approval。失败即入队，定时重试直到上行恢复。
+  const uplinkQueue: Array<{ describe: string; run: (conn: ServerConnection) => Promise<unknown> }> = [];
+  let uplinkTimer: NodeJS.Timeout | null = null;
+
+  async function flushUplinks(): Promise<void> {
+    const conn = ctx.conn;
+    if (!conn) {
+      return;
+    }
+    while (uplinkQueue.length > 0) {
+      const item = uplinkQueue[0]!;
+      try {
+        await item.run(conn);
+        uplinkQueue.shift();
+      } catch {
+        return; // 上行仍不可用，下个周期再试（队头保留，顺序不乱）
+      }
+    }
+    if (uplinkTimer) {
+      clearInterval(uplinkTimer);
+      uplinkTimer = null;
+    }
+  }
+
+  function callCritical(describe: string, fn: (conn: ServerConnection) => Promise<unknown>): void {
+    const enqueue = () => {
+      if (uplinkQueue.length >= UPLINK_QUEUE_MAX) {
+        const dropped = uplinkQueue.shift();
+        console.error(`[runner] uplink queue full, dropping oldest: ${dropped?.describe}`);
+      }
+      uplinkQueue.push({ describe, run: fn });
+      if (!uplinkTimer) {
+        uplinkTimer = setInterval(() => void flushUplinks(), UPLINK_RETRY_MS);
+        uplinkTimer.unref();
+      }
+    };
+    const conn = ctx.conn;
+    if (!conn) {
+      enqueue();
+      return;
+    }
+    fn(conn).catch((err) => {
+      console.error(`[runner] uplink failed (${describe}), queued for retry:`, err instanceof Error ? err.message : err);
+      enqueue();
+    });
+  }
+
   function createHostSession(
     p: RunnerParams<'session.spawn'>,
     emit: DriverEmit,
@@ -83,8 +134,8 @@ export function createRunnerMethodHandler(ctx: RunnerContext) {
     return {
       event: (envelope) => call((c) => c.call('session.event', { sessionId, envelope })),
       state: (state, nativeSessionId, usage) =>
-        call((c) => c.call('session.state', { sessionId, state, nativeSessionId, usage })),
-      approval: (request) => call((c) => c.call('approval.request', { request })),
+        callCritical(`session.state(${sessionId}→${state})`, (c) => c.call('session.state', { sessionId, state, nativeSessionId, usage })),
+      approval: (request) => callCritical(`approval.request(${sessionId}:${request.id})`, (c) => c.call('approval.request', { request })),
       draft: async (graph) => {
         const conn = ctx.conn;
         if (!conn) {

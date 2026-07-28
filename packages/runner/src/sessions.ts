@@ -28,3 +28,8 @@ export function removeSession(sessionId: string): void {
 export function listSessionStates(): Array<{ sessionId: string; state: SessionState }> {
   return [...sessions.values()].map((s) => ({ sessionId: s.sessionId, state: s.state }));
 }
+
+/** 进程退出清扫用：返回当前全部活会话 */
+export function listSessions(): RunnerSession[] {
+  return [...sessions.values()];
+}

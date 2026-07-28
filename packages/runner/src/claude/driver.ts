@@ -29,6 +29,7 @@ import {
   type SessionState,
 } from '@co/protocol';
 import { Pushable } from '../utils/pushable';
+import { baseChildEnv } from '../safeEnv';
 import type { DriverEmit, SessionUsage } from '../driverTypes';
 import { mapSdkMessage } from './mapper';
 
@@ -68,6 +69,9 @@ const DESIGNER_SYSTEM_PROMPT = `你是工作流设计助手。用户会用自然
 - 工作目录通常留给运行时变量（写 {{vars.cwd}} 或不填 cwd 让引擎用 vars.cwd）
 - 工具校验失败会返回具体错误，修正后重新调用
 - 用户确认后由界面保存，你不负责保存；继续根据反馈迭代即可`;
+
+/** 审批超时兜底：30 分钟无响应自动 deny，防止会话永久停在 waiting_approval */
+const APPROVAL_TIMEOUT_MS = 30 * 60_000;
 
 const DENY_DEFAULT_MESSAGE =
   "The user doesn't want to proceed with this tool use. The tool use was rejected " +
@@ -206,12 +210,24 @@ export class ClaudeSession {
     this.emit.approval(request);
 
     const decision = await new Promise<ApprovalDecision>((resolve) => {
-      this.pendingApprovals.set(approvalId, resolve);
+      // 超时兜底：审批请求若因断连丢失（或人工长期不处理），会话不能永远停在 waiting_approval
+      const timer = setTimeout(() => {
+        if (this.pendingApprovals.delete(approvalId)) {
+          this.emit.event(createEnvelope('agent', { t: 'service', text: `审批 ${toolName} 超时（30 分钟无响应），已自动拒绝` }));
+          finish({ behavior: 'deny', message: 'approval timed out (30m), auto-denied' });
+        }
+      }, APPROVAL_TIMEOUT_MS);
+      timer.unref();
+      const finish = (d: ApprovalDecision) => {
+        clearTimeout(timer);
+        resolve(d);
+      };
+      this.pendingApprovals.set(approvalId, finish);
       options.signal.addEventListener(
         'abort',
         () => {
           if (this.pendingApprovals.delete(approvalId)) {
-            resolve({ behavior: 'deny', message: 'tool call aborted' });
+            finish({ behavior: 'deny', message: 'tool call aborted' });
           }
         },
         { once: true },
@@ -291,12 +307,7 @@ export class ClaudeSession {
     const p = this.params;
     const meta = p.meta ?? {};
 
-    const env: Record<string, string> = {};
-    for (const [key, value] of Object.entries(process.env)) {
-      if (typeof value === 'string') {
-        env[key] = value;
-      }
-    }
+    const env = baseChildEnv();
     Object.assign(env, p.env ?? {});
     // 不落入 --resume picker 的 sdk-* 过滤集，保持会话对 `claude --resume` 可见（happy#1202 的经验）
     env.CLAUDE_CODE_ENTRYPOINT = env.CLAUDE_CODE_ENTRYPOINT ?? 'co-runner';

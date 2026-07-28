@@ -7,6 +7,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { RunnerParams } from '@co/protocol';
+import { config } from './config';
 
 const run = promisify(execFile);
 const EXEC_MAX_BUFFER = 16 * 1024 * 1024;
@@ -17,6 +18,8 @@ export function buildContainerRunArgs(p: RunnerParams<'container.run'>): string[
   if (p.name) {
     args.push('--name', p.name);
   }
+  // co 归属 label：宿主 docker 多方共享，孤儿回收只敢按 label 精确过滤（严禁宽泛 name 匹配）
+  args.push('--label', 'co.managed=true', '--label', `co.runner=${config.machineId}`);
   if (p.workdir) {
     args.push('-w', p.workdir);
   }
@@ -83,5 +86,35 @@ export async function containerRm(p: RunnerParams<'container.rm'>): Promise<{ ok
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * 回收本 runner 上一生命周期遗留的 co 容器（runner 重启后旧容器失去 stdin 桥，
+ * agent 无法再通信却继续占卡——Q11：容器活着=卡被占）。
+ * 仅在进程启动时、向 server 注册前调用一次；按 label 精确过滤，绝不碰他人的容器。
+ * 主开发容器内可能没有 docker CLI——失败只告警，不影响启动。
+ */
+export async function reapOrphanContainers(): Promise<void> {
+  let stdout: string;
+  try {
+    const result = await run(
+      'docker',
+      ['ps', '--filter', 'label=co.managed=true', '--filter', `label=co.runner=${config.machineId}`, '--format', '{{.ID}} {{.Names}}'],
+      { maxBuffer: EXEC_MAX_BUFFER },
+    );
+    stdout = result.stdout;
+  } catch (err) {
+    console.warn(`[runner] orphan container sweep skipped: ${err instanceof Error ? err.message : err}`);
+    return;
+  }
+  for (const line of stdout.split('\n').map((l) => l.trim()).filter(Boolean)) {
+    const id = line.split(/\s+/)[0]!;
+    try {
+      await run('docker', ['rm', '-f', id], { maxBuffer: EXEC_MAX_BUFFER });
+      console.log(`[runner] reaped orphan container: ${line}`);
+    } catch (err) {
+      console.error(`[runner] failed to reap container ${line}:`, err instanceof Error ? err.message : err);
+    }
   }
 }
